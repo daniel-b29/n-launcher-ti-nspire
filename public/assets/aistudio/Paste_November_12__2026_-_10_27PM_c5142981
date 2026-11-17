@@ -1,0 +1,1297 @@
+# N-LAUNCHER — CAHIER DES CHARGES INTÉGRAL
+## Création d'un launcher de jeux natif pour TI-Nspire CX II-T avec Ndless
+
+# PARTIE 1 — DIRECTIVE GÉNÉRALE ET OBJECTIF DU PROJET
+
+Tu es chargé de concevoir et de développer intégralement un launcher de jeux pour la calculatrice Texas Instruments TI-Nspire CX II-T.
+
+Le projet doit être développé comme un véritable logiciel natif destiné à fonctionner sur la calculatrice, en utilisant Ndless, déjà installé sur celle-ci.
+
+Le livrable principal doit être un fichier `.tns` réellement exécutable sur la calculatrice.
+
+**Attention : il ne s'agit pas de créer un jeu vidéo, un émulateur ou un environnement de développement. Il s'agit exclusivement de créer un launcher permettant de gérer, visualiser et lancer les jeux Ndless déjà installés sur la calculatrice.**
+
+## 1.1. Problème à résoudre
+
+Je possède plusieurs jeux Ndless sur ma TI-Nspire CX II-T.
+
+Actuellement, lorsque je souhaite jouer à un jeu particulier, je dois parcourir les documents, les dossiers et les différents fichiers présents sur la calculatrice.
+
+Plus j'accumule de jeux, plus cette navigation devient pénible.
+
+Je souhaite donc disposer d'une interface centrale qui rassemble mes jeux dans une bibliothèque visuelle.
+
+L'objectif est de transformer l'expérience d'utilisation de la calculatrice en quelque chose qui ressemble davantage à une console portable.
+
+Je veux pouvoir :
+- Ouvrir le launcher.
+- Voir immédiatement mes jeux.
+- Reconnaître chaque jeu grâce à sa jaquette.
+- Naviguer avec les touches physiques.
+- Sélectionner un jeu.
+- Le lancer directement.
+- Retrouver facilement mes favoris.
+- Accéder à mes jeux récemment utilisés.
+
+Je ne veux plus avoir à chercher manuellement mes exécutables dans les documents de la calculatrice.
+
+## 1.2. Philosophie du projet
+
+Le launcher doit donner l'impression d'être une petite console de jeux.
+
+Inspire-toi de l'expérience utilisateur de :
+- Nintendo Switch.
+- PlayStation.
+- Xbox.
+- Launchers modernes de jeux PC.
+
+Ne copie pas directement leurs interfaces.
+
+Crée une identité visuelle originale, cohérente et adaptée à l'écran de la TI-Nspire.
+
+Les priorités sont, dans cet ordre :
+
+1. Fonctionnement réel sur la calculatrice.
+2. Fiabilité du lancement des jeux.
+3. Qualité de l'interface.
+4. Fluidité de navigation.
+5. Qualité des animations.
+6. Optimisation mémoire et performances.
+7. Facilité d'utilisation.
+
+Ne sacrifie jamais les fonctionnalités essentielles pour obtenir un effet visuel.
+
+---
+
+# PARTIE 2 — DIRECTIVE DE RECHERCHE TECHNIQUE OBLIGATOIRE
+
+Avant de programmer, tu dois effectuer un véritable travail de recherche.
+
+Je ne veux pas que tu inventes des fonctions ou que tu supposes que des possibilités existent simplement parce qu'elles existent sur un ordinateur.
+
+La TI-Nspire CX II-T possède des contraintes matérielles et logicielles spécifiques.
+
+Tu dois comprendre ces contraintes avant de concevoir l'architecture.
+
+## 2.1. Sources à consulter
+
+Effectue des recherches approfondies dans :
+
+- La documentation officielle Texas Instruments.
+- La documentation Ndless.
+- Le dépôt GitHub de Ndless.
+- TI-Planet.
+- Omnimaga.
+- Les forums spécialisés TI-Nspire.
+- Les projets open source développés pour la calculatrice.
+- Les exemples de programmes natifs en C et C++.
+- Les projets graphiques existants.
+- Les projets de gestionnaires de fichiers et de launchers.
+
+Ne te limite pas aux premiers résultats de recherche.
+
+Examine les discussions techniques, les exemples de code et les retours d'expérience des développeurs.
+
+Lorsque tu trouves une fonctionnalité intéressante dans un projet existant, examine son implémentation réelle.
+
+Ne copie pas aveuglément du code sans comprendre sa compatibilité.
+
+## 2.2. Points à vérifier
+
+Tu dois déterminer précisément :
+
+- Comment compiler un programme natif Ndless.
+- Comment produire un véritable fichier `.tns` exécutable.
+- Comment afficher des éléments graphiques.
+- Comment gérer les couleurs.
+- Comment dessiner des images.
+- Comment gérer les entrées clavier.
+- Comment lire les fichiers.
+- Comment parcourir les dossiers.
+- Comment détecter les exécutables.
+- Comment lancer un autre programme Ndless.
+- Comment gérer les retours d'exécution.
+- Comment stocker des paramètres.
+- Comment gérer la mémoire.
+- Comment gérer les erreurs.
+- Quelles bibliothèques graphiques sont disponibles.
+- Quelles limitations sont propres à la CX II-T.
+
+## 2.3. Compatibilité
+
+La cible est la TI-Nspire CX II-T.
+
+Ndless est déjà installé sur ma calculatrice.
+
+La version de l'OS précédemment communiquée est 5.4.0, mais vérifie la compatibilité exacte avant de retenir cette hypothèse comme définitive.
+
+Ne développe pas pour une ancienne TI-Nspire en supposant que le résultat fonctionnera automatiquement sur la CX II-T.
+
+Vérifie notamment :
+- Les différences matérielles.
+- Les différences de système.
+- Les différences de compilation.
+- Les restrictions de mémoire.
+- Les fonctions disponibles.
+- Les mécanismes d'exécution.
+
+## 2.4. Rapport de faisabilité
+
+Avant de développer l'interface, établis un rapport technique indiquant :
+
+1. Les technologies retenues.
+2. Le langage utilisé.
+3. Le compilateur.
+4. Les bibliothèques.
+5. Les méthodes graphiques.
+6. Le système de gestion des fichiers.
+7. Le mécanisme de lancement des jeux.
+8. Les limites techniques identifiées.
+9. Les fonctionnalités réalisables.
+10. Les fonctionnalités nécessitant une adaptation.
+
+Ne prétends jamais qu'une fonctionnalité est réalisable sans avoir vérifié son fonctionnement.
+
+---
+
+# PARTIE 3 — IDENTITÉ VISUELLE ET INTERFACE GÉNÉRALE
+
+## 3.1. Apparence générale
+
+Je souhaite une interface de console portable.
+
+Le launcher doit avoir une véritable identité visuelle.
+
+Il ne doit pas ressembler à un simple explorateur de fichiers.
+
+Je veux une interface :
+- Moderne.
+- Épurée.
+- Minimaliste.
+- Élégante.
+- Bien organisée.
+- Facile à comprendre.
+- Agréable à parcourir.
+
+Les jaquettes doivent être les éléments les plus importants de l'écran.
+
+Évite de surcharger l'interface avec du texte.
+
+Évite les informations inutiles.
+
+Chaque élément doit avoir une fonction précise.
+
+## 3.2. Adaptation à l'écran
+
+L'écran de la TI-Nspire CX II-T est limité.
+
+Tu dois donc concevoir une interface adaptée à sa résolution réelle.
+
+Ne transpose pas simplement une interface PC sur la calculatrice.
+
+Les tailles doivent être pensées pour l'écran physique.
+
+Vérifie :
+- Les dimensions des cartes.
+- Les marges.
+- Les espacements.
+- La hauteur de l'en-tête.
+- La barre des catégories.
+- La zone de bibliothèque.
+- La pagination.
+- La barre inférieure.
+
+Aucun élément ne doit être coupé ou se superposer involontairement.
+
+## 3.3. Coins arrondis
+
+Les jaquettes doivent avoir des coins arrondis.
+
+Les arrondis doivent être visibles, mais pas excessifs.
+
+Les images doivent respecter correctement leur masque.
+
+Si les coins arrondis nécessitent une opération graphique coûteuse, utilise une méthode optimisée.
+
+## 3.4. Cohérence graphique
+
+Toutes les zones doivent partager la même identité visuelle.
+
+Les catégories, les jaquettes, les indicateurs de pagination et les raccourcis doivent être cohérents.
+
+Évite les éléments qui semblent provenir de plusieurs interfaces différentes.
+
+---
+
+# PARTIE 4 — ÉCRAN DE DÉMARRAGE ET ICÔNE DU LAUNCHER
+
+Le launcher doit posséder une identité visuelle dès le départ.
+
+## 4.1. Icône
+
+Je souhaite une icône propre au launcher.
+
+Étudie les possibilités réelles de personnalisation de l'icône du document ou du programme sur la TI-Nspire.
+
+L'objectif est que le launcher soit facilement identifiable parmi les autres documents de la calculatrice.
+
+Ne confonds pas l'icône du document dans l'interface TI-Nspire et l'animation de démarrage interne du programme.
+
+Il faut étudier les deux possibilités séparément.
+
+## 4.2. Animation de démarrage
+
+Au lancement du programme, je souhaite une courte séquence visuelle.
+
+Déroulement souhaité :
+
+1. Apparition du logo ou de l'identité visuelle du launcher.
+2. Affichage bref de l'icône.
+3. Transition vers l'interface principale.
+4. Chargement et affichage de la bibliothèque.
+
+Cette séquence doit être rapide.
+
+Je ne veux pas attendre plusieurs secondes devant une animation inutile.
+
+L'objectif est d'obtenir une entrée en matière élégante sans ralentir l'accès aux jeux.
+
+Si les capacités de la calculatrice ne permettent pas une animation complexe, réalise une version simplifiée et fluide.
+
+---
+
+# PARTIE 5 — BIBLIOTHÈQUE DE JEUX
+
+La bibliothèque est le cœur du launcher.
+
+Elle doit centraliser les jeux Ndless disponibles.
+
+## 5.1. Détection automatique
+
+Le launcher doit rechercher les exécutables compatibles dans les emplacements accessibles.
+
+Il faut étudier précisément les possibilités de parcours du système de fichiers avec Ndless.
+
+Ne considère pas tous les fichiers `.tns` comme des jeux exécutables.
+
+Il faut distinguer :
+- Les exécutables natifs Ndless.
+- Les documents TI-Nspire classiques.
+- Les fichiers Lua.
+- Les images.
+- Les fichiers de configuration.
+- Les fichiers temporaires.
+- Les dossiers.
+- Les fichiers incompatibles.
+
+La bibliothèque ne doit afficher que les jeux réellement pris en charge.
+
+## 5.2. Enregistrement des jeux
+
+Chaque jeu doit pouvoir être associé à une entrée dans la bibliothèque.
+
+Une entrée doit pouvoir contenir :
+
+- Le nom du jeu.
+- Le chemin interne.
+- L'image associée.
+- Le type de programme.
+- L'état de disponibilité.
+- Les informations nécessaires au lancement.
+
+Les chemins doivent rester internes.
+
+Ils ne doivent pas apparaître dans l'interface.
+
+## 5.3. Mise à jour de la bibliothèque
+
+Étudie un mécanisme de rafraîchissement de la bibliothèque.
+
+Si un jeu est ajouté, déplacé ou supprimé, le launcher doit pouvoir actualiser ses données.
+
+Il faut éviter les raccourcis qui pointent vers des fichiers inexistants.
+
+Ne lance jamais un jeu sans vérifier que son fichier est toujours disponible.
+
+## 5.4. Affichage de la grille
+
+La bibliothèque doit utiliser une grille de trois colonnes lorsque cela est compatible avec la résolution et la taille des jaquettes.
+
+Les cartes doivent :
+- Être suffisamment grandes.
+- Être alignées.
+- Avoir des dimensions cohérentes.
+- Avoir des espacements réguliers.
+- Ne jamais se chevaucher.
+
+La grille doit être équilibrée.
+
+Si le nombre de jeux ne permet pas de remplir une page, laisse les espaces inutilisés vides.
+
+Ne crée pas de cartes artificielles.
+
+---
+
+# PARTIE 6 — JAQUETTES ET IMAGES DES JEUX
+
+Chaque jeu doit être représenté par une jaquette.
+
+La bibliothèque doit être principalement visuelle.
+
+## 6.1. Affichage
+
+Les cartes doivent afficher uniquement les images.
+
+Ne mets pas le nom des jeux sous les jaquettes.
+
+Ne mets pas de descriptions.
+
+Ne mets pas d'informations techniques.
+
+Ne mets pas de chemins.
+
+Je veux une bibliothèque propre, comme une interface de console.
+
+## 6.2. Taille des jaquettes
+
+Les jaquettes doivent être assez grandes pour être facilement reconnaissables.
+
+Ne les réduis pas excessivement.
+
+Ne les agrandis pas au point de faire disparaître l'équilibre de la grille.
+
+Trouve les dimensions optimales en fonction de l'écran.
+
+## 6.3. Conservation du ratio
+
+Ne déforme jamais une image.
+
+Respecte son ratio d'origine.
+
+Si une image doit être recadrée, fais-le de manière cohérente.
+
+Les images doivent être centrées.
+
+## 6.4. Images manquantes
+
+Si un jeu ne possède pas de jaquette valide, utilise une image de remplacement élégante.
+
+Ne laisse pas apparaître une erreur de chargement ou un emplacement technique.
+
+L'image de remplacement doit respecter le design général.
+
+## 6.5. Optimisation
+
+Les images doivent être optimisées pour la calculatrice.
+
+Étudie :
+- Les formats adaptés.
+- La taille en mémoire.
+- La profondeur de couleur.
+- Les possibilités de conversion.
+- Le chargement différé.
+- Le cache des images.
+
+Évite de conserver inutilement toutes les images en mémoire.
+
+---
+
+# PARTIE 7 — CATÉGORIES ET FILTRAGE
+
+Je souhaite conserver exactement trois catégories principales :
+
+- TOUS
+- FAV
+- REC
+
+Supprime les catégories suivantes de l'interface :
+
+- ARCADE
+- PORTS
+- EMUL
+
+Ne les remplace pas par d'autres catégories.
+
+## 7.1. TOUS
+
+Affiche l'ensemble des jeux enregistrés et disponibles.
+
+## 7.2. FAV
+
+Affiche uniquement les jeux favoris.
+
+L'utilisateur doit pouvoir ajouter et retirer un jeu des favoris.
+
+Cette information doit être conservée après redémarrage.
+
+## 7.3. REC
+
+Affiche les jeux récemment utilisés.
+
+L'ordre doit être déterminé par leur dernière utilisation.
+
+Les informations doivent être conservées.
+
+## 7.4. Navigation entre catégories
+
+Les catégories doivent être compactes.
+
+Leur sélection doit être immédiatement identifiable.
+
+Le passage d'une catégorie à une autre doit être fluide.
+
+Ne provoque pas un rechargement inutile de toute l'interface si seule la liste des jeux doit changer.
+
+---
+
+# PARTIE 8 — COMPTEUR ET ÉLÉMENTS À SUPPRIMER
+
+## 8.1. Compteur
+
+Le compteur de jeux doit afficher uniquement un nombre.
+
+Exemple :
+
+9
+
+Ne pas afficher :
+- 9 JEUX.
+- JEUX : 9.
+- NOMBRE DE JEUX : 9.
+
+## 8.2. Nom du thème
+
+Ne pas afficher le nom du thème dans l'interface.
+
+Par exemple, ne pas afficher SWITCH OLED.
+
+Le thème peut être conservé en interne si nécessaire, mais son nom ne doit pas apparaître visuellement.
+
+## 8.3. Bouton LIST
+
+Supprime complètement le bouton LIST.
+
+Je ne veux plus de bouton permettant d'afficher une liste textuelle des noms de jeux.
+
+La bibliothèque doit rester visuelle.
+
+## 8.4. Cases vides et placeholders
+
+Ne montre pas :
+- Les cases vides artificielles.
+- Les emplacements AUTO-CAPTURE inutilisés.
+- Les cartes de démonstration.
+- Les placeholders.
+- Les cadres réservés à de futurs jeux.
+
+Affiche uniquement les jeux réellement disponibles.
+
+## 8.5. Chemins techniques
+
+Ne montre jamais les chemins internes.
+
+Exemples :
+- Les chemins des dossiers.
+- Les chemins des exécutables.
+- Les emplacements de stockage.
+- Les informations techniques des fichiers.
+
+Attention : ne supprime pas les chemins des données internes.
+
+Ils restent indispensables au fonctionnement du launcher.
+
+---
+
+# PARTIE 9 — PAGINATION ET ANIMATION VERTICALE
+
+Lorsque le nombre de jeux dépasse la capacité d'une page, le launcher doit créer plusieurs pages.
+
+## 9.1. Indicateurs
+
+La pagination doit utiliser uniquement des points.
+
+Exemple :
+
+● ○ ○
+
+Le point actif doit être identifiable.
+
+Ne montre pas :
+- PAGE 1/2.
+- PAGE 2/3.
+- Page actuelle.
+- Nombre total de pages.
+
+Aucun texte supplémentaire n'est nécessaire.
+
+## 9.2. Changement de page
+
+Je souhaite une transition verticale.
+
+Le changement de page doit donner l'impression que la bibliothèque se déplace vers le haut ou vers le bas.
+
+Je ne souhaite pas une transition horizontale classique.
+
+L'animation doit être :
+- Fluide.
+- Rapide.
+- Naturelle.
+- Cohérente.
+- Sans saccades.
+
+Elle ne doit pas ralentir la navigation.
+
+## 9.3. Indication visuelle de la page suivante
+
+Je souhaite un effet visuel subtil indiquant qu'il existe d'autres jeux.
+
+Les jaquettes situées sur la rangée inférieure peuvent légèrement dépasser de la zone visible, afin de suggérer la continuité de la bibliothèque.
+
+Cet effet doit être contrôlé.
+
+Il ne faut pas couper les jaquettes de manière excessive.
+
+Il ne faut pas créer de chevauchement.
+
+L'utilisateur doit comprendre qu'il existe une autre page sans que cela nuise à la lisibilité.
+
+## 9.4. Première page
+
+La première page doit être parfaitement positionnée.
+
+Vérifie notamment :
+- La distance avec la barre des catégories.
+- La position de la première rangée.
+- Les marges supérieures.
+- Les marges latérales.
+- La visibilité complète des jaquettes.
+- L'espace réservé aux indicateurs.
+
+Aucune jaquette ne doit être masquée involontairement.
+
+## 9.5. Gestion des transitions
+
+Les cartes doivent rester cohérentes pendant le changement de page.
+
+Évite les apparitions brutales.
+
+Évite les déplacements incorrects.
+
+Évite que les cartes restent dans une mauvaise position après la transition.
+
+La pagination doit fonctionner même lorsque l'utilisateur navigue rapidement.
+
+---
+
+# PARTIE 10 — SYSTÈME DE SÉLECTION ET ANIMATIONS DES JAQUETTES
+
+C'est un élément visuel très important.
+
+Je souhaite une sélection inspirée des interfaces de consoles.
+
+## 10.1. Agrandissement
+
+Lorsqu'un jeu est sélectionné, sa jaquette doit légèrement s'agrandir.
+
+L'agrandissement doit être :
+- Progressif.
+- Fluide.
+- Rapide.
+- Naturel.
+
+Lorsque la sélection change, l'ancienne jaquette doit revenir à sa taille normale et la nouvelle doit s'agrandir.
+
+## 10.2. Suppression des contours
+
+Je ne souhaite aucun cadre de sélection.
+
+Supprime complètement :
+- Le contour cyan.
+- Les bordures colorées.
+- Les cadres autour des jaquettes.
+- Les petits angles décoratifs.
+- Les coins de sélection.
+- Les effets créant un contour autour de l'image.
+
+Ne remplace pas le cyan par une autre couleur.
+
+**La sélection doit être représentée principalement par l'agrandissement de la jaquette.**
+
+## 10.3. Ancien système de coins indépendants
+
+Un système de coins décoratifs indépendants avait été envisagé dans une ancienne version.
+
+Cette idée est abandonnée.
+
+Ne réintroduis pas ces coins.
+
+Ne crée pas un système de quatre angles qui suivent le curseur.
+
+La dernière consigne est définitive : aucun cadre, aucun coin décoratif, uniquement l'agrandissement subtil de la jaquette.
+
+## 10.4. Navigation rapide
+
+Teste les changements successifs de sélection.
+
+Lorsque l'utilisateur appuie rapidement sur les touches directionnelles :
+- L'animation doit suivre la sélection actuelle.
+- Les animations précédentes doivent être correctement interrompues ou remplacées.
+- Les jaquettes ne doivent pas rester agrandies par erreur.
+- Aucun retard ne doit s'accumuler.
+- La navigation doit rester immédiate.
+
+Ne laisse jamais une animation bloquer la sélection.
+
+---
+
+# PARTIE 11 — ANIMATION DE LANCEMENT D'UN JEU
+
+Je souhaite une animation de lancement immersive.
+
+La jaquette sélectionnée doit devenir le centre de l'animation.
+
+## 11.1. Déroulement
+
+Lorsque l'utilisateur valide un jeu :
+
+1. La sélection est confirmée.
+2. La jaquette commence à s'agrandir.
+3. L'agrandissement devient progressivement plus important.
+4. La jaquette occupe une grande partie de l'écran.
+5. Elle peut finir par couvrir toute la zone d'affichage.
+6. Un léger rebond peut être ajouté.
+7. Le jeu est lancé.
+
+Je souhaite donner l'impression que la jaquette se transforme en écran de lancement.
+
+## 11.2. Vitesse
+
+L'animation doit être relativement rapide.
+
+Je ne veux pas de longues secondes d'attente.
+
+Évite les temps morts.
+
+La transition doit être suffisamment visible pour être esthétique, mais suffisamment courte pour conserver une expérience réactive.
+
+## 11.3. Rebond
+
+Le rebond doit être subtil.
+
+Il ne doit pas donner une impression de jouet ou d'animation excessive.
+
+## 11.4. Synchronisation
+
+L'animation et le lancement doivent être correctement synchronisés.
+
+Il ne faut pas :
+- Lancer le jeu avant que la transition ait commencé.
+- Attendre inutilement après l'animation.
+- Bloquer le programme.
+- Laisser l'image agrandie après un échec de lancement.
+- Déclencher plusieurs lancements pour une seule validation.
+
+Si le mécanisme de lancement Ndless impose des contraintes particulières, adapte la séquence en conséquence.
+
+---
+
+# PARTIE 12 — SYSTÈME DE CAPTURE AUTOMATIQUE DES JAQUETTES
+
+Je souhaite conserver le principe de capture automatique des images des jeux.
+
+Cette fonctionnalité doit être étudiée sérieusement.
+
+Ne suppose pas que la calculatrice permet de capturer facilement le contenu graphique d'un autre programme.
+
+## 12.1. Règle principale
+
+Si un jeu possède déjà une jaquette valide, ne la remplace pas automatiquement.
+
+Si aucune jaquette valide n'existe, le système peut essayer d'en générer une.
+
+## 12.2. Moment de la capture
+
+La capture doit avoir lieu lorsque le jeu a réellement commencé à afficher son contenu.
+
+Ne capture pas immédiatement après le lancement du processus.
+
+Il faut attendre que :
+- Le programme soit lancé.
+- Son contenu graphique soit visible.
+- L'écran corresponde réellement au jeu.
+
+## 12.3. Captures interdites
+
+Ne récupère jamais :
+- Un écran de chargement.
+- Une fenêtre d'erreur.
+- Un écran de fermeture.
+- Un dialogue de confirmation.
+- Un écran de sortie.
+- Une image noire.
+- Une fenêtre système.
+
+Je ne veux surtout pas que le launcher récupère une image affichée lorsque le jeu est en train de se fermer.
+
+## 12.4. Conservation des jaquettes
+
+Règles obligatoires :
+
+- Jaquette valide existante : la conserver.
+- Aucune jaquette : autoriser une capture si techniquement possible.
+- Capture invalide : ne pas l'enregistrer.
+- Capture noire : la rejeter.
+- Capture incorrecte : ne pas écraser l'image existante.
+
+## 12.5. Alternative
+
+Si la capture automatique du rendu d'un autre programme est impossible sur la plateforme, explique précisément la limitation.
+
+Propose une méthode alternative permettant d'associer des images aux jeux.
+
+Ne simule jamais une capture automatique qui ne fonctionne pas réellement.
+
+---
+
+# PARTIE 13 — BARRE INFÉRIEURE ET RACCOURCIS
+
+Une barre inférieure peut contenir des raccourcis utiles.
+
+Elle doit être bien organisée.
+
+## 13.1. Centrage
+
+Les raccourcis doivent être répartis régulièrement et centrés horizontalement.
+
+Je ne veux pas qu'ils soient regroupés à gauche.
+
+L'ensemble doit être centré dans la largeur disponible.
+
+## 13.2. Espacements
+
+Les distances entre les raccourcis doivent être régulières.
+
+Aucun élément ne doit être collé inutilement à un autre.
+
+La barre doit rester compacte.
+
+## 13.3. Adaptation
+
+La disposition doit fonctionner quel que soit le nombre de raccourcis.
+
+Ne fixe pas des coordonnées uniquement adaptées à un nombre précis d'éléments.
+
+Utilise un calcul de disposition adapté à la largeur de l'écran.
+
+## 13.4. Sobriété
+
+Ne surcharge pas cette barre.
+
+Elle ne doit jamais prendre la place de la bibliothèque.
+
+Ne lui ajoute pas des informations techniques inutiles.
+
+---
+
+# PARTIE 14 — NAVIGATION AVEC LES TOUCHES PHYSIQUES
+
+Le launcher doit être pensé pour être utilisé avec les touches de la calculatrice.
+
+La navigation doit être naturelle.
+
+Étudie les commandes physiques disponibles et leurs possibilités de gestion sous Ndless.
+
+## 14.1. Touches directionnelles
+
+Les flèches doivent permettre de déplacer la sélection.
+
+Le comportement doit respecter la grille.
+
+Exemple :
+- Droite : sélectionner le jeu suivant.
+- Gauche : sélectionner le jeu précédent.
+- Haut : sélectionner le jeu de la rangée supérieure.
+- Bas : sélectionner le jeu de la rangée inférieure.
+
+Adapte ce comportement aux limites de la grille et aux pages.
+
+## 14.2. Validation
+
+La touche de validation doit lancer le jeu sélectionné.
+
+## 14.3. Retour
+
+Prévois une commande permettant de revenir à l'interface précédente lorsque cela est pertinent.
+
+Étudie les possibilités réelles de gestion de la touche Échap ou de la touche Annuler.
+
+## 14.4. Navigation entre catégories
+
+Les commandes doivent permettre de changer de catégorie de manière cohérente.
+
+Évite les conflits entre les commandes de sélection des jeux et les commandes de navigation de l'interface.
+
+## 14.5. Réactivité
+
+La navigation doit être immédiate.
+
+Les animations ne doivent jamais empêcher de recevoir les nouvelles commandes.
+
+Teste les appuis répétés.
+
+---
+
+# PARTIE 15 — LANCEMENT RÉEL DES JEUX NDLESS
+
+C'est une fonctionnalité indispensable.
+
+Le launcher doit lancer les exécutables Ndless présents sur la calculatrice.
+
+Il ne doit pas simplement ouvrir un document ou afficher une simulation.
+
+## 15.1. Vérification préalable
+
+Avant de lancer un jeu :
+- Vérifie que son entrée existe.
+- Vérifie que son fichier existe.
+- Vérifie que son chemin est correct.
+- Vérifie autant que possible son format et sa compatibilité.
+- Vérifie que les données nécessaires sont disponibles.
+
+## 15.2. Exécution
+
+Utilise le mécanisme natif approprié et documenté.
+
+Étudie le comportement réel des exécutables Ndless.
+
+Vérifie notamment :
+- La gestion du processus.
+- Le transfert d'exécution.
+- Les contraintes mémoire.
+- Les erreurs possibles.
+- Le comportement du programme appelant.
+
+Ne suppose pas que le launcher peut rester actif en arrière-plan si le mécanisme Ndless ne le permet pas.
+
+## 15.3. Retour après le jeu
+
+Étudie les possibilités de retour au launcher après la fermeture d'un jeu.
+
+Si un retour automatique est techniquement possible, implémente-le de manière fiable.
+
+Sinon, propose une méthode alternative adaptée au comportement réel de Ndless.
+
+Ne prétends pas que le launcher peut reprendre son exécution si le système ne le permet pas.
+
+---
+
+# PARTIE 16 — GESTION DES DONNÉES ET PERSISTANCE
+
+Les préférences doivent être conservées.
+
+Le launcher doit pouvoir enregistrer :
+- Les favoris.
+- Les jeux récemment utilisés.
+- Les chemins internes.
+- Les associations de jaquettes.
+- Les paramètres nécessaires.
+
+Utilise un système de stockage léger.
+
+Évite les écritures répétées inutiles.
+
+Prévois la gestion :
+- Des jeux supprimés.
+- Des jeux déplacés.
+- Des fichiers manquants.
+- Des chemins invalides.
+- Des données corrompues.
+
+Si un fichier de configuration est endommagé, le launcher doit pouvoir gérer la situation sans planter.
+
+Ne supprime jamais les jeux eux-mêmes.
+
+---
+
+# PARTIE 17 — PERFORMANCES ET OPTIMISATION
+
+La TI-Nspire CX II-T n'a pas les ressources d'un ordinateur.
+
+Il faut donc optimiser le programme dès sa conception.
+
+## 17.1. Rendu graphique
+
+Optimise :
+- Le dessin des jaquettes.
+- Les coins arrondis.
+- Le redimensionnement.
+- Les transitions.
+- Les indicateurs de sélection.
+- La pagination.
+
+Évite de redessiner inutilement toute l'interface lorsqu'un seul élément change.
+
+## 17.2. Mémoire
+
+Gère correctement :
+- Les images.
+- Les textures éventuelles.
+- Les buffers.
+- Les fichiers.
+- Les structures de données.
+
+Évite les fuites mémoire.
+
+Évite de conserver des ressources inutilisées.
+
+## 17.3. Animations
+
+L'objectif est d'obtenir la meilleure fluidité possible sur la calculatrice.
+
+Vise un rendu proche de 60 FPS uniquement si les capacités réelles de la machine le permettent.
+
+Ne bloque pas le programme avec des temporisations inutiles.
+
+Utilise une gestion du temps et des animations adaptée à l'environnement.
+
+## 17.4. Chargement
+
+Évite de charger toutes les ressources en même temps si cela consomme trop de mémoire.
+
+Privilégie les stratégies de chargement adaptées.
+
+L'accès à la bibliothèque doit être rapide.
+
+---
+
+# PARTIE 18 — ARCHITECTURE DU CODE
+
+Le code doit être organisé et maintenable.
+
+Ne place pas tout dans un fichier gigantesque.
+
+Sépare les responsabilités.
+
+Architecture indicative :
+
+- `main.c` : initialisation et boucle principale.
+- `renderer.c` : rendu de l'interface.
+- `input.c` : gestion des touches.
+- `library.c` : bibliothèque de jeux.
+- `scanner.c` : détection des exécutables.
+- `launcher.c` : lancement des jeux.
+- `covers.c` : gestion des jaquettes.
+- `animation.c` : animations.
+- `pagination.c` : pagination.
+- `favorites.c` : favoris.
+- `recent.c` : jeux récents.
+- `storage.c` : configuration et persistance.
+
+Cette organisation est indicative.
+
+Adapte-la aux bibliothèques et aux contraintes de Ndless.
+
+Évite la duplication de code.
+
+Documente les fonctions importantes.
+
+---
+
+# PARTIE 19 — TESTS ET VALIDATION
+
+La compilation ne suffit pas.
+
+Le programme doit être testé.
+
+## 19.1. Tests de base
+
+Vérifie :
+- Le démarrage.
+- L'affichage.
+- La détection des jeux.
+- Le chargement des images.
+- La navigation.
+- La sélection.
+- Les catégories.
+- Les favoris.
+- Les jeux récents.
+- La pagination.
+- Les transitions.
+- Le lancement des exécutables.
+
+## 19.2. Tests des animations
+
+Teste :
+- La sélection rapide.
+- Les changements successifs de page.
+- Les animations interrompues.
+- Les validations répétées.
+- Les transitions de lancement.
+- Les retours après erreur.
+
+## 19.3. Tests des données
+
+Teste :
+- Un jeu supprimé.
+- Un jeu déplacé.
+- Une jaquette manquante.
+- Une jaquette invalide.
+- Un chemin incorrect.
+- Une configuration endommagée.
+
+## 19.4. Tests sur émulateur
+
+Utilise un émulateur TI-Nspire adapté si possible.
+
+Mais ne considère pas qu'un résultat positif sur PC garantit le fonctionnement sur la calculatrice.
+
+## 19.5. Tests physiques
+
+Lorsque tu disposes de la calculatrice, teste le fichier `.tns` directement sur la TI-Nspire CX II-T avec Ndless.
+
+Vérifie le fonctionnement réel.
+
+Ne prétends jamais avoir réalisé un test physique si tu ne l'as pas effectué.
+
+---
+
+# PARTIE 20 — MÉTHODE DE TRAVAIL ET DIRECTIVE D'EXÉCUTION
+
+Cette partie est particulièrement importante.
+
+Je ne veux pas que tu développes tout le projet rapidement en une seule passe.
+
+Je veux un travail approfondi, rigoureux et méthodique.
+
+**La qualité est beaucoup plus importante que la vitesse.**
+
+Tu peux prendre le temps de réfléchir, d'effectuer des recherches, de comparer les solutions et de tester les implémentations.
+
+## PHASE 1 — Recherche et faisabilité
+
+- Examiner la plateforme.
+- Étudier Ndless.
+- Examiner les projets existants.
+- Étudier les forums.
+- Vérifier les possibilités graphiques.
+- Vérifier le lancement des exécutables.
+- Vérifier le format TNS.
+
+Livrable : rapport de faisabilité.
+
+## PHASE 2 — Architecture
+
+- Définir les composants.
+- Définir les structures de données.
+- Définir la gestion mémoire.
+- Définir le rendu.
+- Définir la navigation.
+- Définir le système de lancement.
+
+Livrable : architecture documentée.
+
+## PHASE 3 — Prototype natif
+
+Avant de créer toute l'interface, réalise un petit prototype.
+
+Il doit démontrer :
+- La compilation.
+- Le lancement.
+- Le rendu graphique.
+- La lecture du clavier.
+- La lecture des fichiers.
+- La production d'un véritable `.tns`.
+
+Valide les mécanismes fondamentaux.
+
+## PHASE 4 — Interface
+
+Développe progressivement :
+- L'icône.
+- Le démarrage.
+- La bibliothèque.
+- Les jaquettes.
+- Les catégories.
+- La pagination.
+- La sélection.
+- Les raccourcis.
+
+Teste chaque élément.
+
+## PHASE 5 — Mécaniques
+
+Développe :
+- La détection des jeux.
+- Les favoris.
+- Les jeux récents.
+- La persistance.
+- Le lancement des exécutables.
+
+## PHASE 6 — Animations
+
+Développe et affine :
+- L'animation de démarrage.
+- L'agrandissement de sélection.
+- La transition verticale des pages.
+- L'animation de lancement.
+- Le léger rebond.
+
+Ne cherche pas à ajouter tous les effets simultanément.
+
+Teste chacun indépendamment puis ensemble.
+
+## PHASE 7 — Optimisation
+
+Analyse :
+- Les performances.
+- La mémoire.
+- Le rendu.
+- Le chargement.
+- La réactivité.
+
+Corrige les problèmes.
+
+## PHASE 8 — Validation complète
+
+Teste toutes les fonctionnalités.
+
+Vérifie leur fonctionnement ensemble.
+
+Corrige les régressions.
+
+## PHASE 9 — Livraison
+
+Prépare le fichier `.tns`, le code source et les instructions.
+
+---
+
+# PARTIE 21 — SUIVI DU DÉVELOPPEMENT
+
+Crée un fichier `PROGRESS.md` ou un fichier de suivi équivalent.
+
+Pour chaque fonctionnalité, indique :
+
+- NON COMMENCÉE
+- EN ANALYSE
+- EN COURS
+- IMPLÉMENTÉE
+- EN TEST
+- VALIDÉE
+- BLOQUÉE
+
+Une fonctionnalité ne peut être considérée comme validée que si elle a été réellement testée.
+
+Conserve :
+- Les décisions techniques.
+- Les résultats des tests.
+- Les problèmes rencontrés.
+- Les solutions adoptées.
+- Les tâches restantes.
+
+Si tu atteins une limite de contexte, utilise ce fichier pour reprendre le travail sans perdre la progression.
+
+Ne recommence pas les étapes déjà validées.
+
+Ne t'arrête pas après avoir établi le plan.
+
+Tu dois réellement développer le projet.
+
+Ne me demande pas de confirmer chaque petite décision technique.
+
+Prends les décisions adaptées lorsque les exigences sont suffisamment claires.
+
+Si un obstacle technique important empêche de réaliser une fonctionnalité, explique-le précisément et propose une alternative.
+
+---
+
+# PARTIE 22 — LIVRABLES
+
+À la fin, je souhaite obtenir :
+
+1. Le code source complet.
+2. Les fichiers de compilation.
+3. Les ressources graphiques nécessaires.
+4. Le système de configuration.
+5. Le fichier `.tns` final.
+6. Les instructions d'installation.
+7. Les instructions d'utilisation.
+8. Les résultats des tests.
+9. Les limitations connues.
+
+Le fichier `.tns` doit être réellement utilisable sur la TI-Nspire CX II-T avec Ndless.
+
+Ne livre pas uniquement un prototype graphique sur PC.
+
+Ne livre pas un document TNS classique en prétendant qu'il s'agit d'un exécutable natif.
+
+Ne livre pas un fichier renommé artificiellement.
+
+Vérifie le format réel du résultat.
+
+---
+
+# PARTIE 23 — CRITÈRES FINAUX DE RÉUSSITE
+
+Le projet sera considéré comme réussi lorsque :
+
+- Le launcher fonctionne sur la TI-Nspire CX II-T.
+- Il est compilé sous forme d'exécutable natif Ndless.
+- Il est fourni au format `.tns`.
+- Il possède sa propre identité visuelle et son icône.
+- Il affiche une bibliothèque de jeux.
+- Il détecte les exécutables compatibles.
+- Il affiche les jeux sous forme de jaquettes.
+- Il utilise une grille de trois colonnes adaptée à l'écran.
+- Les jaquettes sont arrondies.
+- Les cartes n'affichent pas de noms de jeux.
+- Les catégories sont TOUS, FAV et REC.
+- Le compteur affiche uniquement un nombre.
+- Le bouton LIST est absent.
+- Les catégories ARCADE, PORTS et EMUL sont absentes.
+- Le nom du thème n'est pas affiché.
+- Les chemins techniques ne sont pas visibles.
+- Les cases vides artificielles sont supprimées.
+- La pagination utilise uniquement des points.
+- Le changement de page est vertical.
+- La bibliothèque reste correctement positionnée.
+- La sélection agrandit subtilement la jaquette.
+- Aucun cadre ni contour cyan n'est affiché.
+- L'animation de lancement agrandit la jaquette avec un léger rebond.
+- Les raccourcis inférieurs sont centrés et espacés.
+- Les favoris sont persistants.
+- Les jeux récents sont persistants.
+- Les jeux peuvent être lancés réellement.
+- Les erreurs de fichiers sont gérées.
+- Le système de jaquettes respecte les images existantes.
+- Les performances sont adaptées au matériel.
+- Le programme est stable.
+
+---
+
+# DIRECTIVE FINALE ABSOLUE
+
+Tu dois développer ce projet comme un véritable logiciel destiné à être utilisé quotidiennement sur ma calculatrice.
+
+Ne te contente pas de faire une jolie démonstration.
+
+Ne crée pas une interface qui semble fonctionner mais dont les boutons ne font rien.
+
+Ne simule pas le lancement des jeux.
+
+Ne prétends pas que les fonctionnalités sont terminées sans les avoir vérifiées.
+
+Ne développe pas toutes les parties rapidement pour ensuite laisser des défauts importants.
+
+Prends le temps nécessaire pour réfléchir et construire correctement chaque composant.
+
+Consulte les documentations et les forums spécialisés.
+
+Vérifie les possibilités réelles de Ndless.
+
+Teste les mécanismes essentiels avant de développer les éléments visuels.
+
+Travaille progressivement, mais de manière autonome et continue.
+
+**Je veux obtenir un véritable launcher de jeux pour ma TI-Nspire CX II-T, avec une expérience visuelle inspirée des consoles modernes, une bibliothèque de jaquettes, des animations soignées, une navigation agréable et un lancement réel des jeux Ndless.**
+
+La qualité du résultat final est prioritaire sur la vitesse de développement.

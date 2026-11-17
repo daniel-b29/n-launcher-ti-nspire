@@ -1,0 +1,13 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+native/*.o
+native/*.elf
+native/*.zehn
+native/test_runner
+native/*.bmp
