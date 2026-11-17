@@ -173,3 +173,16 @@ n-launcher-ti-nspire/
     ├── PROGRESS.md           # Suivi détaillé du développement
     └── TEST_REPORT.md        # Rapport de tests C & TypeScript
 ```
+
+---
+
+## English Summary & Technical Index
+
+**N-Launcher** is a native **C11 console-style game launcher** (`N-Launcher.tns`) and **320×240 RGB565 React/TypeScript web simulator** for **Texas Instruments TI-Nspire CX II-T** (and TI-Nspire CX / CX CAS) calculators running **Ndless**.
+
+- **Core features**: Binary `.tns` header scanner (`PRG\0`, `Zehn`, `bFLT`), Windows `.ico` / PNG / BMP cover decoder, 5 grid layouts (`1×1`–`4×4`), 12 themes (Dark / Light / Gray × 4 accents), 8 isolated user profiles with 43 avatars, instant library search, RTC play-time statistics, optical TI-OS battery indicator, and anti-bootloop autostart guard (`ESC`/`ON` recovery).
+- **Technical reports & AI index**:
+  - [Development Progress & Architecture Decisions](docs/PROGRESS.md)
+  - [C & TypeScript Test Report](docs/TEST_REPORT.md)
+  - [Structured AI / LLM Index (`llms.txt`)](llms.txt)
+

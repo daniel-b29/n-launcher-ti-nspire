@@ -1,7 +1,19 @@
 {
-  "name": "react-example",
+  "name": "n-launcher-ti-nspire",
   "private": true,
-  "version": "0.0.0",
+  "version": "3.1.0",
+  "description": "N-Launcher — Native C11 Ndless game launcher & 320x240 RGB565 web simulator for Texas Instruments TI-Nspire CX II-T",
+  "keywords": [
+    "ti-nspire",
+    "ti-nspire-cx-ii",
+    "ndless",
+    "game-launcher",
+    "tns",
+    "zehn",
+    "c11",
+    "rgb565",
+    "calculator"
+  ],
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",

@@ -1,0 +1,23 @@
+# N-Launcher (TI-Nspire CX II-T / Ndless)
+
+> Native C11 console-style game launcher (`N-Launcher.tns`) and pixel-accurate 320x240 RGB565 React/TypeScript web simulator for Texas Instruments TI-Nspire CX II-T (and TI-Nspire CX / CX CAS) calculators running Ndless.
+
+## Key Capabilities & Technical Topics
+- **Target Hardware**: Texas Instruments TI-Nspire CX II-T (ARM926EJ-S / ARMv5TE, 320x240 RGB565 LCD via `lcd_blit`).
+- **Ndless Executable Scanner (`native/scanner.c`)**: Inspects `.tns` file headers (`PRG\0`, `Zehn`, `bFLT`) to separate real ARM executables from TI-Nspire document ZIP archives (`PK\x03\x04`, `*TIM`, XML) and system files.
+- **Zehn Binary & `nl_exec()` Launcher (`native/main_ndless.c`)**: Launches `.tns` games cleanly with working directory switching, screen reset (`SCR_TYPE_INVALID`), and return-to-launcher restoration.
+- **Image & Icon Decoder (`native/covers.c`)**: Full Windows `.ico` decoder (1/4/8/16/24/32 bpp, PNG/zlib/Adam7, AND mask, alpha trimming), BMP support, monogram fallback tiles, and non-invasive optical TI-OS battery indicator reading.
+- **Multi-Profile & Avatar System (`native/profiles.c`, `native/avatars_data.h`)**: Up to 8 isolated user profiles (favorites, shortcuts, play-time stats) with 43 built-in RGB565 avatars.
+- **Anti-Bootloop Autostart Guard (`native/storage.c`, `native/boot_guard_core.h`)**: Safe Ndless startup persistence (`nl_boot_guard.cfg.tns`) with automatic rollback on crash and manual recovery mode (`ESC` or `ON` at boot).
+- **UI Engine & Animations (`native/renderer.c`, `native/animation.c`, `native/ui_state.c`)**: 12 themes (Dark / Light / Gray modes × 4 accent colors), organic ink transitions, liquid-drop settings menu, 5 grid layouts (`1x1` to `4x4`), instant library search, and RTC play-time statistics.
+- **Web Simulator & Binary Inspector (`src/`)**: Interactive 320x240 Canvas simulator in React + TypeScript with Zehn header inspection and unit tests.
+
+## Repository Map & Reports
+- [README.md](README.md): Full documentation, installation guide, physical keybindings, and 15 annotated screenshots.
+- [releases/N-Launcher.tns](releases/N-Launcher.tns): Ready-to-run compiled ARM binary for TI-Nspire CX II-T (Ndless).
+- [releases/nl_hotkey.tns](releases/nl_hotkey.tns): Experimental resident TI-OS global hotkey module (`Ctrl+Menu`).
+- [docs/PROGRESS.md](docs/PROGRESS.md): Detailed engineering progress log, architectural decisions, and hardware limits.
+- [docs/TEST_REPORT.md](docs/TEST_REPORT.md): Comprehensive C (`test_runner.c`) and TypeScript (`nlauncherEngine.test.ts`) test report.
+- [docs/screenshots/](docs/screenshots/): 15 PNG screenshots covering grids, themes, profiles, settings, simulator, and calculator key guide.
+- [native/](native/): Modular C11 source code and `Makefile` for Ndless SDK (`arm-none-eabi-gcc`).
+- [src/](src/): React / TypeScript web simulator and binary inspection dashboard.
