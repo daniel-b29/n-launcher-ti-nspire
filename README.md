@@ -1,6 +1,12 @@
-# N-Launcher — Lanceur de Jeux Console pour TI-Nspire CX II-T (Ndless)
+# N-Launcher — Lanceur de Jeux Console (Frontend) pour TI-Nspire CX II-T (Ndless)
 
-**N-Launcher** (`N-Launcher.tns`) est un lanceur de jeux natif écrit en **C11 modulaire** pour les calculatrices **Texas Instruments TI-Nspire CX II-T** (ainsi que TI-Nspire CX / CX CAS) équipées de **Ndless**.
+[![GitHub Release](https://img.shields.io/github/v/release/daniel-b29/n-launcher-ti-nspire?label=Release)](https://github.com/daniel-b29/n-launcher-ti-nspire/releases/latest)
+[![Platform](https://img.shields.io/badge/TI--Nspire-CX%20II--T%20%7C%20CX%20%7C%20Ndless-blue)](https://github.com/daniel-b29/n-launcher-ti-nspire)
+[![Language](https://img.shields.io/badge/C11%20%2B%20React%20%2F%20TypeScript-320x240%20RGB565-informational)](https://github.com/daniel-b29/n-launcher-ti-nspire)
+
+> **Game launcher and frontend menu for Ndless games on TI-Nspire CX / CX II-T** (OS 5.2 / 5.3 / Ndless r2020+), with a pixel-accurate 320×240 RGB565 web simulator.
+
+**N-Launcher** (`N-Launcher.tns`, v3.1) est un lanceur de jeux natif écrit en **C11 modulaire** pour les calculatrices **Texas Instruments TI-Nspire CX II-T** (ainsi que TI-Nspire CX / CX CAS) équipées de **Ndless** (OS ≥ 5.2, Ndless r2020+ / 5.2.0.771 / 5.3.0.564).
 
 Il transforme la calculatrice en véritable interface de console portable (320×240 RGB565), accompagnée d'un **simulateur web interactif React/TypeScript** fidèle au pixel près pour tester et inspecter les binaires `.tns` sur ordinateur.
 
@@ -97,8 +103,8 @@ Il transforme la calculatrice en véritable interface de console portable (320×
 
 ## Installation sur TI-Nspire CX II-T
 
-1. Assurez-vous que **Ndless** est installé et actif sur votre calculatrice TI-Nspire CX II-T.
-2. Téléchargez le binaire prêt à l'emploi [`releases/N-Launcher.tns`](releases/N-Launcher.tns) *(conservez exactement ce nom sans espace avant `.tns`)*.
+1. Assurez-vous que **Ndless** est installé et actif sur votre calculatrice TI-Nspire CX II-T (OS 5.2 / 5.3, Ndless r2020+) ou CX / CX CAS.
+2. Téléchargez le binaire prêt à l'emploi depuis la page **[GitHub Releases (`v3.1.0`)](https://github.com/daniel-b29/n-launcher-ti-nspire/releases/latest)** *(ou directement [`releases/N-Launcher.tns`](releases/N-Launcher.tns) — conservez exactement ce nom sans espace avant `.tns`)*.
 3. Transférez **`N-Launcher.tns`** dans `/documents/ndless/` ou `/documents/` via TI-Nspire Computer Link / nLink.
 4. Placez vos jeux `.tns` dans `/documents/games/`, `/documents/ndless/`, `/documents/roms/` ou n'importe quel sous-dossier de `/documents/`.
 5. Lancez **`N-Launcher.tns`** depuis la calculatrice avec **`EXE`** (`Enter`).
