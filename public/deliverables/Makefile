@@ -17,26 +17,28 @@ LDFLAGS   = -Wl,--gc-sections
 ZEHNFLAGS = --name "N-Launcher" \
             --author "daniel.b" \
             --version 3 \
-            --notice "Console Game Library Launcher for TI-Nspire CX II-T (Build 2026-11-17 \#R7)" \
+            --notice "Console Game Library Launcher for TI-Nspire CX II-T (Build 2026-11-18 \#R23)" \
             --ndless-min 36 \
             --240x320-support true
 
 HOTKEY_ZEHNFLAGS = --name "nl_hotkey" \
                    --author "daniel.b" \
-                   --version 1 \
-                   --notice "N-Launcher Experimental TI-OS Global Hotkey (Ctrl+Menu)" \
+                   --version 2 \
+                   --notice "N-Launcher TI-OS Global Hotkey (get_event+0, Classique & Persistant, \#R23)" \
                    --ndless-min 36 \
                    --240x320-support true
 
 ifeq ($(DEBUG),FALSE)
 	GCCFLAGS += -Os
+	HOT_GCCFLAGS = $(filter-out -Os,$(GCCFLAGS)) -O2
 else
 	GCCFLAGS += -O0 -g
+	HOT_GCCFLAGS = $(GCCFLAGS)
 endif
 
 EXE       = N-Launcher
 DISTDIR   = .
-CORE_SRCS = scanner.c covers.c storage.c profiles.c ui_state.c animation.c renderer.c
+CORE_SRCS = scanner.c covers.c storage.c profiles.c diag.c ui_state.c animation.c renderer.c
 CORE_OBJS = $(CORE_SRCS:.c=.o)
 OBJS      = main_ndless.o $(CORE_OBJS)
 
@@ -67,8 +69,11 @@ main_ndless.o: main_ndless.c nlauncher.h boot_guard_core.h
 profiles.o: profiles.c nlauncher.h avatars_data.h
 	$(GCC) $(GCCFLAGS) -c $< -o $@
 
+covers.o: covers.c nlauncher.h
+	$(GCC) $(HOT_GCCFLAGS) -c $< -o $@
+
 renderer.o: renderer.c nlauncher.h cursors_data.h
-	$(GCC) $(GCCFLAGS) -c $< -o $@
+	$(GCC) $(HOT_GCCFLAGS) -c $< -o $@
 
 storage.o: storage.c nlauncher.h boot_guard_core.h hotkey_stub_data.h
 	$(GCC) $(GCCFLAGS) -c $< -o $@

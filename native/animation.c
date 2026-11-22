@@ -21,28 +21,88 @@ bool nl_anim_step(nl_state_t *state) {
         dirty = true;
     }
 
-    /* 2. Smooth vertical page scroll ease-out (1/16 px fixed-point) */
-    int s_diff = state->anim.target_scroll_y_fp - state->anim.scroll_y_fp;
-    if (s_diff != 0) {
-        int step = (s_diff * 5) / 16;
-        if (step == 0) step = (s_diff > 0) ? 1 : -1;
-        if (abs(s_diff) <= 4) {
-            state->anim.scroll_y_fp = state->anim.target_scroll_y_fp;
+    /* 2 & 3. Smooth time-eased vertical OR horizontal page scroll & pagination dot glide (1/16 px FP).
+     * Uses blended Hermite + cubic ease-out so frame-1 never teleports (~10.7% max step/frame)
+     * and large multi-page wraps (e.g., page 0 <-> page 12 on 78 games) clamp their visual
+     * entry distance to 1.5 pages for clean, glitch-free arrival without blurring 12 pages. */
+    if (state->anim.target_scroll_y_fp != state->anim.scroll_last_target_fp ||
+        state->anim.target_scroll_x_fp != state->anim.scroll_last_target_x_fp) {
+        nl_layout_metrics_t lm;
+        nl_get_layout_metrics_full(
+            state->settings.layout,
+            state->settings.scroll_dir,
+            state->settings.show_names,
+            state->settings.show_shortcuts,
+            state->filtered_count,
+            &lm
+        );
+        int page_stride_fp = lm.is_horizontal
+            ? ((lm.page_stride_x > 0 ? lm.page_stride_x : 278) << 4)
+            : ((lm.page_stride_y > 0 ? lm.page_stride_y : 180) << 4);
+        int max_visual_span = (page_stride_fp * 3) / 2;
+
+        if (lm.is_horizontal) {
+            int cur_diff = state->anim.target_scroll_x_fp - state->anim.scroll_x_fp;
+            int abs_diff = (cur_diff < 0) ? -cur_diff : cur_diff;
+            if (abs_diff > (page_stride_fp * 5) / 2 && max_visual_span > 0) {
+                int sign = (cur_diff > 0) ? 1 : -1;
+                state->anim.scroll_x_fp = state->anim.target_scroll_x_fp - sign * max_visual_span;
+            }
         } else {
-            state->anim.scroll_y_fp += step;
+            int cur_diff = state->anim.target_scroll_y_fp - state->anim.scroll_y_fp;
+            int abs_diff = (cur_diff < 0) ? -cur_diff : cur_diff;
+            if (abs_diff > (page_stride_fp * 5) / 2 && max_visual_span > 0) {
+                int sign = (cur_diff > 0) ? 1 : -1;
+                state->anim.scroll_y_fp = state->anim.target_scroll_y_fp - sign * max_visual_span;
+            }
         }
-        dirty = true;
+        state->anim.scroll_start_y_fp = state->anim.scroll_y_fp;
+        state->anim.scroll_start_x_fp = state->anim.scroll_x_fp;
+        state->anim.dot_start_fp = state->anim.dot_pos_fp;
+        state->anim.scroll_last_target_fp = state->anim.target_scroll_y_fp;
+        state->anim.scroll_last_target_x_fp = state->anim.target_scroll_x_fp;
+        state->anim.scroll_anim_tick = 0;
+
+        int span = lm.is_horizontal
+            ? (state->anim.target_scroll_x_fp - state->anim.scroll_start_x_fp)
+            : (state->anim.target_scroll_y_fp - state->anim.scroll_start_y_fp);
+        if (span < 0) span = -span;
+        state->anim.scroll_anim_max = (span > page_stride_fp + (page_stride_fp >> 2)) ? 16 : 14;
     }
 
-    /* 3. Smooth pagination dot interpolation */
-    int d_diff = state->anim.target_dot_fp - state->anim.dot_pos_fp;
-    if (d_diff != 0) {
-        int step = (d_diff * 6) / 16;
-        if (step == 0) step = (d_diff > 0) ? 1 : -1;
-        if (abs(d_diff) <= 1) {
+    if (state->anim.scroll_y_fp != state->anim.target_scroll_y_fp ||
+        state->anim.scroll_x_fp != state->anim.target_scroll_x_fp ||
+        state->anim.dot_pos_fp != state->anim.target_dot_fp) {
+        if (state->anim.scroll_anim_max <= 0) {
+            state->anim.scroll_start_y_fp = state->anim.scroll_y_fp;
+            state->anim.scroll_start_x_fp = state->anim.scroll_x_fp;
+            state->anim.dot_start_fp = state->anim.dot_pos_fp;
+            state->anim.scroll_last_target_fp = state->anim.target_scroll_y_fp;
+            state->anim.scroll_last_target_x_fp = state->anim.target_scroll_x_fp;
+            state->anim.scroll_anim_tick = 0;
+            state->anim.scroll_anim_max = 14;
+        }
+        state->anim.scroll_anim_tick++;
+        if (state->anim.scroll_anim_tick >= state->anim.scroll_anim_max) {
+            state->anim.scroll_y_fp = state->anim.target_scroll_y_fp;
+            state->anim.scroll_x_fp = state->anim.target_scroll_x_fp;
             state->anim.dot_pos_fp = state->anim.target_dot_fp;
         } else {
-            state->anim.dot_pos_fp += step;
+            int t = (state->anim.scroll_anim_tick * 1024) / state->anim.scroll_anim_max;
+            int smooth = (int)((((int64_t)t * t * (3072 - 2 * t)) + 524288LL) >> 20);
+            int inv = 1024 - t;
+            int cubic_out = 1024 - (int)((((int64_t)inv * inv * inv) + 524288LL) >> 20);
+            int ease = (smooth + cubic_out) >> 1;
+
+            int sy_span = state->anim.target_scroll_y_fp - state->anim.scroll_start_y_fp;
+            int sx_span = state->anim.target_scroll_x_fp - state->anim.scroll_start_x_fp;
+            int d_span  = state->anim.target_dot_fp - state->anim.dot_start_fp;
+            state->anim.scroll_y_fp = state->anim.scroll_start_y_fp +
+                (int)(((int64_t)sy_span * ease + (sy_span >= 0 ? 512LL : -512LL)) >> 10);
+            state->anim.scroll_x_fp = state->anim.scroll_start_x_fp +
+                (int)(((int64_t)sx_span * ease + (sx_span >= 0 ? 512LL : -512LL)) >> 10);
+            state->anim.dot_pos_fp = state->anim.dot_start_fp +
+                (int)(((int64_t)d_span * ease + (d_span >= 0 ? 512LL : -512LL)) >> 10);
         }
         dirty = true;
     }
@@ -126,9 +186,6 @@ bool nl_anim_step(nl_state_t *state) {
 
     /* 5b. Smooth ON/OFF toggle switch knob & color interpolation (0..256 FP) */
     {
-        state->anim.switch_autostart_fp = 0;
-        state->anim.switch_battery_fp = 0;
-
         int tgt_hk = state->settings.global_hotkey ? 256 : 0;
         int diff_hk = tgt_hk - state->anim.switch_hotkey_fp;
         if (diff_hk != 0) {
@@ -203,6 +260,32 @@ bool nl_anim_step(nl_state_t *state) {
                 state->anim.switch_tp_mode_fp = tgt_tp_mode;
             } else {
                 state->anim.switch_tp_mode_fp += step;
+            }
+            dirty = true;
+        }
+
+        int tgt_tap_click = state->settings.tap_to_click ? 256 : 0;
+        int diff_tap_click = tgt_tap_click - state->anim.switch_tap_click_fp;
+        if (diff_tap_click != 0) {
+            int step = (diff_tap_click * 7) / 16;
+            if (step == 0) step = (diff_tap_click > 0) ? 1 : -1;
+            if (abs(diff_tap_click) <= 4) {
+                state->anim.switch_tap_click_fp = tgt_tap_click;
+            } else {
+                state->anim.switch_tap_click_fp += step;
+            }
+            dirty = true;
+        }
+
+        int tgt_prof_lock = state->settings.profile_lock_enabled ? 256 : 0;
+        int diff_prof_lock = tgt_prof_lock - state->anim.switch_prof_lock_fp;
+        if (diff_prof_lock != 0) {
+            int step = (diff_prof_lock * 7) / 16;
+            if (step == 0) step = (diff_prof_lock > 0) ? 1 : -1;
+            if (abs(diff_prof_lock) <= 4) {
+                state->anim.switch_prof_lock_fp = tgt_prof_lock;
+            } else {
+                state->anim.switch_prof_lock_fp += step;
             }
             dirty = true;
         }
@@ -306,15 +389,18 @@ bool nl_anim_step(nl_state_t *state) {
     /* 5c. Settings Menu open/close (A & G), section transitions (B), option selection (C),
      *     value modification transitions (E) & confirmation modals (F) */
     {
+        /* Settings open (~333 ms = ~20 frames at 60 FPS) & close (~267 ms = ~16 frames at 60 FPS):
+         * Linear progress in set_open_fp so renderer's settings_open_ease256() provides the
+         * true single organic ease-out curve without double-easing collapse. */
         int tgt_open = (state->sui.screen != NL_UI_LIBRARY) ? 256 : 0;
         int diff_open = tgt_open - state->anim.set_open_fp;
         if (diff_open != 0) {
-            int step = (diff_open * 7) / 16;
-            if (step == 0) step = (diff_open > 0) ? 1 : -1;
-            if (abs(diff_open) <= 4) {
-                state->anim.set_open_fp = tgt_open;
+            if (diff_open > 0) {
+                int next_open = state->anim.set_open_fp + 13;
+                state->anim.set_open_fp = (next_open >= 256) ? 256 : next_open;
             } else {
-                state->anim.set_open_fp += step;
+                int next_open = state->anim.set_open_fp - 16;
+                state->anim.set_open_fp = (next_open <= 0) ? 0 : next_open;
             }
             dirty = true;
         }
@@ -374,6 +460,8 @@ bool nl_anim_step(nl_state_t *state) {
                              (state->sui.sc_picking_key || state->sui.sc_conflict_prompt)) ||
                             (state->sui.screen == NL_UI_SETTINGS_ICONS &&
                              state->sui.icon_confirm_modal) ||
+                            (state->sui.screen == NL_UI_SETTINGS_DIAG &&
+                             state->sui.diag_confirm_modal) ||
                             (state->sui.screen == NL_UI_SETTINGS_PROFILES &&
                              state->sui.prof_mode == NL_PROF_MODE_CONFIRM_DELETE);
         int tgt_modal = modal_active ? 256 : 0;
@@ -393,9 +481,11 @@ bool nl_anim_step(nl_state_t *state) {
             ? state->sui.reset_confirm_yes
             : ((state->sui.screen == NL_UI_SETTINGS_ICONS)
                 ? state->sui.icon_confirm_yes
-                : ((state->sui.screen == NL_UI_SETTINGS_PROFILES)
-                    ? state->sui.prof_delete_yes
-                    : state->sui.sc_conflict_confirm_yes));
+                : ((state->sui.screen == NL_UI_SETTINGS_DIAG)
+                    ? state->sui.diag_confirm_yes
+                    : ((state->sui.screen == NL_UI_SETTINGS_PROFILES)
+                        ? state->sui.prof_delete_yes
+                        : state->sui.sc_conflict_confirm_yes)));
         int tgt_btn = confirm_yes ? 256 : 0;
         int diff_btn = tgt_btn - state->anim.modal_btn_fp;
         if (diff_btn != 0) {
@@ -527,19 +617,41 @@ bool nl_anim_step(nl_state_t *state) {
         }
     }
 
-    /* 5e. Quick Profile Selector Overlay & Continuous Animated Multicolor Ring */
+    /* 5e. R16 Minimalist Quick Profile Selector (Elastic Dock Bloom + Spring Halo Orbit)
+     *     & Centered '+' Aperture Morph into Compact Floating Avatar Picker */
     {
         bool qp_vis = (state->sui.screen == NL_UI_LIBRARY) && state->sui.qp_open;
         int tgt_qp = qp_vis ? 256 : 0;
         int diff_qp = tgt_qp - state->anim.qp_open_fp;
         if (diff_qp != 0) {
-            int step = (diff_qp * 8) / 16;
-            if (step == 0) step = (diff_qp > 0) ? 1 : -1;
-            if (abs(diff_qp) <= 4) {
-                state->anim.qp_open_fp = tgt_qp;
+            if (diff_qp > 0) {
+                state->anim.qp_opening = true;
+                int nxt = state->anim.qp_open_fp + 18;
+                state->anim.qp_open_fp = (nxt >= 256) ? 256 : nxt;
             } else {
-                state->anim.qp_open_fp += step;
+                state->anim.qp_opening = false;
+                int nxt = state->anim.qp_open_fp - 18;
+                state->anim.qp_open_fp = (nxt <= 0) ? 0 : nxt;
             }
+            dirty = true;
+        }
+
+        /* Compact floating Avatar Picker modal (blooms seamlessly after centered '+' morph) */
+        bool pick_vis = (state->sui.screen == NL_UI_LIBRARY) && state->sui.qp_pick_open;
+        int tgt_pick = pick_vis ? 256 : 0;
+        int diff_pick = tgt_pick - state->anim.qp_pick_fp;
+        if (diff_pick != 0) {
+            if (diff_pick > 0) {
+                int nxt = state->anim.qp_pick_fp + 20;
+                state->anim.qp_pick_fp = (nxt >= 256) ? 256 : nxt;
+            } else {
+                int nxt = state->anim.qp_pick_fp - 20;
+                state->anim.qp_pick_fp = (nxt <= 0) ? 0 : nxt;
+            }
+            dirty = true;
+        }
+        if (pick_vis || state->anim.qp_pick_fp > 0) {
+            state->anim.qp_glow_phase = (uint16_t)((state->anim.qp_glow_phase + 5U) & 255U);
             dirty = true;
         }
 
@@ -566,22 +678,31 @@ bool nl_anim_step(nl_state_t *state) {
             int start_x = 160 - strip_w / 2;
             int rel = cur - win_start;
             int tgt_gx_fp = (start_x + rel * stride + diam / 2) << 4;
-            int tgt_gy_fp = 114 << 4;
+            int tgt_gy_fp = 120 << 4;
 
             if (state->anim.qp_glow_x_fp == 0 && state->anim.qp_glow_y_fp == 0) {
                 state->anim.qp_glow_x_fp = tgt_gx_fp;
+                state->anim.qp_glow_vx_fp = 0;
                 state->anim.qp_glow_y_fp = tgt_gy_fp;
                 state->anim.qp_trail_x_fp = tgt_gx_fp;
             } else {
+                /* Damped elastic spring X tracking: natural acceleration, subtle overshoot & crisp settle */
                 int dgx = tgt_gx_fp - state->anim.qp_glow_x_fp;
-                if (dgx != 0) {
-                    int step = (dgx * 9) / 16;
-                    if (step == 0) step = (dgx > 0) ? 1 : -1;
-                    state->anim.qp_glow_x_fp = (abs(dgx) <= 3) ? tgt_gx_fp : (state->anim.qp_glow_x_fp + step);
+                if (dgx != 0 || state->anim.qp_glow_vx_fp != 0) {
+                    int force = (dgx * 7) / 16;
+                    int vel = (state->anim.qp_glow_vx_fp * 7) / 16 + force;
+                    if (vel == 0 && dgx != 0) vel = (dgx > 0) ? 2 : -2;
+                    int nxt_gx = state->anim.qp_glow_x_fp + vel;
+                    if (abs(tgt_gx_fp - nxt_gx) <= 4 && abs(vel) <= 6) {
+                        nxt_gx = tgt_gx_fp;
+                        vel = 0;
+                    }
+                    state->anim.qp_glow_x_fp = nxt_gx;
+                    state->anim.qp_glow_vx_fp = vel;
                 }
                 int dgy = tgt_gy_fp - state->anim.qp_glow_y_fp;
                 if (dgy != 0) {
-                    int step = (dgy * 9) / 16;
+                    int step = (dgy * 8) / 16;
                     if (step == 0) step = (dgy > 0) ? 1 : -1;
                     state->anim.qp_glow_y_fp = (abs(dgy) <= 3) ? tgt_gy_fp : (state->anim.qp_glow_y_fp + step);
                 }
@@ -594,7 +715,7 @@ bool nl_anim_step(nl_state_t *state) {
             }
 
             if (state->anim.qp_sel_bounce_fp > 0) {
-                state->anim.qp_sel_bounce_fp -= 38;
+                state->anim.qp_sel_bounce_fp -= 26;
                 if (state->anim.qp_sel_bounce_fp < 0) state->anim.qp_sel_bounce_fp = 0;
             }
 
@@ -606,12 +727,12 @@ bool nl_anim_step(nl_state_t *state) {
                 state->anim.qp_plus_focus_fp = (abs(dplus) <= 4) ? tgt_plus : (state->anim.qp_plus_focus_fp + pstep);
             }
 
-            for (int s = 0; s < 9; s++) {
-                if (state->anim.qp_slot_scale_fp[s] == 0) state->anim.qp_slot_scale_fp[s] = 226;
-                int tgt_sc = (s == cur) ? 272 : 226;
+            for (int s = 0; s < NL_MAX_PROFILES + 1; s++) {
+                if (state->anim.qp_slot_scale_fp[s] == 0) state->anim.qp_slot_scale_fp[s] = 228;
+                int tgt_sc = (s == cur) ? 276 : 228;
                 int dsc = tgt_sc - state->anim.qp_slot_scale_fp[s];
                 if (dsc != 0) {
-                    int sstep = (dsc * 8) / 16;
+                    int sstep = (dsc * 7) / 16;
                     if (sstep == 0) sstep = (dsc > 0) ? 1 : -1;
                     state->anim.qp_slot_scale_fp[s] = (abs(dsc) <= 2) ? tgt_sc : (state->anim.qp_slot_scale_fp[s] + sstep);
                 }
@@ -620,7 +741,7 @@ bool nl_anim_step(nl_state_t *state) {
         }
 
         if (state->anim.prof_switch_active) {
-            state->anim.qp_glow_phase = (uint16_t)((state->anim.qp_glow_phase + 7U) & 255U);
+            state->anim.qp_glow_phase = (uint16_t)((state->anim.qp_glow_phase + 8U) & 255U);
             state->anim.prof_switch_tick++;
             if (state->anim.prof_switch_tick >= state->anim.prof_switch_max) {
                 state->anim.prof_switch_active = false;
@@ -630,21 +751,49 @@ bool nl_anim_step(nl_state_t *state) {
         }
 
         if (state->anim.prof_plus_active) {
-            state->anim.qp_glow_phase = (uint16_t)((state->anim.qp_glow_phase + 7U) & 255U);
+            state->anim.qp_glow_phase = (uint16_t)((state->anim.qp_glow_phase + 9U) & 255U);
             state->anim.prof_plus_tick++;
             if (state->anim.prof_plus_tick >= state->anim.prof_plus_max) {
                 state->anim.prof_plus_active = false;
                 state->anim.prof_plus_tick = 0;
+                if (state->sui.qp_pick_pending) {
+                    state->sui.qp_pick_pending = false;
+                    state->sui.qp_open = false;
+                    state->anim.qp_opening = false;
+                    state->anim.qp_open_fp = 0;
+                    state->sui.qp_pick_open = true;
+                    state->anim.qp_pick_fp = 48;
+                    state->sui.consume_exe_release = true;
+                    nl_mouse_update_hover(state);
+                }
             }
             dirty = true;
         }
 
         if (state->anim.prof_birth_active) {
-            state->anim.qp_glow_phase = (uint16_t)((state->anim.qp_glow_phase + 7U) & 255U);
+            state->anim.qp_glow_phase = (uint16_t)((state->anim.qp_glow_phase + 8U) & 255U);
             state->anim.prof_birth_tick++;
             if (state->anim.prof_birth_tick >= state->anim.prof_birth_max) {
                 state->anim.prof_birth_active = false;
                 state->anim.prof_birth_tick = 0;
+            }
+            dirty = true;
+        }
+    }
+
+    /* 5f. #R21 Non-blocking Return-from-Game Droplet Reveal (interruptible on screen/modal/launch switch) */
+    if (state->anim.return_drop_active) {
+        if (state->sui.screen != NL_UI_LIBRARY ||
+            state->anim.launch_anim_active ||
+            state->sui.qp_open ||
+            state->sui.qp_pick_open) {
+            state->anim.return_drop_active = false;
+            state->anim.return_drop_tick = 0;
+        } else {
+            state->anim.return_drop_tick++;
+            if (state->anim.return_drop_tick >= state->anim.return_drop_max) {
+                state->anim.return_drop_active = false;
+                state->anim.return_drop_tick = 0;
             }
             dirty = true;
         }
@@ -792,6 +941,11 @@ bool nl_anim_step(nl_state_t *state) {
                 dirty = true;
             }
         }
+        if (state->anim.cur_click_pulse_fp > 0) {
+            state->anim.cur_click_pulse_fp -= 36;
+            if (state->anim.cur_click_pulse_fp < 0) state->anim.cur_click_pulse_fp = 0;
+            dirty = true;
+        }
     }
 
     /* 6. Toast notification countdown */
@@ -802,3 +956,33 @@ bool nl_anim_step(nl_state_t *state) {
 
     return dirty;
 }
+
+/* #R23 Start immediate, non-blocking Return-from-Game animation honoring user's independent return_anim_mode */
+void nl_return_drop_start(nl_state_t *state, int game_idx) {
+    if (!state) return;
+    nl_return_anim_t mode = state->settings.return_anim_mode;
+    if (mode == NL_RETURN_ANIM_INSTANT) {
+        state->anim.return_drop_active = false;
+        state->anim.return_drop_tick = 0;
+        state->anim.return_drop_max = 0;
+        state->anim.return_drop_game_idx = game_idx;
+        return;
+    }
+    state->anim.return_drop_active = true;
+    state->anim.return_drop_tick = 0;
+    state->anim.return_drop_game_idx = game_idx;
+    switch (mode) {
+        case NL_RETURN_ANIM_FADE:
+            state->anim.return_drop_max = 10; /* ~166 ms ultra-clean quick veil lift */
+            break;
+        case NL_RETURN_ANIM_ZOOM:
+            state->anim.return_drop_max = 14; /* ~233 ms crisp reverse-zoom card settle */
+            break;
+        case NL_RETURN_ANIM_LIQUID:
+        default:
+            state->anim.return_drop_max = 18; /* ~300 ms 4-layer organic liquid reverse reveal */
+            break;
+    }
+}
+
+

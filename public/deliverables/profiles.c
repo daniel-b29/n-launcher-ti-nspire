@@ -73,6 +73,15 @@ static nl_layout_t str_to_layout_p(const char *s) {
     return NL_LAYOUT_3X2;
 }
 
+static const char *scroll_dir_to_str_p(nl_scroll_dir_t d) {
+    return (d == NL_SCROLL_HORIZONTAL) ? "horizontal" : "vertical";
+}
+
+static nl_scroll_dir_t str_to_scroll_dir_p(const char *s) {
+    if (str_icmp_p(s, "horizontal") == 0 || strcmp(s, "1") == 0) return NL_SCROLL_HORIZONTAL;
+    return NL_SCROLL_VERTICAL;
+}
+
 static const char *sort_to_str_p(nl_sort_order_t s) {
     switch (s) {
         case NL_SORT_ALPHA_DESC:    return "alpha_desc";
@@ -177,19 +186,78 @@ const nl_profile_t *nl_profile_get_active(const nl_state_t *state) {
     return &state->profiles.items[idx];
 }
 
+bool nl_profile_is_protected(const nl_state_t *state, int prof_idx) {
+    if (!state || !state->settings.profile_lock_enabled) return false;
+    if (prof_idx < 0 || prof_idx >= state->profiles.count) return false;
+    return state->profiles.items[prof_idx].is_locked;
+}
+
+bool nl_profile_toggle_lock(nl_state_t *state, int prof_idx) {
+    if (!state || !state->settings.profile_lock_enabled) return false;
+    if (prof_idx < 0 || prof_idx >= state->profiles.count) return false;
+    state->profiles.items[prof_idx].is_locked = !state->profiles.items[prof_idx].is_locked;
+    state->sui.profiles_dirty = true;
+    nl_show_toast(state,
+                  state->profiles.items[prof_idx].is_locked ? "Profil verrouille" : "Profil deverrouille",
+                  48);
+    return true;
+}
+
+static bool profile_ensure_game_cap(nl_profile_t *p, int needed) {
+    if (!p) return false;
+    if (p->game_data != NULL && p->game_data_cap >= needed) return true;
+    int new_cap = (p->game_data_cap > 0) ? (p->game_data_cap * 2) : 8;
+    while (new_cap < needed) new_cap *= 2;
+    if (new_cap > NL_MAX_PROFILE_GAMES) new_cap = NL_MAX_PROFILE_GAMES;
+    if (needed > new_cap) return false;
+
+    nl_profile_game_data_t *next = (nl_profile_game_data_t *)realloc(
+        p->game_data, (size_t)new_cap * sizeof(nl_profile_game_data_t));
+    if (!next) return false;
+    if (new_cap > p->game_data_cap) {
+        memset(next + p->game_data_cap, 0,
+               (size_t)(new_cap - p->game_data_cap) * sizeof(nl_profile_game_data_t));
+    }
+    p->game_data = next;
+    p->game_data_cap = new_cap;
+    return true;
+}
+
+void nl_profiles_free(nl_state_t *state) {
+    if (!state) return;
+    for (int i = 0; i < NL_MAX_PROFILES; i++) {
+        if (state->profiles.items[i].game_data != NULL) {
+            free(state->profiles.items[i].game_data);
+            state->profiles.items[i].game_data = NULL;
+        }
+        state->profiles.items[i].game_data_cap = 0;
+        state->profiles.items[i].game_data_count = 0;
+    }
+}
+
 void nl_profile_snapshot_active(nl_state_t *state) {
     if (!state || !state->profiles.initialized || state->profiles.count <= 0) return;
     int idx = state->profiles.active_index;
     if (idx < 0 || idx >= state->profiles.count) return;
 
     nl_profile_t *p = &state->profiles.items[idx];
-    p->layout          = state->settings.layout;
-    p->show_names      = state->settings.show_names;
-    p->show_shortcuts  = state->settings.show_shortcuts;
-    p->sort_order      = state->settings.sort_order;
-    p->active_category = state->active_category;
-    p->selected_pos    = state->selected_pos;
-    p->play_counter    = state->play_counter;
+    p->layout                = state->settings.layout;
+    p->scroll_dir            = state->settings.scroll_dir;
+    p->show_names            = state->settings.show_names;
+    p->show_shortcuts        = state->settings.show_shortcuts;
+    p->touchpad_cursor_show  = state->settings.touchpad_cursor_show;
+    p->touchpad_cursor_style = state->settings.touchpad_cursor_style;
+    p->cursor_size           = state->settings.cursor_size;
+    p->cursor_speed          = state->settings.cursor_speed;
+    p->tap_to_click          = state->settings.tap_to_click;
+    p->sort_order            = state->settings.sort_order;
+    p->app_open_anim         = state->settings.app_open_anim;
+    p->app_close_anim        = state->settings.app_close_anim;
+    p->launch_anim_mode      = state->settings.launch_anim_mode;
+    p->return_anim_mode      = state->settings.return_anim_mode;
+    p->active_category       = state->active_category;
+    p->selected_pos          = state->selected_pos;
+    p->play_counter          = state->play_counter;
 
     for (int g = 0; g < state->total_games; g++) {
         const nl_game_t *gm = &state->games[g];
@@ -201,10 +269,12 @@ void nl_profile_snapshot_active(nl_state_t *state) {
                         gm->shortcut_key != 0;
 
         int existing = -1;
-        for (int k = 0; k < p->game_data_count; k++) {
-            if (str_icmp_p(p->game_data[k].filename, gm->filename) == 0) {
-                existing = k;
-                break;
+        if (p->game_data) {
+            for (int k = 0; k < p->game_data_count; k++) {
+                if (str_icmp_p(p->game_data[k].filename, gm->filename) == 0) {
+                    existing = k;
+                    break;
+                }
             }
         }
 
@@ -216,6 +286,10 @@ void nl_profile_snapshot_active(nl_state_t *state) {
             p->game_data[existing].last_played_ts   = gm->last_played_ts;
             p->game_data[existing].shortcut_key     = gm->shortcut_key;
         } else if (has_data && p->game_data_count < NL_MAX_PROFILE_GAMES) {
+            if (!profile_ensure_game_cap(p, p->game_data_count + 1)) {
+                nl_recover_memory_on_oom(state, "Profil snapshot", state->profiles_path);
+                break;
+            }
             nl_profile_game_data_t *rec = &p->game_data[p->game_data_count++];
             memset(rec, 0, sizeof(*rec));
             snprintf(rec->filename, sizeof(rec->filename), "%s", gm->filename);
@@ -238,12 +312,35 @@ void nl_profile_apply_active(nl_state_t *state) {
     }
 
     const nl_profile_t *p = &state->profiles.items[idx];
-    state->settings.layout         = p->layout;
-    state->settings.show_names     = p->show_names;
-    state->settings.show_shortcuts = p->show_shortcuts;
-    state->settings.sort_order     = p->sort_order;
-    state->active_category         = p->active_category;
-    state->play_counter            = p->play_counter;
+    state->settings.layout                = p->layout;
+    state->settings.scroll_dir            = (p->scroll_dir == NL_SCROLL_HORIZONTAL)
+                                            ? NL_SCROLL_HORIZONTAL : NL_SCROLL_VERTICAL;
+    state->settings.show_names            = p->show_names;
+    state->settings.show_shortcuts        = p->show_shortcuts;
+    state->settings.touchpad_cursor_show  = p->touchpad_cursor_show;
+    state->settings.touchpad_cursor_style = p->touchpad_cursor_style;
+    state->settings.cursor_size           = p->cursor_size;
+    {
+        int sp = p->cursor_speed;
+        if (sp < 0 || sp >= NL_CURSOR_SPEED_COUNT) sp = NL_CURSOR_SPEED_DEFAULT;
+        state->settings.cursor_speed = sp;
+    }
+    state->settings.tap_to_click          = p->tap_to_click;
+    state->anim.switch_tap_click_fp       = p->tap_to_click ? 256 : 0;
+    state->anim.tp_speed_slider_pos_fp    = state->settings.cursor_speed * 256;
+    state->sui.tp_size_cursor             = ((unsigned)p->cursor_size < (unsigned)NL_CURSOR_SIZE_COUNT)
+                                            ? (int)p->cursor_size : (int)NL_CURSOR_SIZE_DEFAULT;
+    state->settings.sort_order            = p->sort_order;
+    state->settings.app_open_anim         = ((unsigned)p->app_open_anim < (unsigned)NL_OPEN_ANIM_COUNT)
+                                            ? p->app_open_anim : NL_OPEN_ANIM_CURRENT;
+    state->settings.app_close_anim        = ((unsigned)p->app_close_anim < (unsigned)NL_CLOSE_ANIM_COUNT)
+                                            ? p->app_close_anim : NL_CLOSE_ANIM_LIQUID;
+    state->settings.launch_anim_mode      = ((unsigned)p->launch_anim_mode < (unsigned)NL_LAUNCH_ANIM_COUNT)
+                                            ? p->launch_anim_mode : NL_LAUNCH_ANIM_CURRENT;
+    state->settings.return_anim_mode      = ((unsigned)p->return_anim_mode < (unsigned)NL_RETURN_ANIM_COUNT)
+                                            ? p->return_anim_mode : NL_RETURN_ANIM_LIQUID;
+    state->active_category                = p->active_category;
+    state->play_counter                   = p->play_counter;
 
     for (int g = 0; g < state->total_games; g++) {
         nl_game_t *gm = &state->games[g];
@@ -254,19 +351,21 @@ void nl_profile_apply_active(nl_state_t *state) {
         gm->last_played_ts   = 0U;
         gm->shortcut_key     = 0;
 
-        for (int k = 0; k < p->game_data_count; k++) {
-            const nl_profile_game_data_t *rec = &p->game_data[k];
-            if (str_icmp_p(gm->filename, rec->filename) == 0) {
-                gm->is_favorite      = rec->is_favorite;
-                gm->last_played_rank = rec->last_played_rank;
-                gm->launch_count     = rec->launch_count;
-                gm->play_time_sec    = rec->play_time_sec;
-                gm->last_played_ts   = rec->last_played_ts;
-                if (rec->shortcut_key != 0 && nl_shortcut_is_assignable(rec->shortcut_key) &&
-                    nl_shortcut_find_owner(state, rec->shortcut_key, g) < 0) {
-                    gm->shortcut_key = rec->shortcut_key;
+        if (p->game_data) {
+            for (int k = 0; k < p->game_data_count; k++) {
+                const nl_profile_game_data_t *rec = &p->game_data[k];
+                if (str_icmp_p(gm->filename, rec->filename) == 0) {
+                    gm->is_favorite      = rec->is_favorite;
+                    gm->last_played_rank = rec->last_played_rank;
+                    gm->launch_count     = rec->launch_count;
+                    gm->play_time_sec    = rec->play_time_sec;
+                    gm->last_played_ts   = rec->last_played_ts;
+                    if (rec->shortcut_key != 0 && nl_shortcut_is_assignable(rec->shortcut_key) &&
+                        nl_shortcut_find_owner(state, rec->shortcut_key, g) < 0) {
+                        gm->shortcut_key = rec->shortcut_key;
+                    }
+                    break;
                 }
-                break;
             }
         }
     }
@@ -281,6 +380,7 @@ void nl_profile_apply_active(nl_state_t *state) {
     /* Ensure restored layout/switches/category pill match profile immediately */
     state->anim.switch_shownames_fp = state->settings.show_names ? 256 : 0;
     state->anim.switch_shortcuts_fp = state->settings.show_shortcuts ? 256 : 0;
+    state->anim.switch_tp_cursor_fp = state->settings.touchpad_cursor_show ? 256 : 0;
     state->anim.layout_from = state->settings.layout;
     state->anim.layout_trans_fp = 256;
     nl_sync_active_cat_pill_targets(state, true);
@@ -288,6 +388,7 @@ void nl_profile_apply_active(nl_state_t *state) {
 
 void nl_profiles_init_default(nl_state_t *state) {
     if (!state) return;
+    nl_profiles_free(state);
     memset(&state->profiles, 0, sizeof(state->profiles));
     state->profiles.count = 1;
     state->profiles.active_index = 0;
@@ -375,10 +476,21 @@ int nl_profile_create(nl_state_t *state, const char *name, int avatar_id) {
     clean_profile_name(name, np->name, sizeof(np->name), new_idx + 1);
     np->avatar_id = avatar_id;
     np->is_primary = false;
+    np->is_locked = false;
     np->layout = NL_LAYOUT_3X2;
+    np->scroll_dir = state->settings.scroll_dir;
     np->show_names = false;
-    np->show_shortcuts = false;
+    np->show_shortcuts = true;
+    np->touchpad_cursor_show = state->settings.touchpad_cursor_show;
+    np->touchpad_cursor_style = state->settings.touchpad_cursor_style;
+    np->cursor_size = state->settings.cursor_size;
+    np->cursor_speed = state->settings.cursor_speed;
+    np->tap_to_click = state->settings.tap_to_click;
     np->sort_order = NL_SORT_ALPHA_ASC;
+    np->app_open_anim = state->settings.app_open_anim;
+    np->app_close_anim = state->settings.app_close_anim;
+    np->launch_anim_mode = state->settings.launch_anim_mode;
+    np->return_anim_mode = state->settings.return_anim_mode;
     np->active_category = NL_CAT_ALL;
     np->selected_pos = 0;
     np->play_counter = 0U;
@@ -395,6 +507,7 @@ int nl_profile_create(nl_state_t *state, const char *name, int avatar_id) {
 
 bool nl_profile_rename(nl_state_t *state, int prof_idx, const char *new_name) {
     if (!state || !new_name || prof_idx < 0 || prof_idx >= state->profiles.count) return false;
+    if (nl_profile_is_protected(state, prof_idx)) return false;
 
     char cleaned[NL_PROFILE_NAME_LEN];
     size_t j = 0U;
@@ -418,6 +531,7 @@ bool nl_profile_rename(nl_state_t *state, int prof_idx, const char *new_name) {
 
 bool nl_profile_set_avatar(nl_state_t *state, int prof_idx, int avatar_id) {
     if (!state || prof_idx < 0 || prof_idx >= state->profiles.count) return false;
+    if (nl_profile_is_protected(state, prof_idx)) return false;
     if (avatar_id < 0 || avatar_id >= NL_AVATAR_COUNT) return false;
     if (nl_avatar_find_owner(state, avatar_id, prof_idx) >= 0) return false;
 
@@ -431,12 +545,17 @@ bool nl_profile_delete(nl_state_t *state, int prof_idx) {
     if (state->profiles.count <= 1) return false;
     if (prof_idx < 0 || prof_idx >= state->profiles.count) return false;
     if (state->profiles.items[prof_idx].is_primary) return false;
+    if (nl_profile_is_protected(state, prof_idx)) return false;
 
     nl_profile_snapshot_active(state);
 
     uint32_t old_active_id = state->profiles.items[state->profiles.active_index].id;
     bool deleted_active = (prof_idx == state->profiles.active_index);
 
+    if (state->profiles.items[prof_idx].game_data != NULL) {
+        free(state->profiles.items[prof_idx].game_data);
+        state->profiles.items[prof_idx].game_data = NULL;
+    }
     if (prof_idx + 1 < state->profiles.count) {
         memmove(&state->profiles.items[prof_idx],
                 &state->profiles.items[prof_idx + 1],
@@ -498,32 +617,47 @@ bool nl_save_profiles(nl_state_t *state, const char *profiles_path) {
         fprintf(fp, "name=%s\n", p->name);
         fprintf(fp, "avatar_id=%d\n", p->avatar_id);
         fprintf(fp, "is_primary=%d\n", p->is_primary ? 1 : 0);
+        fprintf(fp, "is_locked=%d\n", p->is_locked ? 1 : 0);
         fprintf(fp, "layout=%s\n", layout_to_str_p(p->layout));
+        fprintf(fp, "scroll_dir=%s\n", scroll_dir_to_str_p(p->scroll_dir));
         fprintf(fp, "show_names=%d\n", p->show_names ? 1 : 0);
         fprintf(fp, "show_shortcuts=%d\n", p->show_shortcuts ? 1 : 0);
+        fprintf(fp, "touchpad_cursor_show=%d\n", p->touchpad_cursor_show ? 1 : 0);
+        fprintf(fp, "touchpad_cursor_style=%d\n", (int)p->touchpad_cursor_style);
+        fprintf(fp, "cursor_size=%d\n", (int)p->cursor_size);
+        fprintf(fp, "cursor_speed=%d\n",
+                (p->cursor_speed >= 0 && p->cursor_speed < NL_CURSOR_SPEED_COUNT)
+                ? p->cursor_speed : NL_CURSOR_SPEED_DEFAULT);
+        fprintf(fp, "tap_to_click=%d\n", p->tap_to_click ? 1 : 0);
         fprintf(fp, "sort_order=%s\n", sort_to_str_p(p->sort_order));
+        fprintf(fp, "app_open_anim=%s\n", nl_app_open_anim_to_str(p->app_open_anim));
+        fprintf(fp, "app_close_anim=%s\n", nl_app_close_anim_to_str(p->app_close_anim));
+        fprintf(fp, "launch_anim=%s\n", nl_launch_anim_to_str(p->launch_anim_mode));
+        fprintf(fp, "return_anim=%s\n", nl_return_anim_to_str(p->return_anim_mode));
         fprintf(fp, "active_category=%s\n", cat_to_str_p(p->active_category));
         fprintf(fp, "selected_pos=%d\n", p->selected_pos);
         fprintf(fp, "play_counter=%u\n", (unsigned)p->play_counter);
 
-        for (int g = 0; g < p->game_data_count; g++) {
-            const nl_profile_game_data_t *rec = &p->game_data[g];
-            if (rec->filename[0] == '\0') continue;
-            if (rec->is_favorite ||
-                rec->last_played_rank > 0U ||
-                rec->launch_count > 0U ||
-                rec->play_time_sec > 0U ||
-                rec->last_played_ts > 0U ||
-                rec->shortcut_key != 0) {
-                char sc = nl_shortcut_is_assignable(rec->shortcut_key) ? rec->shortcut_key : '-';
-                fprintf(fp, "game=%s|%d|%u|%u|%u|%u|%c\n",
-                        rec->filename,
-                        rec->is_favorite ? 1 : 0,
-                        (unsigned)rec->last_played_rank,
-                        (unsigned)rec->launch_count,
-                        (unsigned)rec->play_time_sec,
-                        (unsigned)rec->last_played_ts,
-                        sc);
+        if (p->game_data) {
+            for (int g = 0; g < p->game_data_count; g++) {
+                const nl_profile_game_data_t *rec = &p->game_data[g];
+                if (rec->filename[0] == '\0') continue;
+                if (rec->is_favorite ||
+                    rec->last_played_rank > 0U ||
+                    rec->launch_count > 0U ||
+                    rec->play_time_sec > 0U ||
+                    rec->last_played_ts > 0U ||
+                    rec->shortcut_key != 0) {
+                    char sc = nl_shortcut_is_assignable(rec->shortcut_key) ? rec->shortcut_key : '-';
+                    fprintf(fp, "game=%s|%d|%u|%u|%u|%u|%c\n",
+                            rec->filename,
+                            rec->is_favorite ? 1 : 0,
+                            (unsigned)rec->last_played_rank,
+                            (unsigned)rec->launch_count,
+                            (unsigned)rec->play_time_sec,
+                            (unsigned)rec->last_played_ts,
+                            sc);
+                }
             }
         }
     }
@@ -540,8 +674,10 @@ bool nl_load_profiles(nl_state_t *state, const char *profiles_path) {
 
     char line[384];
     bool has_profile_sec = false;
+    bool has_nonempty_line = false;
     while (fgets(line, sizeof(line), fp)) {
         char *s = trim_ws_p(line);
+        if (s[0] != '\0' && s[0] != '#') has_nonempty_line = true;
         if (strcmp(s, "[profile]") == 0) {
             has_profile_sec = true;
             break;
@@ -549,16 +685,32 @@ bool nl_load_profiles(nl_state_t *state, const char *profiles_path) {
     }
     if (!has_profile_sec) {
         fclose(fp);
+        if (has_nonempty_line) {
+            char bak_path[NL_MAX_PATH_LEN];
+            (void)nl_diag_backup_corrupt_file(profiles_path, bak_path, sizeof(bak_path));
+            nl_diag_report(
+                state,
+                NL_DIAG_E601_PROFILE_CORRUPT,
+                "nlauncher.profiles.tns",
+                profiles_path,
+                "Chargement profils",
+                "Aucune section [profile] valide",
+                "Original conserve sur disque",
+                "Copie .bak.tns creee + repli defaut"
+            );
+        }
         return false;
     }
     rewind(fp);
 
+    nl_profiles_free(state);
     nl_profile_sys_t *loaded = &state->profiles;
     memset(loaded, 0, sizeof(*loaded));
     loaded->next_profile_id = 2U;
 
     uint32_t target_active_id = 0U;
     nl_profile_t *cur = NULL;
+    int corrupt_lines = 0;
 
     while (fgets(line, sizeof(line), fp)) {
         char *s = trim_ws_p(line);
@@ -570,9 +722,20 @@ bool nl_load_profiles(nl_state_t *state, const char *profiles_path) {
                 memset(cur, 0, sizeof(*cur));
                 cur->id = loaded->next_profile_id;
                 cur->avatar_id = 0;
+                cur->is_locked = false;
                 cur->layout = NL_LAYOUT_3X2;
+                cur->scroll_dir = state->settings.scroll_dir;
                 cur->show_shortcuts = true;
+                cur->touchpad_cursor_show = state->settings.touchpad_cursor_show;
+                cur->touchpad_cursor_style = state->settings.touchpad_cursor_style;
+                cur->cursor_size = state->settings.cursor_size;
+                cur->cursor_speed = state->settings.cursor_speed;
+                cur->tap_to_click = state->settings.tap_to_click;
                 cur->sort_order = NL_SORT_ALPHA_ASC;
+                cur->app_open_anim = state->settings.app_open_anim;
+                cur->app_close_anim = state->settings.app_close_anim;
+                cur->launch_anim_mode = state->settings.launch_anim_mode;
+                cur->return_anim_mode = state->settings.return_anim_mode;
                 cur->active_category = NL_CAT_ALL;
             } else {
                 cur = NULL;
@@ -581,7 +744,10 @@ bool nl_load_profiles(nl_state_t *state, const char *profiles_path) {
         }
 
         char *eq = strchr(s, '=');
-        if (!eq) continue;
+        if (!eq) {
+            corrupt_lines++;
+            continue;
+        }
         *eq = '\0';
         const char *key = trim_ws_p(s);
         char *val = trim_ws_p(eq + 1);
@@ -610,14 +776,42 @@ bool nl_load_profiles(nl_state_t *state, const char *profiles_path) {
             cur->avatar_id = aid;
         } else if (strcmp(key, "is_primary") == 0) {
             cur->is_primary = (atoi(val) != 0);
+        } else if (strcmp(key, "is_locked") == 0) {
+            cur->is_locked = (atoi(val) != 0);
         } else if (strcmp(key, "layout") == 0) {
             cur->layout = str_to_layout_p(val);
+        } else if (strcmp(key, "scroll_dir") == 0) {
+            cur->scroll_dir = str_to_scroll_dir_p(val);
         } else if (strcmp(key, "show_names") == 0) {
             cur->show_names = (atoi(val) != 0);
         } else if (strcmp(key, "show_shortcuts") == 0) {
             cur->show_shortcuts = (atoi(val) != 0);
+        } else if (strcmp(key, "touchpad_cursor_show") == 0) {
+            cur->touchpad_cursor_show = (atoi(val) != 0);
+        } else if (strcmp(key, "touchpad_cursor_style") == 0) {
+            int st = atoi(val);
+            if (st < 0 || st >= (int)NL_CURSOR_STYLE_COUNT) st = 0;
+            cur->touchpad_cursor_style = (nl_cursor_style_t)st;
+        } else if (strcmp(key, "cursor_size") == 0) {
+            int sz = atoi(val);
+            if (sz < 0 || sz >= (int)NL_CURSOR_SIZE_COUNT) sz = (int)NL_CURSOR_SIZE_DEFAULT;
+            cur->cursor_size = (nl_cursor_size_t)sz;
+        } else if (strcmp(key, "cursor_speed") == 0) {
+            int sp = atoi(val);
+            if (sp < 0 || sp >= NL_CURSOR_SPEED_COUNT) sp = NL_CURSOR_SPEED_DEFAULT;
+            cur->cursor_speed = sp;
+        } else if (strcmp(key, "tap_to_click") == 0) {
+            cur->tap_to_click = (atoi(val) != 0);
         } else if (strcmp(key, "sort_order") == 0) {
             cur->sort_order = str_to_sort_p(val);
+        } else if (strcmp(key, "app_open_anim") == 0) {
+            cur->app_open_anim = nl_str_to_app_open_anim(val);
+        } else if (strcmp(key, "app_close_anim") == 0) {
+            cur->app_close_anim = nl_str_to_app_close_anim(val);
+        } else if (strcmp(key, "launch_anim") == 0) {
+            cur->launch_anim_mode = nl_str_to_launch_anim(val);
+        } else if (strcmp(key, "return_anim") == 0) {
+            cur->return_anim_mode = nl_str_to_return_anim(val);
         } else if (strcmp(key, "active_category") == 0) {
             cur->active_category = str_to_cat_p(val);
         } else if (strcmp(key, "selected_pos") == 0) {
@@ -638,6 +832,10 @@ bool nl_load_profiles(nl_state_t *state, const char *profiles_path) {
                 parts[p_count++] = p_cur;
             }
             if (p_count >= 3 && parts[0][0] != '\0') {
+                if (!profile_ensure_game_cap(cur, cur->game_data_count + 1)) {
+                    nl_recover_memory_on_oom(state, "Chargement jeu profil", profiles_path);
+                    continue;
+                }
                 nl_profile_game_data_t *rec = &cur->game_data[cur->game_data_count++];
                 memset(rec, 0, sizeof(*rec));
                 snprintf(rec->filename, sizeof(rec->filename), "%s", parts[0]);
@@ -652,10 +850,31 @@ bool nl_load_profiles(nl_state_t *state, const char *profiles_path) {
                         rec->shortcut_key = upper;
                     }
                 }
+            } else {
+                corrupt_lines++;
             }
         }
     }
     fclose(fp);
+
+    if (corrupt_lines > 0) {
+        char bak_path[NL_MAX_PATH_LEN];
+        (void)nl_diag_backup_corrupt_file(profiles_path, bak_path, sizeof(bak_path));
+        nl_diag_report(
+            state,
+            NL_DIAG_E601_PROFILE_CORRUPT,
+            "nlauncher.profiles.tns",
+            profiles_path,
+            "Recuperation profils",
+            "Lignes malformees ignorees",
+            "Profils valides recuperes sans ecrasement",
+            "Sauvegarde .bak.tns creee + reprise partielle"
+        );
+    }
+
+    if (loaded->count <= 0) {
+        return false;
+    }
 
     /* Validate primary profile & avatar exclusivity across loaded profiles */
     bool has_primary = false;

@@ -1,21 +1,35 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import {
+  ANIM_CATEGORY_LABELS,
+  APP_CLOSE_ANIM_LABELS,
+  APP_CLOSE_ANIM_SUBTITLES,
+  APP_OPEN_ANIM_LABELS,
+  APP_OPEN_ANIM_SUBTITLES,
   ASSIGNABLE_SHORTCUT_KEYS,
   CATEGORY_LABELS,
   CATEGORY_ORDER,
+  CURSOR_SIZE_LABELS,
+  CURSOR_SIZE_ORDER,
   CURSOR_SPEED_LABELS,
   CURSOR_STYLE_LABELS,
   CURSOR_STYLE_ORDER,
   CategoryId,
   ConsoleThemePalette,
+  CursorSize,
   CursorStyle,
   GameEntry,
+  HOTKEY_COMBO_LABELS,
+  LAUNCH_ANIM_LABELS,
+  LAUNCH_ANIM_SHORT_LABELS,
+  LAUNCH_ANIM_SUBTITLES,
   LAYOUT_LABELS,
   LAYOUT_ORDER,
   LayoutMode,
   LauncherState,
+  NL_ANIM_CAT_COUNT,
   NL_AVATAR_CAT_COUNT,
   NL_AVATAR_COUNT,
+  NL_BOOT_STAGE_COUNT,
   NL_BOTTOM_BAR_H,
   NL_BOTTOM_BAR_Y,
   NL_BUILD_STAMP_STR,
@@ -41,6 +55,9 @@ import {
   NL_VIEW_BOTTOM,
   NL_VIEW_TOP,
   NavKey,
+  RETURN_ANIM_LABELS,
+  RETURN_ANIM_SUBTITLES,
+  SCROLL_DIR_LABELS,
   SETTINGS_MENU_ITEMS,
   SORT_ORDER_LABELS,
   SORT_ORDER_LIST,
@@ -49,14 +66,24 @@ import {
   TP_SENS_LABELS,
   TouchpadMode,
   cardIndexToCursorStyle,
+  clampAppCloseAnimMode,
+  clampAppOpenAnimMode,
+  clampCursorSize,
   clampCursorSpeed,
   clampCursorStyleToCard,
+  clampLaunchAnimMode,
+  clampReturnAnimMode,
   clampTouchpadSensitivity,
   computeGameMonogram,
   computeGridSlotPos,
   computeNavHighlightStrength,
   computePaginationIndicators,
   computeTouchpadCursorTarget,
+  isProfileProtected,
+  cursorSizeToIndex,
+  getCursorSizeMetrics,
+  getTouchpadTab0RowRects,
+  indexToCursorSize,
   findAvatarOwner,
   findShortcutOwner,
   firstFreeAvatar,
@@ -67,6 +94,7 @@ import {
   getAvatarCategoryOf,
   getAvatarCategoryRange,
   getAvatarImageUrl,
+  getBootStageLabel,
   getConsoleTheme,
   getLayoutMetrics,
   getShortcutDefs,
@@ -225,14 +253,16 @@ interface NspireScreenCanvasProps {
   onMoveMouse?: (x: number, y: number) => void;
   onClickMouse?: () => void;
   onTouchpadControl?: (
-    tpCursor: 0 | 1 | 2 | 3 | 4,
+    tpCursor: 0 | 1 | 2 | 3 | 4 | 5 | 6,
     sensitivity?: number,
     toggleNav?: boolean,
     cursorSpeed?: number,
     cursorStyle?: CursorStyle,
     tpTab?: 0 | 1,
     toggleMode?: boolean,
-    explicitMode?: TouchpadMode
+    explicitMode?: TouchpadMode,
+    toggleTapToClick?: boolean,
+    cursorSize?: CursorSize
   ) => void;
 }
 
@@ -468,7 +498,9 @@ function drawGameCoverCard(
     by = y + (h - bh) / 2;
   }
 
-  if (highlightStrength > 0.01) {
+  const hasCustomImg = Boolean(cached && cached.complete && cached.naturalWidth > 0);
+
+  if (highlightStrength > 0.01 && !hasCustomImg) {
     ctx.save();
     traceRoundedRect(ctx, bx - 2, by - 2, bw + 4, bh + 4, radius + 2);
     ctx.fillStyle = theme.isLight
@@ -483,7 +515,7 @@ function drawGameCoverCard(
     ctx.restore();
   }
 
-  if (hasShadow) {
+  if (hasShadow && !hasCustomImg) {
     ctx.save();
     traceRoundedRect(ctx, bx + 2, by + 3, bw, bh, radius);
     ctx.fillStyle = theme.isLight ? 'rgba(15, 23, 42, 0.16)' : 'rgba(0, 0, 0, 0.48)';
@@ -495,10 +527,21 @@ function drawGameCoverCard(
   traceRoundedRect(ctx, bx, by, bw, bh, radius);
   ctx.clip();
 
-  if (cached && cached.complete && cached.naturalWidth > 0) {
-    // Harmonized subtle neutral backdrop for transparent .ico regions (matches C renderer 5:3 blend)
-    ctx.fillStyle = lerpHexColor(theme.bgMain, theme.cardBg, 0.625);
-    ctx.fillRect(bx, by, bw, bh);
+  if (hasCustomImg && cached) {
+    /* #R20 Fix 1A/1B: Never paint gray backdrop or synthetic perimeter border behind custom PNG icons.
+     * Transparent outer corners composite directly onto the live background without gray artifacts. */
+    if (hasShadow || highlightStrength > 0.01) {
+      ctx.shadowColor = hasShadow
+        ? theme.isLight
+          ? 'rgba(15, 23, 42, 0.22)'
+          : 'rgba(0, 0, 0, 0.45)'
+        : theme.isLight
+          ? `rgba(148, 163, 184, ${(0.14 * highlightStrength).toFixed(3)})`
+          : `rgba(235, 242, 252, ${(0.12 * highlightStrength).toFixed(3)})`;
+      ctx.shadowBlur = hasShadow ? 5 : 3;
+      ctx.shadowOffsetX = hasShadow ? 1.5 : 0;
+      ctx.shadowOffsetY = hasShadow ? 2.5 : 0;
+    }
 
     const srcW = cached.naturalWidth;
     const srcH = cached.naturalHeight;
@@ -586,7 +629,7 @@ function drawGameCoverCard(
     }
   }
 
-  if (highlightStrength > 0.01) {
+  if (highlightStrength > 0.01 && !hasCustomImg) {
     ctx.fillStyle = `rgba(255, 255, 255, ${(0.055 * highlightStrength).toFixed(4)})`;
     ctx.fillRect(bx, by, bw, bh);
   }
@@ -604,14 +647,16 @@ function drawGameCoverCard(
 
   ctx.restore();
 
-  // Discreet 1px outer perimeter border preserving AA rounded edge
-  ctx.save();
-  traceRoundedRect(ctx, bx + 0.5, by + 0.5, Math.max(1, bw - 1), Math.max(1, bh - 1), Math.max(1, radius - 0.5));
-  ctx.strokeStyle = theme.borderSubtle;
-  ctx.globalAlpha = 0.32;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-  ctx.restore();
+  // Discreet 1px outer perimeter border ONLY for default monogram cards (never over custom PNG icons)
+  if (!hasCustomImg) {
+    ctx.save();
+    traceRoundedRect(ctx, bx + 0.5, by + 0.5, Math.max(1, bw - 1), Math.max(1, bh - 1), Math.max(1, radius - 0.5));
+    ctx.strokeStyle = theme.borderSubtle;
+    ctx.globalAlpha = 0.32;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 /**
@@ -993,6 +1038,7 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
     const animRef = useRef({
       bootStartMs: performance.now(),
       bootDoneMs: null as number | null,
+      scrollX: 0,
       scrollY: 0,
       dotPos: 0,
       cardScales: new Map<string, number>(),
@@ -1019,10 +1065,12 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
       switchShortcutsAnim: state.settings.showShortcuts ? 1 : 0,
       switchTouchpadAnim: state.settings.touchpadNav ? 1 : 0,
       switchTouchpadModeAnim: state.settings.touchpadMode === 'mouse' ? 1 : 0,
+      switchTapClickAnim: state.settings.tapToClick ? 1 : 0,
       tpTabTransAnim: state.sui.tpTab === 1 ? 1 : 0,
       tpStyleGlowAnim: 1,
       tpStyleHaloPhase: 0,
       curStylePhase: 0,
+      curClickPulse: 0,
       lastTpStyleCursor: state.sui.tpStyleCursor,
       curX: 160,
       curY: 116,
@@ -1079,16 +1127,18 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
       setDropCanvas: null as HTMLCanvasElement | null,
       setDropImage: null as ImageData | null,
       qpOpenAnim: state.sui.qpOpen ? 1 : 0,
+      qpOpening: false,
       qpGlowX: 0,
       qpGlowY: 114,
       qpTrailX: 0,
       qpSelBounce: 0,
       qpPlusFocus: 0,
-      qpSlotScales: [0.88, 0.88, 0.88, 0.88, 0.88, 0.88, 0.88, 0.88, 0.88],
+      qpSlotScales: Array.from({ length: NL_MAX_PROFILES + 1 }, () => 0.88),
       lastQpCursor: state.sui.qpCursor,
       qpGlowPhase: 0,
       lastProfSwitchSeq: state.profSwitchSeq ?? 0,
       profSwitchProgress: 1,
+      profSwitchFromAvatarId: 0,
       profSwitchAvatarId: 0,
       profSwitchOriginX: 160,
       profSwitchOriginY: 114,
@@ -1101,6 +1151,9 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
       profBirthProgress: 1,
       profBirthAvatarId: 0,
       profBirthSlot: 0,
+      lastReturnDropSeq: state.returnDropSeq ?? 0,
+      returnDropStartMs: null as number | null,
+      returnDropGameIdx: -1,
     });
 
     useImperativeHandle(ref, () => canvasRef.current as HTMLCanvasElement);
@@ -1174,12 +1227,24 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
         if (s.runningGameIndex !== null && anim.lastRunningIdx === null) {
           anim.launchStartMs = nowMs;
           anim.capturedThisLaunch = false;
+          anim.returnDropStartMs = null;
           /* Freeze all card slot offsets during launch so zero items move */
           anim.cardOffsetX.clear();
           anim.cardOffsetY.clear();
           anim.lastFilteredOrder = [...s.filteredIndices];
         } else if (s.runningGameIndex === null) {
+          if (anim.lastRunningIdx !== null) {
+            anim.returnDropStartMs = nowMs;
+            anim.returnDropGameIdx = s.returnDropGameIdx ?? anim.lastRunningIdx;
+            anim.lastReturnDropSeq = s.returnDropSeq ?? anim.lastReturnDropSeq;
+          }
           anim.capturedThisLaunch = false;
+        }
+        const curRetSeq = s.returnDropSeq ?? 0;
+        if (curRetSeq !== anim.lastReturnDropSeq && s.runningGameIndex === null) {
+          anim.lastReturnDropSeq = curRetSeq;
+          anim.returnDropStartMs = nowMs;
+          anim.returnDropGameIdx = s.returnDropGameIdx ?? -1;
         }
         anim.lastRunningIdx = s.runningGameIndex;
 
@@ -1245,20 +1310,19 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
           anim.inkStartMs = null;
           const runningGame = s.games[s.runningGameIndex];
           const launchElapsed = nowMs - anim.launchStartMs;
-          const LAUNCH_DURATION_MS = 760;
+          const launchMode = clampLaunchAnimMode(s.settings.launchAnimMode);
+          const LAUNCH_DURATION_MS = launchMode === 'loading_bar' ? 920 : 760;
           if (launchElapsed < LAUNCH_DURATION_MS) {
             const launchTheme = getConsoleTheme(s.displayMode, s.accentColor);
             const rawT = Math.max(0, Math.min(1, launchElapsed / LAUNCH_DURATION_MS));
-            const SHRINK_END_T = 36 / 256; // ~0.1406
-            const FADE_OUT_END_T = 180 / 256; // ~0.703
+            const SHRINK_END_T = 36 / 256;
+            const FADE_OUT_END_T = 180 / 256;
 
-            /* Progressive, slow, smooth fade-out of all non-selected library icons (1.0 -> 0.0) */
             const otherCardsAlpha =
               rawT >= FADE_OUT_END_T
                 ? 0
                 : 0.5 + 0.5 * Math.cos(Math.PI * Math.min(1, rawT / FADE_OUT_END_T));
 
-            /* LAYER 1 — Arrière-plan : Library UI + non-selected icons fading out progressively */
             drawLauncherView(
               ctx,
               s,
@@ -1270,23 +1334,12 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
               otherCardsAlpha
             );
 
-            /* Gentle backdrop dim (subtle during ripple propagation, stronger during final expansion) */
-            const dimAlpha =
-              rawT <= 140 / 256
-                ? (rawT / (140 / 256)) * 0.18
-                : 0.18 + ((rawT - 140 / 256) / (1 - 140 / 256)) * 0.5;
-            if (dimAlpha > 0.004) {
-              ctx.fillStyle = launchTheme.isLight
-                ? `rgba(216, 222, 232, ${dimAlpha})`
-                : `rgba(6, 8, 12, ${dimAlpha})`;
-              ctx.fillRect(0, 0, NL_SCREEN_W, NL_SCREEN_H);
-            }
-
             const m = getLayoutMetrics(
               s.settings.layout,
               s.settings.showNames,
               s.settings.showShortcuts,
-              s.filteredIndices.length
+              s.filteredIndices.length,
+              s.settings.scrollDir ?? 'vertical'
             );
             const searchH = Math.round(28 * anim.searchBarAnim);
             let slotPos = s.selectedPos;
@@ -1300,9 +1353,9 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
             }
             const row = Math.floor(slotPos / m.cols);
             const slotCoords = computeGridSlotPos(m, s.filteredIndices.length, slotPos);
-            const baseX = slotCoords.x;
+            const baseX = slotCoords.x - Math.round(anim.scrollX);
             let baseY = slotCoords.y + searchH - Math.round(anim.scrollY);
-            if (searchH === 0 && baseY < NL_VIEW_TOP && row === s.currentPage * m.rows) {
+            if (!m.isHorizontal && searchH === 0 && baseY < NL_VIEW_TOP && row === s.currentPage * m.rows) {
               baseY = NL_VIEW_TOP + 1;
             }
             const cardCx = baseX + m.cardW / 2;
@@ -1315,6 +1368,93 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
             const minX = cardCx - minW / 2;
             const minY = cardCy - minH / 2;
 
+            if (launchMode === 'loading_bar') {
+              /* Animation 4 — Loading Bar: shrink -> glide & enlarge to screen center -> rounded progress bar below */
+              const dimAlpha = 0.08 + rawT * 0.42;
+              ctx.fillStyle = launchTheme.isLight
+                ? `rgba(216, 222, 232, ${dimAlpha})`
+                : `rgba(6, 8, 12, ${dimAlpha})`;
+              ctx.fillRect(0, 0, NL_SCREEN_W, NL_SCREEN_H);
+
+              const targetDim = Math.max(76, Math.min(92, Math.round(Math.min(m.cardW, m.cardH) * 1.15)));
+              const targetCx = NL_SCREEN_W / 2;
+              const targetCy = NL_SCREEN_H / 2 - 14;
+              let cw = minW;
+              let ch = minH;
+              let cx = cardCx;
+              let cy = cardCy;
+              let rad = m.radius;
+
+              if (rawT < SHRINK_END_T) {
+                const st = rawT / SHRINK_END_T;
+                const sEase = st * (2 - st);
+                const curScale = selScale + (shrinkScale - selScale) * sEase;
+                cw = m.cardW * curScale;
+                ch = m.cardH * curScale;
+                rad = Math.max(4, Math.round(m.radius * curScale));
+              } else {
+                const moveT = Math.min(1, (rawT - SHRINK_END_T) / 0.34);
+                const mEase = 1 - Math.pow(1 - moveT, 3);
+                cw = minW + (targetDim - minW) * mEase;
+                ch = minH + (targetDim - minH) * mEase;
+                cx = cardCx + (targetCx - cardCx) * mEase;
+                cy = cardCy + (targetCy - cardCy) * mEase;
+                rad = Math.max(4, Math.round(m.radius + (14 - m.radius) * mEase));
+              }
+
+              drawGameCoverCard(
+                ctx,
+                cx - cw / 2,
+                cy - ch / 2,
+                cw,
+                ch,
+                rad,
+                runningGame,
+                true,
+                0,
+                launchTheme,
+                imgCacheRef.current
+              );
+
+              if (rawT >= SHRINK_END_T + 0.14) {
+                const barAlpha = Math.min(1, (rawT - (SHRINK_END_T + 0.14)) / 0.16);
+                const barPct = Math.max(
+                  0,
+                  Math.min(1, (rawT - (SHRINK_END_T + 0.16)) / (0.94 - (SHRINK_END_T + 0.16)))
+                );
+                const bw = 118;
+                const bh = 7;
+                const bx = (NL_SCREEN_W - bw) / 2;
+                const by = Math.min(NL_SCREEN_H - 22, cy + ch / 2 + 16);
+                ctx.save();
+                ctx.globalAlpha = barAlpha;
+                traceRoundedRect(ctx, bx, by, bw, bh, bh / 2);
+                ctx.fillStyle = launchTheme.isLight ? '#cbd5e1' : '#1e293b';
+                ctx.fill();
+                const fw = Math.max(bh, Math.round(bw * barPct));
+                if (barPct > 0.01) {
+                  traceRoundedRect(ctx, bx, by, fw, bh, bh / 2);
+                  ctx.fillStyle = launchTheme.accentPrimary;
+                  ctx.fill();
+                }
+                ctx.restore();
+              }
+
+              rafId = requestAnimationFrame(renderFrame);
+              return;
+            }
+
+            const dimAlpha =
+              rawT <= 140 / 256
+                ? (rawT / (140 / 256)) * 0.18
+                : 0.18 + ((rawT - 140 / 256) / (1 - 140 / 256)) * 0.5;
+            if (dimAlpha > 0.004) {
+              ctx.fillStyle = launchTheme.isLight
+                ? `rgba(216, 222, 232, ${dimAlpha})`
+                : `rgba(6, 8, 12, ${dimAlpha})`;
+              ctx.fillRect(0, 0, NL_SCREEN_W, NL_SCREEN_H);
+            }
+
             let rw = minW;
             let rh = minH;
             let rx = minX;
@@ -1324,7 +1464,6 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
             let ease = 0;
 
             if (rawT < SHRINK_END_T) {
-              /* Stage 1: Custom icon shrinks smoothly (280/256 -> 232/256) */
               const st = rawT / SHRINK_END_T;
               const sEase = st * (2 - st);
               const curScale = selScale + (shrinkScale - selScale) * sEase;
@@ -1334,10 +1473,6 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
               ry = cardCy - rh / 2;
               rad = m.radius;
             } else {
-              /* Stage 2 & 3 (expT in 0..144/256): Slight rebound (232/256 -> ~256/256, ease 0..20/256)
-               * keeping the custom icon localized at (cardCx, cardCy) while the 3 concentric ripples
-               * propagate clearly behind and around it.
-               * Stage 4 (expT in 144/256..1.0): Smooth cubic expansion to fullscreen 320x240. */
               expT = Math.min(1, (rawT - SHRINK_END_T) / (1 - SHRINK_END_T));
               const reboundHoldEnd = 144 / 256;
               const reboundMaxEase = 20 / 256;
@@ -1357,12 +1492,63 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
               rad = Math.max(0, m.radius * (1 - Math.min(1, ease)));
             }
 
-            /* LAYER 2 (Plan intermédiaire — DERRIÈRE l'icône personnalisée) :
-             * Exactement 3 ondes concentriques (goutte d'eau / Switch-inspired) :
-             * - Partent dynamiquement du centre exact (cardCx, cardCy) de l'icône sélectionnée
-             * - Dessinées AVANT l'icône personnalisée pour rester strictement derrière elle
-             * - Se propagent autour de l'icône sans jamais atteindre les bords de l'écran */
-            if (rawT >= SHRINK_END_T && expT < 228 / 256) {
+            if (launchMode === 'spinner') {
+              /* Animation 3 — Spinner: STRICTLY NO drops and NO white concentric halos/ripples */
+              const growT = rawT < SHRINK_END_T ? 0 : Math.min(1, expT / 0.55);
+              const gEase = 1 - Math.pow(1 - growT, 3);
+              const spinScale =
+                rawT < SHRINK_END_T
+                  ? selScale + (shrinkScale - selScale) * (rawT / SHRINK_END_T)
+                  : shrinkScale + (1.28 - shrinkScale) * gEase;
+              const sw = m.cardW * spinScale;
+              const sh = m.cardH * spinScale;
+              const sx = cardCx - sw / 2;
+              const sy = cardCy - sh / 2;
+              const srad = Math.max(4, Math.round(m.radius * spinScale));
+
+              drawGameCoverCard(
+                ctx,
+                sx,
+                sy,
+                sw,
+                sh,
+                srad,
+                runningGame,
+                true,
+                0,
+                launchTheme,
+                imgCacheRef.current
+              );
+
+              /* Compact 8-dot circular spinner centered directly ON the enlarging icon */
+              const spAlpha = rawT < 0.08 ? rawT / 0.08 : rawT > 0.88 ? Math.max(0, (1 - rawT) / 0.12) : 1;
+              const spRadius = Math.max(7, Math.min(13, Math.round(Math.min(sw, sh) * 0.17)));
+              const phase = (launchElapsed / 75) % 8;
+              ctx.save();
+              ctx.globalAlpha = spAlpha * 0.65;
+              ctx.fillStyle = launchTheme.isLight ? 'rgba(241,245,249,0.72)' : 'rgba(8,12,20,0.68)';
+              ctx.beginPath();
+              ctx.arc(cardCx, cardCy, spRadius + 5, 0, Math.PI * 2);
+              ctx.fill();
+              for (let d = 0; d < 8; d++) {
+                const ang = (d * Math.PI) / 4;
+                const dist = (d - Math.floor(phase) + 8) % 8;
+                const intensity = 1 - dist / 8;
+                ctx.globalAlpha = spAlpha * (0.22 + 0.78 * intensity * intensity);
+                ctx.fillStyle = dist === 0 ? '#ffffff' : launchTheme.accentPrimary;
+                const dotR = dist <= 1 ? 2.1 : 1.6;
+                ctx.beginPath();
+                ctx.arc(cardCx + Math.cos(ang) * spRadius, cardCy + Math.sin(ang) * spRadius, dotR, 0, Math.PI * 2);
+                ctx.fill();
+              }
+              ctx.restore();
+
+              rafId = requestAnimationFrame(renderFrame);
+              return;
+            }
+
+            /* Animation 1 (Actuelle) keeps its exact original luminous concentric ripples */
+            if (launchMode === 'current' && rawT >= SHRINK_END_T && expT < 228 / 256) {
               const waveDelays = [0.0, 22 / 256, 44 / 256];
               const waveLives = [156 / 256, 148 / 256, 140 / 256];
               const waveSpanPx = [25, 19, 13];
@@ -1374,7 +1560,6 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
               const rStart = Math.max(4, halfCard - 7);
 
               ctx.save();
-              /* Strict 4px safety margin from all 4 screen borders so ripples never touch screen edges */
               ctx.beginPath();
               ctx.rect(4, 4, NL_SCREEN_W - 8, NL_SCREEN_H - 8);
               ctx.clip();
@@ -1403,20 +1588,12 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
                 const hw = waveHalfWidths[w];
                 const rInner = Math.max(0, radius - hw);
                 const rOuter = radius + hw;
-                /* Launch animation glows are strictly pure white across all themes (Blue, Red, Green, Yellow) */
                 const haloCol = '#ffffff';
                 const crestCol = '#ffffff';
 
                 ctx.save();
                 ctx.globalAlpha = alpha;
-                const grad = ctx.createRadialGradient(
-                  cardCx,
-                  cardCy,
-                  rInner,
-                  cardCx,
-                  cardCy,
-                  rOuter
-                );
+                const grad = ctx.createRadialGradient(cardCx, cardCy, rInner, cardCx, cardCy, rOuter);
                 grad.addColorStop(0, 'rgba(0,0,0,0)');
                 grad.addColorStop(0.28, haloCol);
                 grad.addColorStop(0.5, crestCol);
@@ -1431,9 +1608,66 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
               ctx.restore();
             }
 
-            /* LAYER 3 (Premier plan — DEVANT les lueurs concentriques) :
-             * Lueur douce blanche de bordure + Icône personnalisée du jeu sélectionné +
-             * Fondu enchaîné vers la capture d'écran (.scr.tns) en Étape 4 (expT >= 136/256) */
+            if (launchMode === 'theme_drop') {
+              /* #R22 Animation 2 — Theme Drop: 4 successive organic liquid propagations
+               * starting visibly irregular/asymmetric and progressively rounding out until covering the full screen */
+              const liqPalette = getLiquidThemePalette4(s.displayMode, launchTheme);
+
+              const tdScale =
+                rawT < SHRINK_END_T
+                  ? selScale + (shrinkScale - selScale) * (rawT / SHRINK_END_T)
+                  : shrinkScale + (1.09 - shrinkScale) * Math.min(1, expT / 0.42);
+              const tdw = m.cardW * tdScale;
+              const tdh = m.cardH * tdScale;
+              const tdRad = Math.max(4, Math.round(m.radius * tdScale));
+
+              /* Keep the launched card crisp underneath while the 4 organic liquid fronts sweep over */
+              if (rawT < 0.78) {
+                drawGameCoverCard(
+                  ctx,
+                  cardCx - tdw / 2,
+                  cardCy - tdh / 2,
+                  tdw,
+                  tdh,
+                  tdRad,
+                  runningGame,
+                  true,
+                  0,
+                  launchTheme,
+                  imgCacheRef.current
+                );
+                const glowAlpha = Math.max(0, (1 - rawT / 0.65) * 0.52);
+                if (glowAlpha > 0.02) {
+                  ctx.save();
+                  ctx.globalAlpha = glowAlpha;
+                  traceRoundedRect(ctx, cardCx - tdw / 2 - 1, cardCy - tdh / 2 - 1, tdw + 2, tdh + 2, tdRad + 1);
+                  ctx.strokeStyle = liqPalette[0];
+                  ctx.lineWidth = 2;
+                  ctx.stroke();
+                  ctx.restore();
+                }
+              }
+
+              const liqSeed = 0x51a7 + ((s.runningGameIndex ?? 0) + 1) * 0x131;
+              drawOrganicLiquidWaves4(
+                ctx,
+                cardCx,
+                cardCy,
+                rawT,
+                408,
+                liqPalette,
+                liqSeed,
+                rawT * Math.PI * 1.15,
+                1.0,
+                false,
+                true
+              );
+
+              rafId = requestAnimationFrame(renderFrame);
+              return;
+            }
+
+            /* Animation 1 — Actuelle (Capture): 100% preserved original behavior */
             if (rawT >= SHRINK_END_T) {
               const glowRise = Math.min(1, expT / 0.17);
               const borderAlpha = Math.max(0, glowRise * (1 - ease) * 0.78);
@@ -1467,14 +1701,12 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
             const xfadeEndExpT = 212 / 256;
 
             if (hasReadyScr && scrImg && rawT >= SHRINK_END_T && expT > xfadeStartExpT) {
-              /* Stage 4: Smoothstep crossfade alpha (0 -> 1 over expT in [136/256..212/256]) */
               const u = Math.max(
                 0,
                 Math.min(1, (expT - xfadeStartExpT) / (xfadeEndExpT - xfadeStartExpT))
               );
               const xfadeAlpha = u * u * (3 - 2 * u);
 
-              /* Draw custom icon in foreground first so it masks the inner area of the ripples */
               if (xfadeAlpha < 0.995) {
                 drawGameCoverCard(
                   ctx,
@@ -1491,7 +1723,6 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
                 );
               }
 
-              /* Superimpose the real captured gameplay screenshot fading in (0 -> 1) */
               if (xfadeAlpha > 0.005) {
                 ctx.save();
                 traceRoundedRect(ctx, rx, ry, rw, rh, rad);
@@ -1504,7 +1735,6 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
                 ctx.restore();
               }
             } else {
-              /* Stage 1..3 (or fallback when no screenshot exists): draw custom icon 100% opaque in front of ripples */
               drawGameCoverCard(
                 ctx,
                 rx,
@@ -1662,8 +1892,13 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
 
       if (state.sui.screen !== 'LIBRARY') {
         if (y <= NL_TOP_BAR_H) {
+          const hidePowerBtn =
+            state.sui.screen === 'SETTINGS_SHORTCUTS' ||
+            state.sui.screen === 'SETTINGS_ICONS' ||
+            state.sui.screen === 'SETTINGS_PROFILES' ||
+            state.sui.screen === 'SETTINGS_DIAG';
           /* Clicking the discreet Power button next to the Settings title triggers Power-Off (DEL) */
-          if (x >= 90 && x <= 246) {
+          if (!hidePowerBtn && x >= 90 && x <= 246) {
             onKeyCommand('RESCAN');
           } else {
             onKeyCommand('ESC');
@@ -1679,12 +1914,12 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
             return;
           }
           if (state.sui.tpTab === 1) {
-            if (y >= 50 && y <= 166) {
+            if (y >= 50 && y <= 134) {
               const cardIdx = x < 110 ? 0 : x < 211 ? 1 : 2;
               const chosen = cardIndexToCursorStyle(cardIdx);
               if (onTouchpadControl) {
                 onTouchpadControl(
-                  state.sui.tpCursor as 0 | 1 | 2 | 3 | 4,
+                  state.sui.tpCursor as 0 | 1 | 2 | 3 | 4 | 5 | 6,
                   undefined,
                   false,
                   undefined,
@@ -1692,81 +1927,92 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
                   1
                 );
               } else {
-                const diff = cardIdx - state.sui.tpStyleCursor;
-                for (let i = 0; i < Math.abs(diff); i++) {
-                  onKeyCommand(diff > 0 ? 'RIGHT' : 'LEFT');
-                }
+                onKeyCommand('EXE');
+              }
+            } else if (y >= 142 && y <= 214) {
+              const sizeIdx = x < 110 ? 0 : x < 211 ? 1 : 2;
+              const chosenSize = indexToCursorSize(sizeIdx);
+              if (onTouchpadControl) {
+                onTouchpadControl(
+                  state.sui.tpCursor as 0 | 1 | 2 | 3 | 4 | 5 | 6,
+                  undefined,
+                  false,
+                  undefined,
+                  undefined,
+                  1,
+                  false,
+                  undefined,
+                  false,
+                  chosenSize
+                );
+              }
+            }
+            return;
+          }
+          const rects = getTouchpadTab0RowRects(state.sui.tpScroll);
+          for (const r of rects) {
+            if (y >= r.y && y < r.y + r.h) {
+              if (r.row === 0) {
+                onTouchpadControl?.(0, undefined, false, undefined, undefined, 0, true);
+              } else if (r.row === 1) {
+                onTouchpadControl?.(1, undefined, true);
+              } else if (r.row === 2) {
+                const rawNotch = Math.max(0, Math.min(4, Math.round(((x - 34) / 252) * 4)));
+                onTouchpadControl?.(2, rawNotch, false);
+              } else if (r.row === 3) {
+                const rawNotch = Math.max(0, Math.min(4, Math.round(((x - 34) / 252) * 4)));
+                onTouchpadControl?.(3, undefined, false, rawNotch);
+              } else if (r.row === 4) {
+                onTouchpadControl?.(4, undefined, false, undefined, undefined, 0, false, undefined, true);
+              } else if (r.row === 5) {
+                const nextIdx = (cursorSizeToIndex(state.settings.cursorSize) + 1) % 3;
+                onTouchpadControl?.(
+                  5,
+                  undefined,
+                  false,
+                  undefined,
+                  undefined,
+                  0,
+                  false,
+                  undefined,
+                  false,
+                  indexToCursorSize(nextIdx)
+                );
+              } else if (r.row === 6) {
+                onKeyCommand('TAB');
+              }
+              return;
+            }
+          }
+          return;
+        }
+        if (state.sui.screen === 'SETTINGS_DISPLAY') {
+          if (y >= 29 && y < 122) {
+            const clickedRow = Math.floor((y - 30) / 31) + state.sui.displayScroll;
+            if (clickedRow >= 0 && clickedRow < NL_DISPLAY_OPT_COUNT) {
+              const diff = clickedRow - state.sui.displayCursor;
+              for (let i = 0; i < Math.abs(diff); i++) {
+                onKeyCommand(diff > 0 ? 'DOWN' : 'UP');
+              }
+              if (clickedRow === 0) {
+                onKeyCommand(x < 210 ? 'LEFT' : 'RIGHT');
+              } else {
                 onKeyCommand('EXE');
               }
             }
             return;
           }
-          /* Row 0 (y=47..75): Mode de navigation (Pave tactile / Souris) */
-          if (y >= 47 && y <= 75) {
-            if (onTouchpadControl) {
-              onTouchpadControl(0, undefined, false, undefined, undefined, 0, true);
-            } else {
-              onKeyCommand('EXE');
-            }
-            return;
-          }
-          /* Row 1 (y=77..104): Glissement au pave (Mode 1) */
-          if (y >= 77 && y <= 104) {
-            if (onTouchpadControl) {
-              onTouchpadControl(1, undefined, true);
-            } else {
-              onKeyCommand('EXE');
-            }
-            return;
-          }
-          /* Row 2 (y=106..144): Sensibilite pave (5 crans) */
-          if (y >= 106 && y <= 144) {
-            const rawNotch = Math.max(0, Math.min(4, Math.round(((x - 34) / 252) * 4)));
-            if (onTouchpadControl) {
-              onTouchpadControl(2, rawNotch, false);
-            } else {
-              const diff = rawNotch - state.settings.touchpadSensitivity;
-              for (let i = 0; i < Math.abs(diff); i++) {
-                onKeyCommand(diff > 0 ? 'RIGHT' : 'LEFT');
-              }
-            }
-            return;
-          }
-          /* Row 3 (y=146..184): Vitesse souris (5 crans) */
-          if (y >= 146 && y <= 184) {
-            const rawNotch = Math.max(0, Math.min(4, Math.round(((x - 34) / 252) * 4)));
-            if (onTouchpadControl) {
-              onTouchpadControl(3, undefined, false, rawNotch);
-            } else {
-              const diff = rawNotch - state.settings.cursorSpeed;
-              for (let i = 0; i < Math.abs(diff); i++) {
-                onKeyCommand(diff > 0 ? 'RIGHT' : 'LEFT');
-              }
-            }
-            return;
-          }
-          /* Row 4 (y=186..217): Apparence du curseur */
-          if (y >= 186 && y <= 217) {
-            onKeyCommand('TAB');
-            return;
-          }
-          return;
         }
-        if (state.sui.screen === 'SETTINGS_DISPLAY') {
-          if (y >= 29 && y <= 59) {
-            onKeyCommand(x < 210 ? 'LEFT' : 'RIGHT');
-            return;
-          }
-          if (y >= 60 && y <= 90) {
-            if (state.sui.displayCursor === 0) onKeyCommand('DOWN');
-            else if (state.sui.displayCursor === 2) onKeyCommand('UP');
-            onKeyCommand('EXE');
-            return;
-          }
-          if (y >= 91 && y <= 121) {
-            if (state.sui.displayCursor === 0) onKeyCommand('UP');
-            else if (state.sui.displayCursor === 1) onKeyCommand('DOWN');
-            onKeyCommand('EXE');
+        if (state.sui.screen === 'SETTINGS_ANIMATIONS') {
+          if (y >= 48 && y < 164) {
+            const clickedRow = Math.floor((y - 48) / 28);
+            if (clickedRow >= 0 && clickedRow < NL_ANIM_CAT_COUNT) {
+              const diff = clickedRow - state.sui.animCursor;
+              for (let i = 0; i < Math.abs(diff); i++) {
+                onKeyCommand(diff > 0 ? 'DOWN' : 'UP');
+              }
+              onKeyCommand(x >= 172 && x < 236 ? 'LEFT' : 'EXE');
+            }
             return;
           }
         }
@@ -1783,20 +2029,20 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
           }
           return;
         }
-        if (state.sui.screen === 'SETTINGS_CAPTURE_BATCH' && y >= 170 && y <= 206) {
-          if (state.sui.capActive) {
-            if (x < 160) onKeyCommand('RIGHT');
-            else onKeyCommand('ESC');
-          } else {
+        if (state.sui.screen === 'SETTINGS_CAPTURE_BATCH' && y >= 168 && y <= 198) {
+          if (state.sui.capActive && state.sui.capTotal > 0) {
+            if (x >= 30 && x <= 154) onKeyCommand('RIGHT');
+            else if (x >= 166 && x <= 290) onKeyCommand('ESC');
+          } else if (x >= 96 && x <= 224) {
             onKeyCommand('EXE');
           }
           return;
         }
         if (state.sui.screen === 'SETTINGS_ICONS') {
-          if (state.sui.iconConfirmModal && y >= 134 && y <= 174) {
-            if (x < 160) {
+          if (state.sui.iconConfirmModal && y >= 138 && y <= 174) {
+            if (x >= 46 && x <= 148) {
               onKeyCommand('ESC');
-            } else {
+            } else if (x >= 172 && x <= 274) {
               if (!state.sui.iconConfirmYes) onKeyCommand('RIGHT');
               onKeyCommand('EXE');
             }
@@ -1903,11 +2149,64 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
           }
           return;
         }
+        if (state.sui.screen === 'SETTINGS_DIAG') {
+          if (state.sui.diagConfirmModal) {
+            if (y >= 152 && y <= 176) {
+              if (x >= 42 && x <= 150) {
+                onKeyCommand('ESC');
+              } else if (x >= 170 && x <= 278) {
+                if (!state.sui.diagConfirmYes) onKeyCommand('RIGHT');
+                onKeyCommand('EXE');
+              }
+            }
+            return;
+          }
+          if (state.sui.diagDetailOpen) {
+            onKeyCommand('EXE');
+            return;
+          }
+          if (y >= 28 && y <= 44) {
+            const targetTab = x >= 160 ? 1 : 0;
+            if (targetTab !== state.sui.diagTab) {
+              onKeyCommand('TAB');
+            }
+            return;
+          }
+          if (state.sui.diagTab === 0) {
+            if (y >= 193 && y <= 215 && x >= 14 && x <= 306) {
+              const diff = state.diag.entries.length - state.sui.diagCursor;
+              for (let k = 0; k < Math.abs(diff); k++) {
+                onKeyCommand(diff > 0 ? 'DOWN' : 'UP');
+              }
+              onKeyCommand('EXE');
+              return;
+            }
+            if (state.diag.entries.length > 0 && mxInRange(x, 14, 302) && y >= 66 && y < 190) {
+              for (let i = 0; i < state.diag.entries.length; i++) {
+                const ry = 67 + (i - state.sui.diagScroll) * 30;
+                if (ry + 28 <= 66 || ry >= 190) continue;
+                if (y >= ry && y < ry + 28) {
+                  const diff = i - state.sui.diagCursor;
+                  for (let k = 0; k < Math.abs(diff); k++) {
+                    onKeyCommand(diff > 0 ? 'DOWN' : 'UP');
+                  }
+                  onKeyCommand('EXE');
+                  return;
+                }
+              }
+            }
+          }
+          return;
+        }
         if (state.sui.screen === 'SETTINGS_INFO' || state.sui.screen === 'SETTINGS_CREDITS') {
           onKeyCommand('ESC');
           return;
         }
         return;
+      }
+
+      function mxInRange(val: number, min: number, max: number): boolean {
+        return val >= min && val <= max;
       }
 
       if (state.sui.qpOpen) {
@@ -1964,14 +2263,16 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
         state.settings.layout,
         state.settings.showNames,
         state.settings.showShortcuts,
-        state.filteredIndices.length
+        state.filteredIndices.length,
+        state.settings.scrollDir ?? 'vertical'
       );
       if (y >= NL_VIEW_TOP && y < mClick.viewBottom) {
-        const scrollY = state.currentPage * mClick.pageStrideY;
+        const scrollX = mClick.isHorizontal ? state.currentPage * mClick.pageStrideX : 0;
+        const scrollY = mClick.isHorizontal ? 0 : state.currentPage * mClick.pageStrideY;
         const searchOffset = state.sui.searchActive ? 28 : 0;
         for (let fIdx = 0; fIdx < state.filteredIndices.length; fIdx++) {
           const slotCoords = computeGridSlotPos(mClick, state.filteredIndices.length, fIdx);
-          const cx = slotCoords.x;
+          const cx = slotCoords.x - scrollX;
           const cy = slotCoords.y + searchOffset - scrollY;
           if (
             x >= cx &&
@@ -1979,7 +2280,12 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
             y >= cy &&
             y <= cy + mClick.cardH + mClick.labelH
           ) {
-            onSelectSlot(fIdx);
+            const cardPage = Math.floor(fIdx / mClick.perPage);
+            if (cardPage !== state.currentPage) {
+              onKeyCommand(cardPage < state.currentPage ? 'PAGE_PREV' : 'PAGE_NEXT');
+            } else {
+              onSelectSlot(fIdx);
+            }
             return;
           }
         }
@@ -2006,30 +2312,35 @@ export const NspireScreenCanvas = forwardRef<HTMLCanvasElement, NspireScreenCanv
       const rect = canvas.getBoundingClientRect();
       const x = ((e.clientX - rect.left) / Math.max(1, rect.width)) * NL_SCREEN_W;
       const y = ((e.clientY - rect.top) / Math.max(1, rect.height)) * NL_SCREEN_H;
-      if (s.sui.tpTab === 0 && y >= 116 && y <= 144) {
-        e.currentTarget.setPointerCapture(e.pointerId);
-        const { notch, warpedPosFp } = computeDetentDragPos(x);
-        animRef.current.tpSliderDragging = true;
-        animRef.current.tpSliderDragPos = warpedPosFp;
-        animRef.current.tpSliderPos = warpedPosFp;
-        sliderDragSuppressClickRef.current = true;
-        if (notch !== animRef.current.tpNotchLast) {
-          animRef.current.tpNotchLast = notch;
-          animRef.current.tpDetentPulse = 1;
+      if (s.sui.tpTab === 0) {
+        const rects = getTouchpadTab0RowRects(s.sui.tpScroll);
+        const r2 = rects.find((r) => r.row === 2);
+        const r3 = rects.find((r) => r.row === 3);
+        if (r2 && y >= r2.y + 15 && y <= r2.y + r2.h) {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          const { notch, warpedPosFp } = computeDetentDragPos(x);
+          animRef.current.tpSliderDragging = true;
+          animRef.current.tpSliderDragPos = warpedPosFp;
+          animRef.current.tpSliderPos = warpedPosFp;
+          sliderDragSuppressClickRef.current = true;
+          if (notch !== animRef.current.tpNotchLast) {
+            animRef.current.tpNotchLast = notch;
+            animRef.current.tpDetentPulse = 1;
+          }
+          onTouchpadControl?.(2, notch, false);
+        } else if (r3 && y >= r3.y + 15 && y <= r3.y + r3.h) {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          const { notch, warpedPosFp } = computeDetentDragPos(x);
+          animRef.current.tpSpeedSliderDragging = true;
+          animRef.current.tpSpeedSliderDragPos = warpedPosFp;
+          animRef.current.tpSpeedSliderPos = warpedPosFp;
+          sliderDragSuppressClickRef.current = true;
+          if (notch !== animRef.current.tpSpeedNotchLast) {
+            animRef.current.tpSpeedNotchLast = notch;
+            animRef.current.tpSpeedDetentPulse = 1;
+          }
+          onTouchpadControl?.(3, undefined, false, notch);
         }
-        onTouchpadControl?.(2, notch, false);
-      } else if (s.sui.tpTab === 0 && y >= 156 && y <= 184) {
-        e.currentTarget.setPointerCapture(e.pointerId);
-        const { notch, warpedPosFp } = computeDetentDragPos(x);
-        animRef.current.tpSpeedSliderDragging = true;
-        animRef.current.tpSpeedSliderDragPos = warpedPosFp;
-        animRef.current.tpSpeedSliderPos = warpedPosFp;
-        sliderDragSuppressClickRef.current = true;
-        if (notch !== animRef.current.tpSpeedNotchLast) {
-          animRef.current.tpSpeedNotchLast = notch;
-          animRef.current.tpSpeedDetentPulse = 1;
-        }
-        onTouchpadControl?.(3, undefined, false, notch);
       }
     };
 
@@ -2350,27 +2661,17 @@ function drawProfileSwitchTransition(
   const origX = anim.profSwitchOriginX;
   const origY = anim.profSwitchOriginY;
   const origD = Math.max(16, anim.profSwitchOriginD);
-  const tgtX = 160;
-  const tgtY = 112;
-  const tgtD = 76;
-
-  const moveT = Math.min(1, p / (140 / 256));
-  const moveEase = 1 - Math.pow(1 - moveT, 3);
-  const curCx = origX + (tgtX - origX) * moveEase;
-  const curCy = origY + (tgtY - origY) * moveEase;
+  const centerX = 160;
+  const centerY = 114;
+  const peakD = 62;
+  const badgeX = 17;
+  const badgeY = 12;
+  const badgeD = 16;
 
   ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, NL_TOP_BAR_H, NL_SCREEN_W, NL_SCREEN_H - NL_TOP_BAR_H);
-  ctx.clip();
-
-  /* Backdrop focus dim */
+  /* R16 Orbital Prism: gentle backdrop dim (full screen so avatar docks cleanly into corner badge) */
   const dimAlpha =
-    p < 48 / 256
-      ? (p / (48 / 256)) * 0.45
-      : p < 184 / 256
-      ? 0.45
-      : ((1 - p) / (72 / 256)) * 0.45;
+    p < 0.2 ? (p / 0.2) * 0.34 : p < 0.72 ? 0.34 : ((1 - p) / 0.28) * 0.34;
   if (dimAlpha > 0.01) {
     ctx.fillStyle = theme.isLight
       ? `rgba(185, 195, 210, ${dimAlpha})`
@@ -2378,163 +2679,560 @@ function drawProfileSwitchTransition(
     ctx.fillRect(0, NL_TOP_BAR_H, NL_SCREEN_W, NL_SCREEN_H - NL_TOP_BAR_H);
   }
 
-  /* Stage 1: Water-drop luminous waves from exact icon origin + advancing center */
-  drawProfileWaterDropWaves(ctx, origX, origY, p, 84, theme);
-  if (p > 40 / 256) {
-    drawProfileWaterDropWaves(ctx, curCx, curCy, p - 32 / 256, 96, theme);
+  /* #R22 Organic Liquid Propagation behind the Profile Switch avatars (preserves all existing rings, sparks & avatar arcs) */
+  if (p > 0.02 && p < 0.96) {
+    const liqPalette = getLiquidThemePalette4(s.displayMode, theme);
+    const liqFade =
+      p < 0.16 ? p / 0.16 : p > 0.72 ? Math.max(0, (0.96 - p) / 0.24) : 1;
+    const liqCx = centerX + (origX - centerX) * Math.max(0, 0.35 - p) * 0.6;
+    const liqCy = centerY + (origY - centerY) * Math.max(0, 0.35 - p) * 0.6;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, NL_TOP_BAR_H, NL_SCREEN_W, NL_SCREEN_H - NL_TOP_BAR_H);
+    ctx.clip();
+    drawOrganicLiquidWaves4(
+      ctx,
+      liqCx,
+      liqCy,
+      Math.min(1, p * 1.18),
+      118,
+      liqPalette,
+      0x2c49 + anim.profSwitchAvatarId * 0x97,
+      anim.qpGlowPhase * 0.8 + p * 1.4,
+      0.32 * liqFade,
+      false,
+      false
+    );
+    ctx.restore();
   }
 
-  const mainAlpha = p <= 192 / 256 ? 1 : Math.max(0, (1 - p) / (64 / 256));
-  if (mainAlpha <= 0.01) {
+  /* Stage 1 (p = 0..0.38): Outgoing identity softly recedes upward & fades */
+  if (p < 0.38 && anim.profSwitchFromAvatarId !== anim.profSwitchAvatarId) {
+    const outT = p / 0.38;
+    const outEase = 1 - Math.pow(1 - outT, 2);
+    const outD = Math.max(14, 44 - outEase * 24);
+    const outY = centerY - outEase * 20;
+    const outA = Math.max(0, 1 - outEase);
+    if (outA > 0.02) {
+      ctx.save();
+      ctx.globalAlpha = outA * 0.75;
+      drawCircularAvatar(
+        ctx,
+        centerX - outD / 2,
+        outY - outD / 2,
+        outD,
+        anim.profSwitchFromAvatarId,
+        false,
+        theme,
+        imgCache
+      );
+      ctx.restore();
+    }
+  }
+
+  /* Compute incoming avatar arc -> elastic settle -> dock-to-corner glide */
+  let curCx = centerX;
+  let curCy = centerY;
+  let curD = peakD;
+  let mainAlpha = 1;
+
+  if (p < 0.38) {
+    const t = p / 0.38;
+    const ease = 1 - Math.pow(1 - t, 3);
+    curCx = origX + (centerX - origX) * ease;
+    curCy = origY + (centerY - origY) * ease - Math.sin(t * Math.PI) * 14;
+    curD = origD + (peakD - origD) * ease;
+  } else if (p < 0.68) {
+    const t = (p - 0.38) / 0.3;
+    const wobble = Math.sin(t * Math.PI * 1.5) * (1 - t) * 5;
+    curCx = centerX;
+    curCy = centerY;
+    curD = peakD + wobble;
+  } else {
+    const t = (p - 0.68) / 0.32;
+    const ease = t * t * (3 - 2 * t);
+    curCx = centerX + (badgeX - centerX) * ease;
+    curCy = centerY + (badgeY - centerY) * ease - Math.sin(t * Math.PI) * 12;
+    curD = peakD + (badgeD - peakD) * ease;
+    mainAlpha = t < 0.75 ? 1 : Math.max(0, (1 - t) / 0.25);
+  }
+
+  /* Crisp prismatic pulse rings + 4 orbital micro-sparks radiating from center */
+  if (p >= 0.14 && p <= 0.84) {
+    const rp = (p - 0.14) / 0.7;
+    const ringColors = [theme.accentPrimary, theme.accentSecondary, '#ffffff'];
+    for (let r = 0; r < 3; r++) {
+      const localT = rp - r * 0.12;
+      if (localT <= 0 || localT >= 1) continue;
+      const rad = 24 + (1 - Math.pow(1 - localT, 2)) * (54 + r * 10);
+      const ra = (1 - localT) * (0.72 - r * 0.14);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, rad, 0, Math.PI * 2);
+      ctx.strokeStyle = ringColors[r];
+      ctx.globalAlpha = Math.max(0, ra);
+      ctx.lineWidth = r === 0 ? 2 : 1.5;
+      ctx.stroke();
+      ctx.restore();
+    }
+    const sparkRad = 32 + rp * 34;
+    const sparkA = (1 - rp) * 0.9;
+    for (let k = 0; k < 4; k++) {
+      const ang = anim.qpGlowPhase * 1.6 + (k * Math.PI) / 2;
+      const sx = centerX + Math.cos(ang) * sparkRad;
+      const sy = centerY + Math.sin(ang) * sparkRad;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, sparkA);
+      ctx.fillStyle = k % 2 === 0 ? theme.accentSecondary : '#ffffff';
+      ctx.beginPath();
+      ctx.arc(sx, sy, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  if (mainAlpha > 0.02) {
+    drawMulticolorFocusRing(
+      ctx,
+      curCx,
+      curCy,
+      curD + 3,
+      p < 0.68 ? 2.5 : 1.5,
+      anim.qpGlowPhase,
+      theme.isLight,
+      mainAlpha
+    );
+    ctx.save();
+    ctx.globalAlpha = mainAlpha;
+    drawCircularAvatar(
+      ctx,
+      curCx - curD / 2,
+      curCy - curD / 2,
+      curD,
+      anim.profSwitchAvatarId,
+      false,
+      theme,
+      imgCache
+    );
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+/**
+ * #R22 Unified 4-Color Organic Liquid Palette (exact 1:1 mirror of native nl_liquid_theme_color):
+ * - Dark:  lightest -> darkest (harmonious with active accent & dark bg)
+ * - Light: darkest -> lightest
+ * - Gray:  lightest -> increasingly grayed nuances
+ */
+function getLiquidThemePalette4(
+  displayMode: LauncherState['displayMode'],
+  theme: ConsoleThemePalette
+): [string, string, string, string] {
+  if (displayMode === 'gray') {
+    return ['#eef1f6', '#c0c6d0', '#868c98', '#4e535c'];
+  }
+  if (displayMode === 'light') {
+    return [
+      lerpHexColor(theme.textPrimary, theme.accentPrimary, 0.25),
+      lerpHexColor(theme.accentPrimary, theme.textPrimary, 0.125),
+      lerpHexColor(theme.accentPrimary, '#ffffff', 0.5),
+      lerpHexColor(theme.bgMain, '#ffffff', 0.81),
+    ];
+  }
+  return [
+    lerpHexColor(theme.accentSecondary, '#ffffff', 0.68),
+    lerpHexColor(theme.accentSecondary, theme.accentPrimary, 0.35),
+    lerpHexColor(theme.accentPrimary, theme.bgMain, 0.36),
+    lerpHexColor(theme.accentPrimary, theme.bgMain, 0.76),
+  ];
+}
+
+/**
+ * #R22 Evaluate organic liquid contour radius at angle theta (radians).
+ * Uses 4 asymmetric harmonics (1, 2, 3, 5) mirroring native nl_liquid_eval_radius:
+ * - At irreg=1.0: visibly irregular, asymmetric water-blob contour (±27%)
+ * - As irreg approaches 0.08: smoothly rounds into a serene near-circle
+ */
+function evalOrganicLiquidRadius(
+  theta: number,
+  baseR: number,
+  irreg: number,
+  seed: number,
+  phase: number
+): number {
+  const s1 = ((seed * 17) & 255) * ((Math.PI * 2) / 256);
+  const s2 = ((seed * 53 + 37) & 255) * ((Math.PI * 2) / 256);
+  const s3 = ((seed * 97 + 91) & 255) * ((Math.PI * 2) / 256);
+  const s5 = ((seed * 149 + 173) & 255) * ((Math.PI * 2) / 256);
+
+  const w1 = Math.sin(theta + s1 + phase * 0.45) * 0.085;
+  const w2 = Math.sin(2 * theta + s2 - phase * 0.7) * 0.095;
+  const w3 = Math.sin(3 * theta + s3 + phase * 1.15) * 0.062;
+  const w5 = Math.sin(5 * theta + s5 - phase * 0.9) * 0.028;
+
+  const mult = 1 + (w1 + w2 + w3 + w5) * irreg;
+  return Math.max(1.2, baseR * mult);
+}
+
+/**
+ * Trace a closed, smooth 64-vertex quadratic-spline organic liquid path on ctx.
+ */
+function traceOrganicLiquidPath(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  baseR: number,
+  irreg: number,
+  seed: number,
+  phase: number,
+  clockwise = true
+) {
+  const N = 64;
+  const ptsX = new Float32Array(N);
+  const ptsY = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const idx = clockwise ? i : (N - i) % N;
+    const theta = (idx / N) * Math.PI * 2;
+    const r = evalOrganicLiquidRadius(theta, baseR, irreg, seed, phase);
+    ptsX[i] = cx + Math.cos(theta) * r;
+    ptsY[i] = cy + Math.sin(theta) * r;
+  }
+  const startMx = (ptsX[N - 1] + ptsX[0]) * 0.5;
+  const startMy = (ptsY[N - 1] + ptsY[0]) * 0.5;
+  ctx.moveTo(startMx, startMy);
+  for (let i = 0; i < N; i++) {
+    const next = (i + 1) % N;
+    const mx = (ptsX[i] + ptsX[next]) * 0.5;
+    const my = (ptsY[i] + ptsY[next]) * 0.5;
+    ctx.quadraticCurveTo(ptsX[i], ptsY[i], mx, my);
+  }
+  ctx.closePath();
+}
+
+/**
+ * #R22 Draw 4 staggered overlapping organic liquid propagations (0 -> 1 -> 2 -> 3).
+ * Starts visibly irregular/organic and progressively rounds out as each wave expands.
+ */
+function drawOrganicLiquidWaves4(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  progress: number,
+  maxRadius: number,
+  palette: [string, string, string, string],
+  seed: number,
+  phase: number,
+  alphaScale: number,
+  reverseOrder = false,
+  solidOpaque = false
+) {
+  const p = Math.max(0, Math.min(1, progress));
+  if (p <= 0.005 || alphaScale <= 0.01) return;
+
+  const delays = [0.0, 0.115, 0.23, 0.345];
+  const lives = [0.655, 0.655, 0.655, 0.655];
+  const offX = [0, -3.5, 4.0, -1.5];
+  const offY = [0, 3.0, -3.2, 1.5];
+
+  for (let i = 0; i < 4; i++) {
+    const lt = (p - delays[i]) / lives[i];
+    if (lt <= 0) continue;
+    const t = Math.min(1, lt);
+    /* Smooth cubic expansion */
+    const ease = 1 - Math.pow(1 - t, 3);
+    const baseR = 4 + (maxRadius - 4) * ease;
+    /* Start visibly irregular (1.0), progressively round out toward 0.085 as the liquid propagates */
+    const irreg = Math.max(0.085, 1.0 - ease * 0.915);
+    const colIdx = reverseOrder ? 3 - i : i;
+    const col = palette[colIdx];
+    const drift = (1 - ease) * 1.15;
+    const wcx = cx + offX[i] * drift;
+    const wcy = cy + offY[i] * drift;
+
+    const layerAlpha = solidOpaque
+      ? Math.min(1, (t < 0.08 ? t / 0.08 : 1) * alphaScale)
+      : Math.min(1, (t < 0.14 ? t / 0.14 : 1 - (t - 0.14) * 0.32) * alphaScale);
+    if (layerAlpha <= 0.01) continue;
+
+    ctx.save();
+    ctx.globalAlpha = layerAlpha;
+    ctx.fillStyle = col;
+    ctx.shadowColor = col;
+    ctx.shadowBlur = solidOpaque ? 6 : 8;
+    ctx.beginPath();
+    traceOrganicLiquidPath(ctx, wcx, wcy, baseR, irreg, seed + i * 31, phase + i * 0.55, true);
+    ctx.fill();
+
+    /* Subtle feathered liquid meniscus rim */
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = layerAlpha * (solidOpaque ? 0.35 : 0.48);
+    ctx.strokeStyle = colIdx === 0 ? '#ffffff' : palette[Math.max(0, colIdx - 1)];
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/**
+ * #R22 Exact Reverse 4-Layer Organic Liquid Reveal (for Return from Game):
+ * Peels away Col 3 -> Col 2 -> Col 1 -> Col 0 outward from (cx, cy) via an evenodd organic aperture
+ * so the already-live, immediately interactive Library underneath shines through with zero delay.
+ */
+function drawOrganicLiquidReveal4(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  progress: number,
+  palette: [string, string, string, string],
+  seed: number,
+  phase: number
+) {
+  const p = Math.max(0, Math.min(1, progress));
+  if (p >= 0.995) return;
+
+  const maxR = 408;
+  const delays = [0.0, 0.105, 0.21, 0.315];
+  const lives = [0.685, 0.685, 0.685, 0.685];
+
+  const frontR = [0, 0, 0, 0];
+  const frontIrreg = [1, 1, 1, 1];
+  for (let i = 0; i < 4; i++) {
+    const t = Math.max(0, Math.min(1, (p - delays[i]) / lives[i]));
+    const ease = 1 - Math.pow(1 - t, 3);
+    frontR[i] = t <= 0 ? 0 : 4 + (maxR - 4) * ease;
+    frontIrreg[i] = Math.max(0.085, 1.0 - ease * 0.915);
+  }
+
+  /* Fade out smoothly in the final 10% so no edge snaps */
+  const masterAlpha = p > 0.88 ? Math.max(0, (1 - p) / 0.12) : 1;
+  if (masterAlpha <= 0.01) return;
+
+  ctx.save();
+  ctx.globalAlpha = masterAlpha;
+
+  /* Clip to everything OUTSIDE the innermost live-library organic aperture (Front 3) */
+  ctx.beginPath();
+  ctx.rect(0, 0, NL_SCREEN_W, NL_SCREEN_H);
+  if (frontR[3] > 2) {
+    traceOrganicLiquidPath(ctx, cx, cy, frontR[3], frontIrreg[3], seed + 93, phase + 1.65, false);
+  }
+  ctx.clip('evenodd');
+
+  /* Layer 3 (outermost — still covering corners until Front 0 sweeps past) */
+  ctx.fillStyle = palette[3];
+  ctx.fillRect(0, 0, NL_SCREEN_W, NL_SCREEN_H);
+
+  /* Front 0 -> Col 2 */
+  if (frontR[0] > 2) {
+    ctx.fillStyle = palette[2];
+    ctx.shadowColor = palette[2];
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    traceOrganicLiquidPath(ctx, cx, cy, frontR[0], frontIrreg[0], seed, phase, true);
+    ctx.fill();
+  }
+
+  /* Front 1 -> Col 1 */
+  if (frontR[1] > 2) {
+    ctx.fillStyle = palette[1];
+    ctx.shadowColor = palette[1];
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    traceOrganicLiquidPath(ctx, cx, cy, frontR[1], frontIrreg[1], seed + 31, phase + 0.55, true);
+    ctx.fill();
+  }
+
+  /* Front 2 -> Col 0 (innermost liquid band right around the live library aperture) */
+  if (frontR[2] > 2) {
+    ctx.fillStyle = palette[0];
+    ctx.shadowColor = palette[0];
+    ctx.shadowBlur = 6;
+    ctx.beginPath();
+    traceOrganicLiquidPath(ctx, cx, cy, frontR[2], frontIrreg[2], seed + 62, phase + 1.1, true);
+    ctx.fill();
+  }
+
+  ctx.restore();
+
+  /* Crisp soft luminous meniscus hugging the live library aperture frontier */
+  if (frontR[3] > 4 && frontR[3] < 360) {
+    ctx.save();
+    ctx.globalAlpha = masterAlpha * 0.42;
+    ctx.strokeStyle = palette[0];
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    traceOrganicLiquidPath(ctx, cx, cy, frontR[3], frontIrreg[3], seed + 93, phase + 1.65, true);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawReturnDropOverlay(
+  ctx: CanvasRenderingContext2D,
+  s: LauncherState,
+  anim: SettingsAnimState & { scrollX: number; scrollY: number },
+  nowMs: number,
+  theme: ConsoleThemePalette
+) {
+  if (anim.returnDropStartMs === null) return;
+  if (s.sui.screen !== 'LIBRARY' || s.sui.qpOpen || s.runningGameIndex !== null) {
+    anim.returnDropStartMs = null;
+    return;
+  }
+  const retMode = clampReturnAnimMode(s.settings.returnAnimMode);
+  if (retMode === 'instant') {
+    anim.returnDropStartMs = null;
+    return;
+  }
+  const durMs = retMode === 'fade' ? 170 : retMode === 'zoom' ? 235 : 300;
+  const elapsed = nowMs - anim.returnDropStartMs;
+  if (elapsed < 0 || elapsed >= durMs) {
+    anim.returnDropStartMs = null;
+    return;
+  }
+  const p = elapsed / durMs;
+  const palette = getLiquidThemePalette4(s.displayMode, theme);
+
+  /* Locate returned card center on screen (fallback: center of library viewport) */
+  let fcx = 160;
+  let fcy = 118;
+  if (s.filteredIndices.length > 0) {
+    let fpos = anim.returnDropGameIdx >= 0 ? s.filteredIndices.indexOf(anim.returnDropGameIdx) : -1;
+    if (fpos < 0) fpos = Math.max(0, Math.min(s.filteredIndices.length - 1, s.selectedPos));
+    const m = getLayoutMetrics(
+      s.settings.layout,
+      s.settings.showNames,
+      s.settings.showShortcuts,
+      s.filteredIndices.length,
+      s.settings.scrollDir
+    );
+    const slotPos = computeGridSlotPos(m, s.filteredIndices.length, fpos);
+    const cxCand = slotPos.x - anim.scrollX + m.cardW / 2;
+    const cyCand = slotPos.y - anim.scrollY + m.cardH / 2;
+    if (cxCand >= 24 && cxCand <= NL_SCREEN_W - 24 && cyCand >= NL_TOP_BAR_H + 12 && cyCand <= NL_SCREEN_H - 18) {
+      fcx = cxCand;
+      fcy = cyCand;
+    }
+  }
+
+  if (retMode === 'fade') {
+    const inv = 1 - p;
+    ctx.save();
+    ctx.globalAlpha = inv * inv * 0.85;
+    ctx.fillStyle = palette[3];
+    ctx.fillRect(0, 0, NL_SCREEN_W, NL_SCREEN_H);
     ctx.restore();
     return;
   }
 
-  /* Stage 2: 4 Sequential Ghost Silhouettes trailing behind the zooming avatar */
-  const ghostLags = [18 / 256, 36 / 256, 54 / 256, 72 / 256];
-  const ghostAlphas = [19 / 32, 13 / 32, 9 / 32, 5 / 32];
-  if (p < 188 / 256) {
-    const ghostFade = p <= 132 / 256 ? 1 : Math.max(0, (188 / 256 - p) / (56 / 256));
-    for (let g = 3; g >= 0; g--) {
-      const gp = p - ghostLags[g];
-      if (gp <= 0) continue;
-      const gMoveT = Math.min(1, gp / (140 / 256));
-      const gx = origX + (tgtX - origX) * gMoveT;
-      const gy = origY + (tgtY - origY) * gMoveT + (g + 1) * 3;
-      const gSpring = profileSpringReboundScale(gp);
-      const gd = Math.max(14, origD + (tgtD - origD) * gSpring - (g + 1) * 5);
-      const ga = ghostAlphas[g] * ghostFade;
-      if (ga > 0.02) {
-        ctx.save();
-        ctx.globalAlpha = ga;
-        drawCircularAvatar(
-          ctx,
-          gx - gd / 2,
-          gy - gd / 2,
-          gd,
-          anim.profSwitchAvatarId,
-          false,
-          theme,
-          imgCache
-        );
-        ctx.beginPath();
-        ctx.arc(gx, gy, gd / 2, 0, Math.PI * 2);
-        ctx.fillStyle = theme.accentPrimary;
-        ctx.globalAlpha = ga * (0.12 + g * 0.05);
-        ctx.fill();
-        ctx.restore();
-      }
-    }
+  if (retMode === 'zoom') {
+    const ease = 1 - Math.pow(1 - p, 3);
+    const openR = 14 + ease * 240;
+    const inv = 1 - p;
+    ctx.save();
+    ctx.fillStyle = palette[3];
+    ctx.globalAlpha = 0.88 * inv;
+    ctx.beginPath();
+    ctx.rect(0, 0, NL_SCREEN_W, NL_SCREEN_H);
+    ctx.arc(fcx, fcy, openR, 0, Math.PI * 2, true);
+    ctx.fill('evenodd');
+    ctx.globalAlpha = 0.72 * inv;
+    ctx.strokeStyle = theme.accentPrimary;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.arc(fcx, fcy, openR, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    return;
   }
 
-  /* Stage 3 & 4: Main Avatar with Natural Spring Rebound + Luminous Halo + Fade Out */
-  const springScale = profileSpringReboundScale(p);
-  let mainD = origD + (tgtD - origD) * springScale;
-  if (p > 192 / 256) {
-    mainD += ((p - 192 / 256) / (64 / 256)) * 8;
-  }
-
-  drawMulticolorFocusRing(
+  /* #R22/#R23 Exact inverse of Game Launch: 4 organic liquid fronts peel outward revealing live Library */
+  drawOrganicLiquidReveal4(
     ctx,
-    curCx,
-    curCy,
-    mainD + 2,
-    3,
-    anim.qpGlowPhase,
-    theme.isLight,
-    mainAlpha
+    fcx,
+    fcy,
+    p,
+    palette,
+    0x7e21 + Math.max(0, anim.returnDropGameIdx) * 0x73,
+    p * Math.PI * 1.1
   );
-  ctx.save();
-  ctx.globalAlpha = mainAlpha;
-  drawCircularAvatar(
-    ctx,
-    curCx - mainD / 2,
-    curCy - mainD / 2,
-    mainD,
-    anim.profSwitchAvatarId,
-    false,
-    theme,
-    imgCache
-  );
-
-  /* Profile name pill beneath the rebounding avatar */
-  const ap = getActiveProfile(s);
-  if (ap && p >= 64 / 256 && mainAlpha >= 0.25) {
-    ctx.font = 'bold 8px "JetBrains Mono", monospace';
-    const tw = Math.ceil(ctx.measureText(ap.name).width);
-    const lw = tw + 16;
-    const px = curCx - lw / 2;
-    const py = curCy + mainD / 2 + 8;
-    if (py + 16 < NL_SCREEN_H) {
-      traceRoundedRect(ctx, px - 1, py - 1, lw + 2, 16, 8);
-      ctx.fillStyle = theme.accentPrimary;
-      ctx.fill();
-      traceRoundedRect(ctx, px, py, lw, 14, 7);
-      ctx.fillStyle = theme.cardBgSel;
-      ctx.fill();
-      ctx.fillStyle = theme.textPrimary;
-      ctx.textBaseline = 'middle';
-      ctx.fillText(ap.name, curCx - tw / 2, py + 7.5);
-    }
-  }
-  ctx.restore();
-  ctx.restore();
 }
 
 function drawProfilePlusTransition(
   ctx: CanvasRenderingContext2D,
   anim: SettingsAnimState,
-  theme: ConsoleThemePalette
+  theme: ConsoleThemePalette,
+  displayMode: LauncherState['displayMode'] = 'dark'
 ) {
   const p = anim.profPlusProgress;
   if (p >= 1 || p < 0) return;
 
-  const origX = anim.profPlusOriginX;
-  const origY = anim.profPlusOriginY;
-  const tgtX = 160;
-  const tgtY = 118;
-  const origD = 34;
-  const tgtD = 68;
+  /* R16: Strictly anchored at (origX, origY) — ZERO leftward drift */
+  const cx = anim.profPlusOriginX;
+  const cy = anim.profPlusOriginY;
+  let mainD = 36;
+  let spin = 0;
+  let alpha = 1;
 
-  const moveT = Math.min(1, p / (144 / 256));
-  const moveEase = 1 - Math.pow(1 - moveT, 3);
-  const curCx = origX + (tgtX - origX) * moveEase;
-  const curCy = origY + (tgtY - origY) * moveEase;
-
-  drawProfileWaterDropWaves(ctx, origX, origY, p, 78, theme);
-
-  const mainAlpha = p <= 176 / 256 ? 1 : Math.max(0, (1 - p) / (80 / 256));
-  if (mainAlpha <= 0.01) return;
-
-  /* 4 Sequential Ghost Silhouettes of the '+' button */
-  const ghostLags = [20 / 256, 40 / 256, 60 / 256, 80 / 256];
-  const ghostAlphas = [18 / 32, 13 / 32, 8 / 32, 4 / 32];
-  for (let g = 3; g >= 0; g--) {
-    const gp = p - ghostLags[g];
-    if (gp <= 0) continue;
-    const gMove = Math.min(1, gp / (144 / 256));
-    const gx = origX + (tgtX - origX) * gMove;
-    const gy = origY + (tgtY - origY) * gMove + (g + 1) * 2;
-    const gSpring = profileSpringReboundScale(gp);
-    const gd = Math.max(16, origD + (tgtD - origD) * gSpring - (g + 1) * 4);
-    const ga = ghostAlphas[g] * mainAlpha;
-    drawPlusBadgeWithRotation(ctx, gx, gy, gd, Math.min(1, gp), ga, false, true, theme);
+  if (p < 0.22) {
+    /* Phase 1: Tactile press-in (36 -> 30 px) */
+    const t = p / 0.22;
+    mainD = 36 - 6 * (t * t);
+  } else if (p < 0.66) {
+    /* Phase 2: Elastic rebound (30 -> 44 -> 40 px) + crisp 90 deg cross spin */
+    const t = (p - 0.22) / 0.44;
+    const ease = 1 - Math.pow(1 - t, 3);
+    mainD = 30 + 14 * ease - Math.sin(t * Math.PI) * -2;
+    spin = ease;
+  } else {
+    /* Phase 3: Centered dissolve & aperture handoff */
+    const t = (p - 0.66) / 0.34;
+    mainD = 42 + t * 8;
+    spin = 1;
+    alpha = Math.max(0, 1 - t);
   }
 
-  /* Main '+' badge with spring rebound & 90 deg rotation */
-  const springScale = profileSpringReboundScale(p);
-  const mainD = origD + (tgtD - origD) * springScale;
-  drawMulticolorFocusRing(
-    ctx,
-    curCx,
-    curCy,
-    mainD + 2,
-    2.5,
-    anim.qpGlowPhase,
-    theme.isLight,
-    mainAlpha
-  );
-  drawPlusBadgeWithRotation(ctx, curCx, curCy, mainD, Math.min(1, p), mainAlpha, false, true, theme);
+  /* #R22 4-layer organic liquid propagation radiating from '+' (preserves centered '+' morph & rings) */
+  if (p > 0.04 && p < 0.98) {
+    const liqPalette = getLiquidThemePalette4(displayMode, theme);
+    const fade = p < 0.16 ? p / 0.16 : p > 0.66 ? Math.max(0, (0.98 - p) / 0.32) : 1;
+    drawOrganicLiquidWaves4(
+      ctx,
+      cx,
+      cy,
+      Math.min(1, p * 1.15),
+      92,
+      liqPalette,
+      0x419b,
+      anim.qpGlowPhase * 0.9 + p * 1.6,
+      0.34 * fade,
+      false,
+      false
+    );
+  }
+
+  /* 2 crisp concentric luminous pulse rings centered strictly at (cx, cy) */
+  if (p >= 0.16) {
+    const rp = (p - 0.16) / 0.84;
+    for (let r = 0; r < 2; r++) {
+      const lt = rp - r * 0.16;
+      if (lt <= 0 || lt >= 1) continue;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, 18 + lt * (26 + r * 10), 0, Math.PI * 2);
+      ctx.strokeStyle = r === 0 ? theme.accentPrimary : theme.accentSecondary;
+      ctx.globalAlpha = Math.max(0, (1 - lt) * 0.8);
+      ctx.lineWidth = 2 - r * 0.5;
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  if (alpha > 0.02) {
+    drawMulticolorFocusRing(ctx, cx, cy, mainD + 2, 2.2, anim.qpGlowPhase, theme.isLight, alpha);
+    drawPlusBadgeWithRotation(ctx, cx, cy, mainD, spin, alpha, false, true, theme);
+  }
 }
 
 function drawProfileBirthTransition(
@@ -2543,10 +3241,28 @@ function drawProfileBirthTransition(
   theme: ConsoleThemePalette,
   imgCache: Map<string, HTMLImageElement>,
   slotCx: number,
-  slotCy: number
+  slotCy: number,
+  displayMode: LauncherState['displayMode'] = 'dark'
 ) {
   const p = anim.profBirthProgress;
   if (p >= 1 || p < 0) return;
+
+  /* #R22 Enrich profile birth with 4-layer organic liquid propagation alongside existing water waves & avatar fly-in */
+  const liqPalette = getLiquidThemePalette4(displayMode, theme);
+  const fade = p < 0.14 ? p / 0.14 : p > 0.68 ? Math.max(0, (1 - p) / 0.32) : 1;
+  drawOrganicLiquidWaves4(
+    ctx,
+    slotCx,
+    slotCy,
+    Math.min(1, p * 1.12),
+    78,
+    liqPalette,
+    0x6b13 + anim.profBirthAvatarId * 0x41,
+    anim.qpGlowPhase + p * 1.5,
+    0.34 * fade,
+    false,
+    false
+  );
 
   drawProfileWaterDropWaves(ctx, 160, 114, p, 82, theme);
   drawProfileWaterDropWaves(ctx, slotCx, slotCy, p, 52, theme);
@@ -2576,6 +3292,26 @@ function drawProfileBirthTransition(
   }
 }
 
+function drawMiniPadlock(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  theme: ConsoleThemePalette
+) {
+  ctx.save();
+  ctx.fillStyle = theme.isLight ? '#1e293b' : '#f8fafc';
+  /* Shackle */
+  ctx.fillRect(x + 2, y, 4, 1);
+  ctx.fillRect(x + 1, y + 1, 1, 3);
+  ctx.fillRect(x + 6, y + 1, 1, 3);
+  /* Body */
+  ctx.fillStyle = theme.accentPrimary;
+  ctx.fillRect(x, y + 4, 8, 6);
+  ctx.fillStyle = theme.textOnAccent;
+  ctx.fillRect(x + 3, y + 6, 2, 2);
+  ctx.restore();
+}
+
 function drawQuickProfileOverlay(
   ctx: CanvasRenderingContext2D,
   s: LauncherState,
@@ -2586,7 +3322,7 @@ function drawQuickProfileOverlay(
   const m = Math.max(0, Math.min(1, anim.qpOpenAnim));
   if (m <= 0.005 && !s.sui.qpOpen) return;
   const ease = 1 - Math.pow(1 - m, 3);
-  const dy = Math.round((1 - ease) * 12);
+  const dy = Math.round((1 - ease) * 10);
   const zoomInsetX = Math.round((1 - ease) * 14);
   const zoomInsetY = Math.round((1 - ease) * 6);
 
@@ -2596,41 +3332,7 @@ function drawQuickProfileOverlay(
     : `rgba(5, 7, 12, ${0.58 * ease})`;
   ctx.fillRect(0, 0, NL_SCREEN_W, NL_SCREEN_H);
 
-  ctx.globalAlpha = Math.max(0.05, ease);
-  const mx = 10 + zoomInsetX;
-  const my = 52 + dy + zoomInsetY;
-  const mw = 300 - zoomInsetX * 2;
-  const mh = 136 - zoomInsetY * 2;
-  const boxBg = theme.isLight ? '#fafcff' : theme.cardBg;
-
-  traceRoundedRect(ctx, mx - 1, my - 1, mw + 2, mh + 2, 11);
-  ctx.fillStyle = ease < 0.94 ? lerpHexColor(theme.accentPrimary, theme.borderSubtle, ease) : theme.borderSubtle;
-  ctx.fill();
-  traceRoundedRect(ctx, mx, my, mw, mh, 10);
-  ctx.fillStyle = boxBg;
-  ctx.fill();
-
-  if (ease < 0.98) {
-    const sweepW = Math.round(mw * ease);
-    ctx.fillStyle = theme.accentPrimary;
-    ctx.fillRect(160 - Math.floor(sweepW / 2), my, sweepW, 2);
-  }
-
-  ctx.textBaseline = 'middle';
-  ctx.font = 'bold 8px "JetBrains Mono", monospace';
-  ctx.fillStyle = theme.textPrimary;
-  ctx.fillText('PROFILS', mx + 14, my + 16);
-
   const pcount = Math.max(1, s.profiles.items.length);
-  const cntStr = `${pcount}/${NL_MAX_PROFILES}`;
-  ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
-  const cw = Math.ceil(ctx.measureText(cntStr).width) + 10;
-  traceRoundedRect(ctx, mx + mw - 12 - cw, my + 9, cw, 14, 4);
-  ctx.fillStyle = theme.pillBg;
-  ctx.fill();
-  ctx.fillStyle = theme.accentSecondary;
-  ctx.fillText(cntStr, mx + mw - 7 - cw, my + 16.5);
-
   const totalSlots = pcount + 1;
   const visMax = 6;
   const diam = 34;
@@ -2645,9 +3347,79 @@ function drawQuickProfileOverlay(
   }
   const stripW = shown * diam + (shown - 1) * (stride - diam);
   const startX = 160 - Math.floor(stripW / 2);
-  const cy = 114 + dy;
+  const cy = 120 + dy;
+
+  const rel = cur - winStart;
+  const tgtGx = startX + rel * stride + diam / 2;
+  const glowCx = anim.qpGlowX > 0 ? anim.qpGlowX : tgtGx;
+  const trailCx = anim.qpTrailX > 0 ? anim.qpTrailX : glowCx;
+  const glowCy = cy;
+
+  /* #R22 Quick Profile Selector Opening & Dedicated Closing Organic Liquid Propagations:
+   * - Opening: 4-layer organic liquid wave glides from top-left profile badge (17, 12) into the emerging dock.
+   * - Closing: Dedicated closing liquid wave sweeps gracefully from the focused avatar back into (17, 12)
+   *            in reversed tonal order (3 -> 2 -> 1 -> 0) and rounds/contracts cleanly into the badge. */
+  if (m > 0.02 && m < 0.98) {
+    const liqPalette = getLiquidThemePalette4(s.displayMode, theme);
+    if (anim.qpOpening) {
+      const glideEase = 1 - Math.pow(1 - m, 3);
+      const lcx = 17 + (160 - 17) * glideEase;
+      const lcy = 12 + (118 - 12) * glideEase;
+      const env = m < 0.2 ? m / 0.2 : Math.max(0, (0.98 - m) / 0.78);
+      drawOrganicLiquidWaves4(
+        ctx,
+        lcx,
+        lcy,
+        Math.min(1, m * 1.1),
+        142,
+        liqPalette,
+        0x3a17,
+        anim.qpGlowPhase * 0.7 + m * 1.5,
+        0.38 * env,
+        false,
+        false
+      );
+    } else if (!s.sui.qpOpen) {
+      /* Dedicated closing trajectory: focused avatar -> top-left profile badge (17, 12) */
+      const cp = 1 - m;
+      const cEase = cp * cp * (3 - 2 * cp);
+      const lcx = glowCx + (17 - glowCx) * cEase;
+      const lcy = cy + (12 - cy) * cEase - Math.sin(cp * Math.PI) * 14;
+      const env = cp < 0.18 ? cp / 0.18 : Math.max(0, (1 - cp) / 0.82);
+      const closeMaxR = Math.max(22, 134 * (1 - cEase * 0.76));
+      drawOrganicLiquidWaves4(
+        ctx,
+        lcx,
+        lcy,
+        Math.min(1, 0.25 + cp * 0.85),
+        closeMaxR,
+        liqPalette,
+        0x8d43,
+        anim.qpGlowPhase * 0.8 - cp * 1.7,
+        0.42 * env,
+        true,
+        false
+      );
+    }
+  }
+
+  ctx.globalAlpha = Math.max(0.05, ease);
+  /* R15 Minimalist centered profile strip (no title, no 11/43 counter, no ACT. badge, no names, no footer) */
+  const mx = 12 + zoomInsetX;
+  const my = 76 + dy + zoomInsetY;
+  const mw = 296 - zoomInsetX * 2;
+  const mh = 88 - zoomInsetY * 2;
+  const boxBg = theme.isLight ? '#fafcff' : '#121620';
+
+  traceRoundedRect(ctx, mx - 1, my - 1, mw + 2, mh + 2, 13);
+  ctx.fillStyle = theme.borderSubtle;
+  ctx.fill();
+  traceRoundedRect(ctx, mx, my, mw, mh, 12);
+  ctx.fillStyle = boxBg;
+  ctx.fill();
 
   const qpMouse = isMouseModeActive(s) && s.sui.hoverValid;
+  ctx.textBaseline = 'middle';
   ctx.font = 'bold 8px "JetBrains Mono", monospace';
   if (winStart > 0) {
     ctx.fillStyle = qpMouse && s.sui.hoverKind === 'QP_PREV' ? theme.accentPrimary : theme.textSecondary;
@@ -2658,12 +3430,6 @@ function drawQuickProfileOverlay(
     ctx.fillText('>', mx + mw - 12, cy);
   }
 
-  const rel = cur - winStart;
-  const tgtGx = startX + rel * stride + diam / 2;
-  const glowCx = anim.qpGlowX > 0 ? anim.qpGlowX : tgtGx;
-  const trailCx = anim.qpTrailX > 0 ? anim.qpTrailX : glowCx;
-  const glowCy = (anim.qpGlowY > 0 ? anim.qpGlowY : 114) + dy;
-
   /* Diffused ghost glow wake when navigating between profiles */
   if (Math.abs(glowCx - trailCx) >= 3) {
     const midWx = (glowCx + trailCx) * 0.5;
@@ -2672,7 +3438,7 @@ function drawQuickProfileOverlay(
   }
 
   const bouncePx = anim.qpSelBounce * 4;
-  drawMulticolorFocusRing(ctx, glowCx, glowCy, 36 + bouncePx, 3, anim.qpGlowPhase, theme.isLight, ease);
+  drawMulticolorFocusRing(ctx, glowCx, glowCy, 40 + bouncePx, 3, anim.qpGlowPhase, theme.isLight, ease);
 
   let birthSlotCx = 160;
   for (let v = 0; v < shown; v++) {
@@ -2682,26 +3448,17 @@ function drawQuickProfileOverlay(
     const focused = slot === cur;
     const slotHov = qpMouse && s.sui.hoverKind === 'QP_SLOT' && s.sui.hoverIndex === slot;
 
-    /* Staggered sequential cascade reveal on selector open */
-    const stagDelay = v * 0.085;
-    const slotOpen = m <= stagDelay ? 0.12 : Math.min(1, (m - stagDelay) / (1 - stagDelay));
-    const stagDy = Math.round((1 - slotOpen) * 10);
-    const slotAlpha = Math.max(0.18, slotOpen * ease);
-
-    const slotScale = slot >= 0 && slot < 9 ? anim.qpSlotScales[slot] : focused ? 1.06 : 0.88;
+    /* Aligned smooth reveal */
+    const slotAlpha = Math.max(0.18, ease);
+    const slotScale =
+      slot >= 0 && slot < NL_MAX_PROFILES + 1 ? anim.qpSlotScales[slot] : focused ? 1.06 : 0.88;
     let curDiam = diam * slotScale + (focused ? bouncePx : 0);
-    curDiam = Math.max(16, curDiam * (0.62 + 0.38 * slotOpen));
+    curDiam = Math.max(16, curDiam * (0.72 + 0.28 * ease));
 
     const liftY = focused && anim.qpSelBounce > 0.05 ? -1 : 0;
-    const scy = cy + stagDy + liftY;
+    const scy = cy + liftY;
     const sx = scx - curDiam / 2;
     const sy = scy - curDiam / 2;
-
-    if (focused) {
-      traceCapsule(ctx, sx + 2, sy + curDiam - 1, curDiam - 4, 4);
-      ctx.fillStyle = theme.isLight ? 'rgba(195, 205, 220, 0.85)' : 'rgba(4, 6, 10, 0.85)';
-      ctx.fill();
-    }
 
     if (slot < pcount) {
       const p = s.profiles.items[slot];
@@ -2715,45 +3472,19 @@ function drawQuickProfileOverlay(
         ctx.fill();
       }
       drawCircularAvatar(ctx, sx, sy, curDiam, p.avatarId, false, theme, imgCache);
-      ctx.restore();
-
-      const shortLbl = p.name.slice(0, 7);
-      ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
-      const lw = ctx.measureText(shortLbl).width;
-      ctx.fillStyle = focused || slotHov ? theme.textPrimary : theme.textSecondary;
-      ctx.fillText(shortLbl, Math.round(scx - lw / 2), cy + Math.floor(diam / 2) + 10);
-
-      if (isAct) {
-        traceRoundedRect(ctx, scx - 14, sy - 11, 28, 9, 4.5);
-        ctx.fillStyle = theme.accentPrimary;
-        ctx.fill();
-        ctx.font = 'bold 6.5px "JetBrains Mono", monospace';
-        ctx.fillStyle = theme.textOnAccent;
-        ctx.fillText('ACT.', scx - 11, sy - 6.3);
+      if (isProfileProtected(s, slot)) {
+        drawMiniPadlock(ctx, Math.round(sx + curDiam - 8), Math.round(sy + curDiam - 10), theme);
       }
+      ctx.restore();
     } else {
       const full = pcount >= NL_MAX_PROFILES || firstFreeAvatar(s) < 0;
       const rotProgress = focused ? anim.qpPlusFocus : 0;
       drawPlusBadgeWithRotation(ctx, scx, scy, curDiam, rotProgress, slotAlpha, full, focused, theme);
-
-      const addLbl = full ? 'Complet' : 'Ajouter';
-      ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
-      const lw = ctx.measureText(addLbl).width;
-      ctx.fillStyle = focused ? theme.textPrimary : theme.textSecondary;
-      ctx.fillText(addLbl, Math.round(scx - lw / 2), cy + Math.floor(diam / 2) + 10);
     }
   }
 
-  ctx.fillStyle = theme.borderSubtle;
-  ctx.fillRect(mx + 12, my + mh - 24, mw - 24, 1);
-  const hint = '< > Choisir   EXE Valider   ESC Fermer';
-  ctx.font = 'bold 7px "JetBrains Mono", monospace';
-  const hw = ctx.measureText(hint).width;
-  ctx.fillStyle = theme.textSecondary;
-  ctx.fillText(hint, Math.round(mx + (mw - hw) / 2), my + mh - 12);
-
   if (anim.profBirthProgress < 1) {
-    drawProfileBirthTransition(ctx, anim, theme, imgCache, birthSlotCx, cy - 2);
+    drawProfileBirthTransition(ctx, anim, theme, imgCache, birthSlotCx, cy - 2, s.displayMode);
   }
 
   ctx.restore();
@@ -2780,6 +3511,8 @@ const SETTINGS_ICONS_11X11: Record<SettingsIconId, number[]> = {
   ICONS: [0x000, 0x3fe, 0x202, 0x2c2, 0x2c2, 0x212, 0x23a, 0x27e, 0x2fe, 0x3fe, 0x000],
   HOTKEY: [0x000, 0x060, 0x0c0, 0x180, 0x3fe, 0x030, 0x060, 0x0c0, 0x180, 0x000, 0x000],
   PROFILES: [0x000, 0x0e0, 0x1f0, 0x1f0, 0x0e0, 0x000, 0x1f0, 0x3f8, 0x3f8, 0x3f8, 0x000],
+  DIAG: [0x020, 0x070, 0x0d8, 0x1a4, 0x1a4, 0x326, 0x306, 0x222, 0x3fe, 0x1fc, 0x000],
+  ANIM: [0x020, 0x020, 0x070, 0x3fe, 0x0f8, 0x070, 0x020, 0x140, 0x220, 0x000, 0x000],
 };
 
 function drawSettingsIcon11x11(
@@ -2835,7 +3568,8 @@ function drawSettingsChrome(
   title: string,
   headerIcon: SettingsIconId | null,
   hints: [string, string][],
-  gearRotationRad = 0
+  gearRotationRad = 0,
+  hidePowerBtn = false
 ) {
   ctx.fillStyle = theme.bgMain;
   ctx.fillRect(0, 0, NL_SCREEN_W, NL_SCREEN_H);
@@ -2866,17 +3600,19 @@ function drawSettingsChrome(
   ctx.fillText(title, 33, 13);
 
   /* Discreet Power button right next to the Settings title (triggered by DEL or click) */
-  const titleW = Math.ceil(ctx.measureText(title).width);
-  const pwrX = Math.min(222, 33 + titleW + 6);
-  if (pwrX + 17 <= 248) {
-    drawSettingsIconBadge(ctx, pwrX, 4, 17, 'POWER', 0.65, false, theme);
-    if (pwrX + 41 <= 248) {
-      traceRoundedRect(ctx, pwrX + 19, 6, 22, 13, 3);
-      ctx.fillStyle = theme.pillBg;
-      ctx.fill();
-      ctx.font = 'bold 6.8px "JetBrains Mono", monospace';
-      ctx.fillStyle = theme.textSecondary;
-      ctx.fillText('DEL', pwrX + 22, 12.8);
+  if (!hidePowerBtn) {
+    const titleW = Math.ceil(ctx.measureText(title).width);
+    const pwrX = Math.min(222, 33 + titleW + 6);
+    if (pwrX + 17 <= 248) {
+      drawSettingsIconBadge(ctx, pwrX, 4, 17, 'POWER', 0.65, false, theme);
+      if (pwrX + 41 <= 248) {
+        traceRoundedRect(ctx, pwrX + 19, 6, 22, 13, 3);
+        ctx.fillStyle = theme.pillBg;
+        ctx.fill();
+        ctx.font = 'bold 6.8px "JetBrains Mono", monospace';
+        ctx.fillStyle = theme.textSecondary;
+        ctx.fillText('DEL', pwrX + 22, 12.8);
+      }
     }
   }
 
@@ -3020,10 +3756,12 @@ type SettingsAnimState = {
   switchShortcutsAnim: number;
   switchTouchpadAnim: number;
   switchTouchpadModeAnim: number;
+  switchTapClickAnim: number;
   tpTabTransAnim: number;
   tpStyleGlowAnim: number;
   tpStyleHaloPhase: number;
   curStylePhase: number;
+  curClickPulse: number;
   lastTpStyleCursor: number;
   curX: number;
   curY: number;
@@ -3080,6 +3818,7 @@ type SettingsAnimState = {
   setDropCanvas: HTMLCanvasElement | null;
   setDropImage: ImageData | null;
   qpOpenAnim: number;
+  qpOpening: boolean;
   qpGlowX: number;
   qpGlowY: number;
   qpTrailX: number;
@@ -3090,6 +3829,7 @@ type SettingsAnimState = {
   qpGlowPhase: number;
   lastProfSwitchSeq: number;
   profSwitchProgress: number;
+  profSwitchFromAvatarId: number;
   profSwitchAvatarId: number;
   profSwitchOriginX: number;
   profSwitchOriginY: number;
@@ -3102,20 +3842,42 @@ type SettingsAnimState = {
   profBirthProgress: number;
   profBirthAvatarId: number;
   profBirthSlot: number;
+  lastReturnDropSeq: number;
+  returnDropStartMs: number | null;
+  returnDropGameIdx: number;
 };
 
-function getScreenChromeMeta(screen: SettingsScreenId): {
+function getScreenChromeMeta(
+  screen: SettingsScreenId,
+  s?: LauncherState
+): {
   title: string;
   icon: SettingsIconId | null;
   hints: [string, string][];
 } {
   switch (screen) {
+    case 'SETTINGS_RESCAN':
+      return {
+        title: 'RESCANNER LES JEUX',
+        icon: 'REFRESH',
+        hints: s?.sui.rescan.emptyConfirmPending
+          ? [
+              ['L/R', 'Choisir'],
+              ['EXE', 'Valider'],
+              ['ESC', 'Garder'],
+            ]
+          : [
+              ['DEL', 'Relancer'],
+              ['EXE/ESC', 'Retour'],
+            ],
+      };
     case 'SETTINGS_HOTKEY':
       return {
         title: 'RACCOURCI GLOBAL TI-OS',
         icon: 'HOTKEY',
         hints: [
-          ['EXE', 'Activer/Des.'],
+          ['UP/DN', 'Choix'],
+          ['EXE/L/R', 'Modif.'],
           ['ESC', 'Retour'],
         ],
       };
@@ -3126,6 +3888,16 @@ function getScreenChromeMeta(screen: SettingsScreenId): {
         hints: [
           ['UP/DN', 'Option'],
           ['EXE', 'Modifier'],
+          ['ESC', 'Retour'],
+        ],
+      };
+    case 'SETTINGS_ANIMATIONS':
+      return {
+        title: 'ANIMATIONS',
+        icon: 'ANIM',
+        hints: [
+          ['UP/DN', 'Choix'],
+          ['EXE', 'Activer'],
           ['ESC', 'Retour'],
         ],
       };
@@ -3205,6 +3977,33 @@ function getScreenChromeMeta(screen: SettingsScreenId): {
           ['EXE', 'Ouvrir'],
           ['ESC', 'Retour'],
         ],
+      };
+    case 'SETTINGS_DIAG':
+      return {
+        title: 'DIAGNOSTICS & JOURNAUX',
+        icon: 'DIAG',
+        hints: s?.sui.diagConfirmModal
+          ? [
+              ['L/R', 'Choisir'],
+              ['EXE', 'Valider'],
+              ['ESC', 'Annuler'],
+            ]
+          : s?.sui.diagDetailOpen
+          ? [
+              ['L/R', 'Preced./Suiv.'],
+              ['EXE/ESC', 'Fermer'],
+            ]
+          : s?.sui.diagTab === 1
+          ? [
+              ['TAB', 'Erreurs'],
+              ['UP/DN', 'Defiler'],
+              ['ESC', 'Retour'],
+            ]
+          : [
+              ['TAB', 'Boot'],
+              ['EXE', 'Detail'],
+              ['DEL', 'Effacer'],
+            ],
       };
     case 'SETTINGS_RESET':
       return {
@@ -3367,6 +4166,22 @@ const G_CURSOR_POINTER_FILL_28 = new Uint8Array([
     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
 ]);
 
+function sampleMaskBilinear(mask: Uint8Array, srcW: number, srcH: number, fx: number, fy: number): number {
+  const x0 = Math.max(0, Math.min(srcW - 1, Math.floor(fx)));
+  const y0 = Math.max(0, Math.min(srcH - 1, Math.floor(fy)));
+  const x1 = Math.min(srcW - 1, x0 + 1);
+  const y1 = Math.min(srcH - 1, y0 + 1);
+  const tx = Math.max(0, Math.min(1, fx - x0));
+  const ty = Math.max(0, Math.min(1, fy - y0));
+  const v00 = mask[y0 * srcW + x0];
+  const v10 = mask[y0 * srcW + x1];
+  const v01 = mask[y1 * srcW + x0];
+  const v11 = mask[y1 * srcW + x1];
+  const top = v00 + (v10 - v00) * tx;
+  const bot = v01 + (v11 - v01) * tx;
+  return Math.round(top + (bot - top) * ty);
+}
+
 function drawCursorAlphaSprite(
   ctx: CanvasRenderingContext2D,
   style: CursorStyle,
@@ -3374,7 +4189,8 @@ function drawCursorAlphaSprite(
   hy: number,
   opacity: number,
   theme: ConsoleThemePalette,
-  animPhase = 0
+  animPhase = 0,
+  size: CursorSize = 'medium'
 ) {
   if (opacity <= 0.01 || style === 'none') return;
   const isPointer = style === 'pointer';
@@ -3385,12 +4201,33 @@ function drawCursorAlphaSprite(
       ? G_CURSOR_CIRCLE_28
       : G_CURSOR_POINTER_ALPHA_28;
   const fillMask = isPointer ? G_CURSOR_POINTER_FILL_28 : null;
-  const hotX = style === 'arrow' ? 6 : style === 'circle' ? 13 : 7;
-  const hotY = style === 'arrow' ? 2 : style === 'circle' ? 13 : 1;
-  const sw = isPointer ? 22 : 28;
-  const sh = 28;
+  const srcW = isPointer ? 22 : 28;
+  const srcH = 28;
+  const metrics = getCursorSizeMetrics(style, size);
+  const dstW = metrics.width;
+  const dstH = metrics.height;
+  const hotX = metrics.hotX;
+  const hotY = metrics.hotY;
   const sx = Math.round(hx - hotX);
   const sy = Math.round(hy - hotY);
+
+  const scaledAlpha = new Uint8Array(dstW * dstH);
+  const scaledFill = isPointer && fillMask ? new Uint8Array(dstW * dstH) : null;
+  for (let dy = 0; dy < dstH; dy++) {
+    const fy = dstH > 1 ? (dy * (srcH - 1)) / (dstH - 1) : 0;
+    for (let dx = 0; dx < dstW; dx++) {
+      const fx = dstW > 1 ? (dx * (srcW - 1)) / (dstW - 1) : 0;
+      const idx = dy * dstW + dx;
+      scaledAlpha[idx] =
+        dstW === srcW && dstH === srcH ? mask[dy * srcW + dx] : sampleMaskBilinear(mask, srcW, srcH, fx, fy);
+      if (scaledFill && fillMask) {
+        scaledFill[idx] =
+          dstW === srcW && dstH === srcH
+            ? fillMask[dy * srcW + dx]
+            : sampleMaskBilinear(fillMask, srcW, srcH, fx, fy);
+      }
+    }
+  }
 
   const haloCol = theme.isLight ? '#0f172a' : '#ffffff';
   const coreHi = lerpHexColor(theme.accentSecondary, '#ffffff', theme.isLight ? 0.18 : 0.34);
@@ -3400,21 +4237,21 @@ function drawCursorAlphaSprite(
   const ptrBot = lerpHexColor('#142a56', theme.accentPrimary, 10 / 32);
 
   ctx.save();
-  for (let dy = -1; dy <= sh; dy++) {
+  for (let dy = -1; dy <= dstH; dy++) {
     const py = sy + dy;
     if (py < 0 || py >= NL_SCREEN_H) continue;
-    for (let dx = -1; dx <= sw; dx++) {
+    for (let dx = -1; dx <= dstW; dx++) {
       const px = sx + dx;
       if (px < 0 || px >= NL_SCREEN_W) continue;
-      const a8 = dx >= 0 && dx < sw && dy >= 0 && dy < sh ? mask[dy * sw + dx] : 0;
+      const a8 = dx >= 0 && dx < dstW && dy >= 0 && dy < dstH ? scaledAlpha[dy * dstW + dx] : 0;
 
       if (a8 < 180) {
         let maxNb = 0;
         for (let ny = dy - 1; ny <= dy + 1; ny++) {
-          if (ny < 0 || ny >= sh) continue;
+          if (ny < 0 || ny >= dstH) continue;
           for (let nx = dx - 1; nx <= dx + 1; nx++) {
-            if (nx < 0 || nx >= sw) continue;
-            const na = mask[ny * sw + nx];
+            if (nx < 0 || nx >= dstW) continue;
+            const na = scaledAlpha[ny * dstW + nx];
             if (na > maxNb) maxNb = na;
           }
         }
@@ -3432,19 +4269,19 @@ function drawCursorAlphaSprite(
 
       if (a8 === 0) continue;
       let fillStyle: string;
-      if (isPointer && fillMask) {
-        const f8 = fillMask[dy * sw + dx];
+      if (isPointer && scaledFill) {
+        const f8 = scaledFill[dy * dstW + dx];
         if (f8 === 0) {
           fillStyle = ptrEdge;
         } else {
-          const wave = Math.sin(dy * 0.22 + dx * 0.12 + animPhase);
-          const gradT = Math.max(0, Math.min(1, dy / sh + wave * 0.22));
+          const wave = Math.sin((dy / Math.max(1, dstH)) * 6.0 + (dx / Math.max(1, dstW)) * 2.6 + animPhase);
+          const gradT = Math.max(0, Math.min(1, dy / Math.max(1, dstH) + wave * 0.22));
           const gradCol = lerpHexColor(ptrTop, ptrBot, gradT);
           fillStyle = f8 >= 248 ? gradCol : lerpHexColor(ptrEdge, gradCol, f8 / 255);
         }
       } else {
         const distHot = Math.abs(dx - hotX) + Math.abs(dy - hotY);
-        const gradT = Math.min(1, distHot / 28);
+        const gradT = Math.min(1, distHot / Math.max(12, dstH));
         fillStyle = lerpHexColor(coreHi, coreLo, gradT);
       }
 
@@ -3469,6 +4306,8 @@ function drawTouchpadGraphicalCursor(
     s.settings.touchpadCursorStyle === 'circle' || s.settings.touchpadCursorStyle === 'pointer'
       ? s.settings.touchpadCursorStyle
       : 'arrow';
+  const curSize: CursorSize = clampCursorSize(s.settings.cursorSize);
+  const trailScale = curSize === 'small' ? 0.75 : curSize === 'large' ? 1.2 : 1.0;
 
   const hx = anim.curPosInit ? anim.curX : computeTouchpadCursorTarget(s).x;
   const hy = anim.curPosInit ? anim.curY : computeTouchpadCursorTarget(s).y;
@@ -3487,20 +4326,31 @@ function drawTouchpadGraphicalCursor(
     if (i <= 1) {
       const ghostOp = ta * effOp * (i === 0 ? 0.26 : 0.14);
       if (ghostOp >= 0.04) {
-        drawCursorAlphaSprite(ctx, style, tx, ty, ghostOp, theme, anim.curStylePhase);
+        drawCursorAlphaSprite(ctx, style, tx, ty, ghostOp, theme, anim.curStylePhase, curSize);
       }
     }
 
-    const rad = i === 0 ? 4 : i <= 2 ? 3 : 2;
+    const rad = (i === 0 ? 3.5 : i <= 2 ? 2.6 : 1.8) * trailScale;
     ctx.globalAlpha = Math.min(0.6, ta * effOp * 0.55);
     ctx.fillStyle = i <= 1 ? trailCore : trailGlow;
     ctx.beginPath();
     ctx.arc(tx, ty, rad, 0, Math.PI * 2);
     ctx.fill();
   }
+
+  if (anim.curClickPulse > 0.02) {
+    const p = 1 - anim.curClickPulse;
+    const ringR = (4 + p * 12) * trailScale;
+    ctx.globalAlpha = anim.curClickPulse * 0.75;
+    ctx.strokeStyle = theme.accentSecondary;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(hx, hy, ringR, 0, Math.PI * 2);
+    ctx.stroke();
+  }
   ctx.restore();
 
-  drawCursorAlphaSprite(ctx, style, hx, hy, effOp, theme, anim.curStylePhase);
+  drawCursorAlphaSprite(ctx, style, hx, hy, effOp, theme, anim.curStylePhase, curSize);
 }
 
 function drawSingleSettingsSectionBody(
@@ -3557,9 +4407,11 @@ function drawSingleSettingsSectionBody(
 
         let badge = '';
         if (item.id === 'SETTINGS_REFRESH_LIB') {
-          badge = s.sys.cacheValid ? 'CACHE OK' : 'SCAN';
+          badge = `${s.games.length} JEUX`;
         } else if (item.id === 'SETTINGS_HOTKEY') badge = s.settings.globalHotkey ? 'ON' : 'OFF';
         else if (item.id === 'SETTINGS_DISPLAY') badge = LAYOUT_LABELS[s.settings.layout];
+        else if (item.id === 'SETTINGS_ANIMATIONS')
+          badge = LAUNCH_ANIM_SHORT_LABELS[clampLaunchAnimMode(s.settings.launchAnimMode)];
         else if (item.id === 'SETTINGS_TOUCHPAD') badge = s.settings.touchpadNav ? 'ON' : 'OFF';
         else if (item.id === 'SETTINGS_SHORTCUTS') {
           const assigned = s.games.filter((g) => Boolean(g.shortcutKey)).length;
@@ -3589,6 +4441,8 @@ function drawSingleSettingsSectionBody(
           badge = String(icoCount);
         } else if (item.id === 'SETTINGS_PROFILES') {
           badge = getActiveProfile(s).name.slice(0, 9);
+        } else if (item.id === 'SETTINGS_DIAG') {
+          badge = s.diag.entries.length > 0 ? `! ${s.diag.entries.length}` : 'OK';
         } else if (item.id === 'SETTINGS_INFO') badge = `v${NL_LAUNCHER_VERSION_STR}`;
 
         ctx.font = 'bold 8px "JetBrains Mono", monospace';
@@ -3636,81 +4490,202 @@ function drawSingleSettingsSectionBody(
       break;
     }
 
-    case 'SETTINGS_HOTKEY': {
-      traceRoundedRect(ctx, 14, 34, 292, 54, 7);
-      ctx.fillStyle = lerpHexColor(theme.borderSubtle, theme.accentPrimary, selGlow);
+    case 'SETTINGS_RESCAN': {
+      const rs = sui.rescan;
+      traceRoundedRect(ctx, 14, 32, 292, 178, 8);
+      ctx.fillStyle = theme.borderSubtle;
       ctx.fill();
-      traceRoundedRect(ctx, 15, 35, 290, 52, 6);
-      ctx.fillStyle = lerpHexColor(theme.cardBg, theme.cardBgSel, selGlow * 0.45);
+      traceRoundedRect(ctx, 15, 33, 290, 176, 7);
+      ctx.fillStyle = theme.cardBg;
+      ctx.fill();
+
+      if (rs.emptyConfirmPending) {
+        drawSettingsIconBadge(ctx, 24, 42, 18, 'REFRESH', 1, true, theme);
+        ctx.font = 'bold 8.5px "JetBrains Mono", monospace';
+        ctx.fillStyle = '#f87171';
+        ctx.fillText('Aucun jeu detecte !', 48, 52);
+
+        ctx.font = '7.5px "JetBrains Mono", monospace';
+        ctx.fillStyle = theme.textPrimary;
+        ctx.fillText(`La bibliotheque contient ${s.games.length} jeu(x).`, 26, 76);
+        ctx.fillText('Souhaitez-vous conserver les jeux actuels', 26, 90);
+        ctx.fillText('ou remplacer par une liste vide ?', 26, 104);
+
+        ctx.fillStyle = theme.textSecondary;
+        ctx.fillText('Protection #R12 : aucun effacement auto.', 26, 126);
+
+        const selKeep = !rs.emptyConfirmReplace;
+        traceRoundedRect(ctx, 42, 166, 108, 26, 6);
+        ctx.fillStyle = selKeep ? theme.accentPrimary : theme.pillBg;
+        ctx.fill();
+        ctx.font = 'bold 8px "JetBrains Mono", monospace';
+        ctx.fillStyle = selKeep ? theme.textOnAccent : theme.textPrimary;
+        ctx.fillText('Conserver', 68, 179.5);
+
+        traceRoundedRect(ctx, 170, 166, 108, 26, 6);
+        ctx.fillStyle = !selKeep ? '#dc2626' : theme.pillBg;
+        ctx.fill();
+        ctx.fillStyle = !selKeep ? '#ffffff' : theme.textPrimary;
+        ctx.fillText('Vider', 208, 179.5);
+      } else {
+        drawSettingsIconBadge(ctx, 24, 42, 18, 'REFRESH', 1, false, theme);
+        ctx.font = 'bold 8.5px "JetBrains Mono", monospace';
+        ctx.fillStyle = '#4ade80';
+        ctx.fillText(`Rescan #${Math.max(1, rs.rescanCount)} termine`, 48, 52);
+
+        ctx.font = '7.5px "JetBrains Mono", monospace';
+        const rows: [string, string, string][] = [
+          ['Jeux trouves', String(rs.gamesFound), theme.textPrimary],
+          ['Conserves / Ajoutes / Retires', `${rs.gamesKept} / +${rs.gamesAdded} / -${rs.gamesRemoved}`, theme.accentSecondary],
+          ['Dossiers memorises', `${rs.memorizedFolders} dossier(s)`, theme.textPrimary],
+          ['Dossiers / Fichiers analyses', `${rs.dirsScanned} / ${rs.filesExamined}`, theme.textSecondary],
+          ['Icones chargees / Monogramme', `${rs.iconsLoaded} / ${rs.iconsFallback}`, '#4ade80'],
+          ['Index permanent', 'nlauncher.lib.tns (CRC32)', theme.accentSecondary],
+        ];
+        let y = 76;
+        for (const [k, v, col] of rows) {
+          ctx.fillStyle = theme.textSecondary;
+          ctx.fillText(k, 26, y);
+          ctx.fillStyle = col;
+          const vw = ctx.measureText(v).width;
+          ctx.fillText(v, 294 - vw, y);
+          y += 18;
+        }
+
+        ctx.font = '7px "JetBrains Mono", monospace';
+        ctx.fillStyle = theme.textSecondary;
+        ctx.fillText('DEL : Relancer un scan  |  EXE / ESC : Retour', 34, 194);
+      }
+      break;
+    }
+
+    case 'SETTINGS_HOTKEY': {
+      const sel0 = sui.hotkeyCursor === 0;
+      const sel1 = sui.hotkeyCursor === 1;
+      const mouseActive = isActiveScreen && isMouseModeActive(s) && sui.hoverValid;
+      const hov0 =
+        mouseActive &&
+        sui.hoverKind === 'SET_ROW' &&
+        sui.hoverIndex === 0;
+      const hov1 =
+        mouseActive &&
+        sui.hoverKind === 'SET_ROW' &&
+        sui.hoverIndex === 1;
+
+      /* Row 0 (y=32, h=44): Enable/Disable TI-OS Hotkey */
+      traceRoundedRect(ctx, 14, 32, 292, 44, 7);
+      ctx.fillStyle = sel0
+        ? theme.accentPrimary
+        : hov0
+        ? theme.accentSecondary
+        : theme.borderSubtle;
+      ctx.fill();
+      traceRoundedRect(ctx, 15, 33, 290, 42, 6);
+      ctx.fillStyle = sel0 ? lerpHexColor(theme.cardBg, theme.cardBgSel, 0.85) : theme.cardBg;
       ctx.fill();
 
       drawSettingsIconBadge(
         ctx,
         22,
-        49,
+        43,
         22,
         'HOTKEY',
-        anim.switchHotkeyAnim,
+        sel0 ? 1 : anim.switchHotkeyAnim,
         false,
         theme
       );
 
       ctx.font = 'bold 8px "JetBrains Mono", monospace';
       ctx.fillStyle = theme.textPrimary;
-      ctx.fillText('Raccourci Ctrl + Menu (TI-OS)', 50, 50);
+      ctx.fillText('Ouvrir depuis les menus TI-OS', 50, 49);
 
       ctx.font = '7.5px "JetBrains Mono", monospace';
-      ctx.fillStyle = lerpHexColor(
-        theme.textSecondary,
-        theme.accentSecondary,
-        anim.switchHotkeyAnim
-      );
-      ctx.fillText(
-        s.settings.globalHotkey
-          ? 'Actif dans les menus TI-OS'
-          : 'Desactive (recommande par defaut)',
-        50,
-        65
-      );
-      drawToggleSwitch(ctx, 262, 52, anim.switchHotkeyAnim, theme);
+      const r0Sub = s.settings.globalHotkey
+        ? s.sys.hotkeyRamActive
+          ? 'Actif en RAM + ndless/startup'
+          : 'Active (hook RAM en attente)'
+        : 'Desactive (aucun lancement auto)';
+      ctx.fillStyle = s.settings.globalHotkey
+        ? s.sys.hotkeyRamActive
+          ? '#4ade80'
+          : theme.accentSecondary
+        : theme.textSecondary;
+      ctx.fillText(r0Sub, 50, 63);
+      drawToggleSwitch(ctx, 262, 46, anim.switchHotkeyAnim, theme);
 
-      traceRoundedRect(ctx, 14, 96, 292, 114, 7);
+      /* Row 1 (y=80, h=32): Combo Selector */
+      traceRoundedRect(ctx, 14, 80, 292, 32, 6);
+      ctx.fillStyle = sel1
+        ? theme.accentPrimary
+        : hov1
+        ? theme.accentSecondary
+        : theme.borderSubtle;
+      ctx.fill();
+      traceRoundedRect(ctx, 15, 81, 290, 30, 5);
+      ctx.fillStyle = sel1 ? lerpHexColor(theme.cardBg, theme.cardBgSel, 0.85) : theme.cardBg;
+      ctx.fill();
+
+      ctx.font = 'bold 8px "JetBrains Mono", monospace';
+      ctx.fillStyle = theme.textPrimary;
+      ctx.fillText('Combinaison', 22, 99);
+
+      const comboLbl = `< ${HOTKEY_COMBO_LABELS[s.settings.hotkeyCombo ?? 'ctrl_menu']} >`;
+      const pillW = Math.max(110, Math.min(170, comboLbl.length * 6 + 14));
+      const pillX = 298 - pillW;
+      traceRoundedRect(ctx, pillX, 86, pillW, 20, 4);
+      ctx.fillStyle = theme.pillBg;
+      ctx.fill();
+      ctx.font = 'bold 7.5px "JetBrains Mono", monospace';
+      ctx.fillStyle = sel1 ? theme.accentPrimary : theme.accentSecondary;
+      ctx.fillText(comboLbl, pillX + 6, 99);
+
+      /* RAM Hook, Ndless Mode & Safety Box (y=116, h=100) */
+      traceRoundedRect(ctx, 14, 116, 292, 100, 6);
       ctx.fillStyle = theme.cardBg;
       ctx.fill();
 
-      ctx.font = 'bold 7.5px "JetBrains Mono", monospace';
+      ctx.font = '7.4px "JetBrains Mono", monospace';
       ctx.fillStyle = theme.textSecondary;
-      ctx.fillText('Module :', 24, 111);
-      ctx.fillStyle = s.sys.hotkeyActive ? '#4ade80' : theme.textSecondary;
+      ctx.fillText('Etat RAM :', 22, 129);
+      ctx.fillStyle = s.sys.hotkeyRamActive ? '#4ade80' : theme.textSecondary;
       ctx.fillText(
-        s.sys.hotkeyActive
-          ? 'nl_hotkey.tns installe (startup)'
-          : 'Non installe (aucun hook)',
-        96,
-        111
+        s.sys.hotkeyRamActive ? 'Hook get_event actif (0 SWI)' : 'Aucun hook actif en RAM',
+        94,
+        129
       );
 
       ctx.fillStyle = theme.textSecondary;
-      ctx.fillText('Touche :', 24, 127);
+      ctx.fillText('Ndless :', 22, 142);
       ctx.fillStyle = theme.accentSecondary;
-      ctx.fillText('Ctrl + Menu (depuis TI-OS)', 96, 127);
+      ctx.fillText(
+        s.sys.ndlessPersistent ? 'Persistant (survit reboot)' : 'Classique (RAM session)',
+        94,
+        142
+      );
 
+      ctx.font = 'bold 7.5px "JetBrains Mono", monospace';
       ctx.fillStyle = theme.textPrimary;
-      ctx.fillText('Protections actives :', 24, 145);
-      ctx.font = '7.2px "JetBrains Mono", monospace';
+      ctx.fillText('Protections & compatibilite :', 22, 158);
+      ctx.font = '7.1px "JetBrains Mono", monospace';
       ctx.fillStyle = theme.textSecondary;
-      ctx.fillText('- Ignore pendant les jeux (verrou actif).', 24, 159);
-      ctx.fillText('- Anti-rebond + garde anti-reentrance.', 24, 172);
-      ctx.fillText('- Maintenir ESC ou ON au boot coupe le hook.', 24, 185);
-      if (s.sys.hotkeyDiag) {
-        drawEllipsisText(ctx, 24, 199, s.sys.hotkeyDiag, 270, theme.accentSecondary);
-      }
+      ctx.fillText('- Manuel uniquement (pas d\'autostart)', 22, 171);
+      ctx.fillText('- Evite le menu contextuel TI-OS', 22, 184);
+      ctx.fillText('- Bloque en jeu + anti double-lancement', 22, 197);
+      ctx.fillStyle = s.sys.ndlessPersistent ? '#4ade80' : '#fbbf24';
+      ctx.fillText(
+        s.sys.ndlessPersistent
+          ? '- Maint. ESC ou ON au boot = desactive'
+          : '- Classique: relancer Ndless apres reboot',
+        22,
+        210
+      );
       break;
     }
 
     case 'SETTINGS_DISPLAY': {
       const dispIcons: SettingsIconId[] = [
         'GRID',
+        'SCREEN',
         'TAG',
         'BOTTOMBAR',
         'POWER',
@@ -3718,7 +4693,7 @@ function drawSingleSettingsSectionBody(
       const vis = 3;
       const rowY0 = 30;
       const rowH = 28;
-      const rowGap = 2;
+      const rowGap = 3;
       const stride = rowH + rowGap;
       const scrollPx = isActiveScreen
         ? Math.round(anim.listScrollPx)
@@ -3779,12 +4754,22 @@ function drawSingleSettingsSectionBody(
           );
           ctx.fillText(layLabel, pillX + 6, ry + 14.5);
         } else if (idx === 1) {
+          ctx.fillText('Sens de defilement', 41, ry + 14.5);
+          const dirLabel = `< ${SCROLL_DIR_LABELS[s.settings.scrollDir ?? 'vertical']} >`;
+          const lw = ctx.measureText(dirLabel).width;
+          const pillX = 284 - lw - 10;
+          traceRoundedRect(ctx, pillX, ry + 6, lw + 12, 16, 4);
+          ctx.fillStyle = theme.pillBg;
+          ctx.fill();
+          ctx.fillStyle = theme.accentSecondary;
+          ctx.fillText(dirLabel, pillX + 6, ry + 14.5);
+        } else if (idx === 2) {
           ctx.fillText('Titres sous les jaquettes', 41, ry + 14.5);
           drawToggleSwitch(ctx, 260, ry + 7, anim.switchShowNamesAnim, theme);
-        } else if (idx === 2) {
+        } else if (idx === 3) {
           ctx.fillText("Barre d'aide en bas", 41, ry + 14.5);
           drawToggleSwitch(ctx, 260, ry + 7, anim.switchShortcutsAnim, theme);
-        } else if (idx === 3) {
+        } else if (idx === 4) {
           ctx.fillText('Eteindre la calculatrice', 41, ry + 14.5);
           const pwrStr = 'DEL/EXE';
           const pw = ctx.measureText(pwrStr).width;
@@ -3828,9 +4813,139 @@ function drawSingleSettingsSectionBody(
       break;
     }
 
+    case 'SETTINGS_ANIMATIONS': {
+      ctx.font = 'bold 7.4px "JetBrains Mono", monospace';
+      ctx.fillStyle = theme.textSecondary;
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Personnalisation independante (4 categories)', 16, 36);
+
+      const openMode = clampAppOpenAnimMode(s.settings.appOpenAnim);
+      const closeMode = clampAppCloseAnimMode(s.settings.appCloseAnim);
+      const launchMode = clampLaunchAnimMode(s.settings.launchAnimMode);
+      const returnMode = clampReturnAnimMode(s.settings.returnAnimMode);
+
+      const rowValues: readonly string[] = [
+        APP_OPEN_ANIM_LABELS[openMode],
+        APP_CLOSE_ANIM_LABELS[closeMode],
+        LAUNCH_ANIM_LABELS[launchMode],
+        RETURN_ANIM_LABELS[returnMode],
+      ];
+      const rowSubtitles: readonly string[] = [
+        APP_OPEN_ANIM_SUBTITLES[openMode],
+        APP_CLOSE_ANIM_SUBTITLES[closeMode],
+        LAUNCH_ANIM_SUBTITLES[launchMode],
+        RETURN_ANIM_SUBTITLES[returnMode],
+      ];
+
+      const rowY0 = 48;
+      const rowH = 25;
+      const stride = 28;
+      const curRow = Math.max(0, Math.min(NL_ANIM_CAT_COUNT - 1, sui.animCursor));
+      const selY = rowY0 + curRow * stride;
+
+      traceRoundedRect(ctx, 13, selY - 1, 294, rowH + 2, 7);
+      ctx.fillStyle = theme.accentPrimary;
+      ctx.fill();
+
+      for (let idx = 0; idx < NL_ANIM_CAT_COUNT; idx++) {
+        const ry = rowY0 + idx * stride;
+        const isSel = idx === curRow;
+
+        traceRoundedRect(ctx, 14, ry, 292, rowH, 6);
+        ctx.fillStyle = isSel ? theme.cardBgSel : theme.cardBg;
+        ctx.fill();
+
+        ctx.font = 'bold 7.6px "JetBrains Mono", monospace';
+        ctx.fillStyle = theme.textPrimary;
+        ctx.textAlign = 'left';
+        ctx.fillText(ANIM_CATEGORY_LABELS[idx], 22, ry + 12.5);
+
+        const valLabel = `< ${rowValues[idx]} >`;
+        const badgeW = 128;
+        const badgeX = 300 - badgeW;
+        traceRoundedRect(ctx, badgeX, ry + 4, badgeW, 17, 6);
+        ctx.fillStyle = isSel ? theme.accentPrimary : theme.pillBg;
+        ctx.fill();
+
+        ctx.font = 'bold 6.8px "JetBrains Mono", monospace';
+        ctx.fillStyle = isSel ? theme.textOnAccent : theme.accentSecondary;
+        ctx.textAlign = 'center';
+        ctx.fillText(valLabel, badgeX + badgeW / 2, ry + 12.7);
+        ctx.textAlign = 'left';
+      }
+
+      /* Dynamic bottom visual cue box for the focused category & mode */
+      traceRoundedRect(ctx, 14, 165, 292, 46, 6);
+      ctx.fillStyle = theme.cardBg;
+      ctx.fill();
+      ctx.strokeStyle = theme.borderSubtle;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      const isLiquidCue =
+        (curRow === 0 && openMode === 'liquid') ||
+        (curRow === 1 && closeMode === 'liquid') ||
+        (curRow === 2 && launchMode === 'theme_drop') ||
+        (curRow === 3 && returnMode === 'liquid');
+      const isSpinnerCue = curRow === 2 && launchMode === 'spinner';
+      const isBarCue = curRow === 2 && launchMode === 'loading_bar';
+
+      if (isLiquidCue) {
+        const pal = getLiquidThemePalette4(s.displayMode, theme);
+        const radii = [11.5, 9.2, 6.8, 4.5];
+        const irregs = [0.22, 0.42, 0.65, 0.88];
+        for (let d = 0; d < 4; d++) {
+          ctx.save();
+          ctx.fillStyle = pal[d];
+          ctx.beginPath();
+          traceOrganicLiquidPath(ctx, 34 + d * 7, 188, radii[d], irregs[d], 0x51a7 + d * 31, d * 0.6, true);
+          ctx.fill();
+          ctx.restore();
+        }
+      } else if (isSpinnerCue) {
+        for (let d = 0; d < 8; d++) {
+          const ang = (d * Math.PI) / 4;
+          ctx.beginPath();
+          ctx.arc(40 + Math.cos(ang) * 7, 188 + Math.sin(ang) * 7, 1.5, 0, Math.PI * 2);
+          ctx.fillStyle = d === 0 ? theme.accentPrimary : theme.textSecondary;
+          ctx.fill();
+        }
+      } else if (isBarCue) {
+        traceRoundedRect(ctx, 22, 185, 48, 6, 3);
+        ctx.fillStyle = theme.borderSubtle;
+        ctx.fill();
+        traceRoundedRect(ctx, 22, 185, 32, 6, 3);
+        ctx.fillStyle = theme.accentPrimary;
+        ctx.fill();
+      } else {
+        traceRoundedRect(ctx, 26, 178, 28, 20, 5);
+        ctx.strokeStyle = theme.accentPrimary;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(40, 188, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = theme.accentPrimary;
+        ctx.fill();
+      }
+
+      ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
+      ctx.fillStyle = theme.textPrimary;
+      ctx.fillText(`${ANIM_CATEGORY_LABELS[curRow]} : ${rowValues[curRow]}`, 78, 180);
+
+      ctx.font = '6.6px "JetBrains Mono", monospace';
+      ctx.fillStyle = theme.textSecondary;
+      ctx.fillText(rowSubtitles[curRow], 78, 195);
+      break;
+    }
+
     case 'SETTINGS_TOUCHPAD': {
       const isTab1 = sui.tpTab === 1;
       const mouseOn = isActiveScreen && isMouseModeActive(s) && sui.hoverValid;
+      const activeSize: CursorSize = clampCursorSize(s.settings.cursorSize);
+      const activeStyle: CursorStyle =
+        s.settings.touchpadCursorStyle === 'circle' || s.settings.touchpadCursorStyle === 'pointer'
+          ? s.settings.touchpadCursorStyle
+          : 'arrow';
 
       /* Top 2-Tab Bar (y = 28..44) */
       traceRoundedRect(ctx, 14, 28, 292, 16, 5);
@@ -3863,359 +4978,224 @@ function drawSingleSettingsSectionBody(
         ctx.stroke();
       }
       ctx.fillStyle = t1Fg;
-      ctx.fillText('2. Apparence curseur', 163, 36.3);
+      ctx.fillText('2. Curseur & Taille', 168, 36.3);
 
       if (!isTab1) {
-        const curRow = Math.max(0, Math.min(4, sui.tpCursor));
+        const curRow = Math.max(0, Math.min(6, sui.tpCursor));
         const sens = clampTouchpadSensitivity(s.settings.touchpadSensitivity);
         const cspd = clampCursorSpeed(s.settings.cursorSpeed);
         const isMouseMode = s.settings.touchpadMode === 'mouse';
-
-        const hovR0 = mouseOn && sui.hoverKind === 'SET_ROW' && sui.hoverIndex === 0;
-        const hovR1 = mouseOn && sui.hoverKind === 'SET_ROW' && sui.hoverIndex === 1;
-        const hovR2 =
-          mouseOn &&
-          (sui.hoverKind === 'SET_ROW' || sui.hoverKind === 'SET_SLIDER_NOTCH') &&
-          sui.hoverIndex === 2;
-        const hovR3 =
-          mouseOn &&
-          (sui.hoverKind === 'SET_ROW' || sui.hoverKind === 'SET_SLIDER_NOTCH') &&
-          sui.hoverIndex === 3;
-        const hovR4 = mouseOn && sui.hoverKind === 'SET_ROW' && sui.hoverIndex === 4;
-
-        /* Row 0 (y=47..75, h=28): Navigation Mode Selector (Pave tactile / Souris) */
-        traceRoundedRect(ctx, 14, 47, 292, 28, 6);
-        ctx.fillStyle =
-          curRow === 0
-            ? lerpHexColor(theme.borderSubtle, theme.accentPrimary, selGlow)
-            : hovR0
-            ? theme.accentSecondary
-            : theme.borderSubtle;
-        ctx.fill();
-        traceRoundedRect(ctx, 15, 48, 290, 26, 5);
-        ctx.fillStyle =
-          curRow === 0 ? lerpHexColor(theme.cardBg, theme.cardBgSel, selGlow * 0.45) : theme.cardBg;
-        ctx.fill();
-
-        ctx.font = 'bold 7.6px "JetBrains Mono", monospace';
-        ctx.fillStyle = theme.textPrimary;
-        ctx.fillText('Mode de navigation', 22, 61);
-
-        const modeTxt = `< ${TOUCHPAD_MODE_LABELS[s.settings.touchpadMode]} >`;
-        const mw = Math.ceil(ctx.measureText(modeTxt).width) + 12;
-        const mxPill = 294 - mw;
-        traceRoundedRect(ctx, mxPill, 53, mw, 16, 4);
-        ctx.fillStyle = isMouseMode ? theme.accentPrimary : theme.pillBg;
-        ctx.fill();
-        ctx.fillStyle = isMouseMode ? theme.textOnAccent : theme.accentSecondary;
-        ctx.fillText(modeTxt, mxPill + 6, 61.3);
-
-        /* Row 1 (y=77..104, h=27): Touchpad Slide Nav ON/OFF (Mode 1) */
-        traceRoundedRect(ctx, 14, 77, 292, 27, 6);
-        ctx.fillStyle =
-          curRow === 1
-            ? lerpHexColor(theme.borderSubtle, theme.accentPrimary, selGlow)
-            : hovR1
-            ? theme.accentSecondary
-            : theme.borderSubtle;
-        ctx.fill();
-        traceRoundedRect(ctx, 15, 78, 290, 25, 5);
-        ctx.fillStyle =
-          curRow === 1 ? lerpHexColor(theme.cardBg, theme.cardBgSel, selGlow * 0.45) : theme.cardBg;
-        ctx.fill();
-
-        ctx.font = 'bold 7.4px "JetBrains Mono", monospace';
-        ctx.fillStyle = isMouseMode ? theme.textSecondary : theme.textPrimary;
-        ctx.fillText('Glissement au pave (Mode 1)', 22, 90.5);
-        drawToggleSwitch(ctx, 262, 83, anim.switchTouchpadAnim, theme);
-
-        /* Row 2 (y=106..144, h=38): 5-Detent Slide Sensitivity (Mode 1) */
-        const row2Bg =
-          curRow === 2 ? lerpHexColor(theme.cardBg, theme.cardBgSel, selGlow * 0.45) : theme.cardBg;
-        traceRoundedRect(ctx, 14, 106, 292, 38, 6);
-        ctx.fillStyle =
-          curRow === 2
-            ? lerpHexColor(theme.borderSubtle, theme.accentPrimary, selGlow)
-            : hovR2
-            ? theme.accentSecondary
-            : theme.borderSubtle;
-        ctx.fill();
-        traceRoundedRect(ctx, 15, 107, 290, 36, 5);
-        ctx.fillStyle = row2Bg;
-        ctx.fill();
-
-        ctx.font = 'bold 7.4px "JetBrains Mono", monospace';
-        ctx.fillStyle = theme.textPrimary;
-        ctx.fillText('Sensibilite pave (5 crans)', 22, 115);
-
-        const pulse = Math.max(0, Math.min(1, anim.tpDetentPulse));
-        const sensLabel = TP_SENS_LABELS[sens] ?? TP_SENS_LABELS[NL_TP_SENS_DEFAULT];
-        ctx.font = 'bold 7px "JetBrains Mono", monospace';
-        const lblW = Math.ceil(ctx.measureText(sensLabel).width) + 10;
-        const lblX = 294 - lblW;
-        traceRoundedRect(ctx, lblX, 109, lblW, 12, 4);
-        ctx.fillStyle =
-          curRow === 2
-            ? lerpHexColor(theme.pillBg, theme.accentPrimary, 0.38 + pulse * 0.45)
-            : theme.pillBg;
-        ctx.fill();
-        ctx.fillStyle =
-          curRow === 2
-            ? lerpHexColor(theme.accentSecondary, theme.textOnAccent, 0.44)
-            : theme.accentSecondary;
-        ctx.fillText(sensLabel, lblX + 5, 115.2);
-
-        const trackX = 34;
-        const trackW = 252;
-        const trackY = 128;
-        const posFp = anim.tpSliderDragging ? anim.tpSliderDragPos : anim.tpSliderPos;
-        const handleX = Math.max(
-          trackX - 3,
-          Math.min(trackX + trackW + 3, trackX + (posFp * trackW) / 1024)
-        );
-        const fillW = Math.max(0, Math.min(trackW, handleX - trackX));
+        const rects = getTouchpadTab0RowRects(sui.tpScroll);
         const railCol = lerpHexColor(theme.dotInactive, theme.borderSubtle, 0.32);
-        const activeRailCol =
-          !isMouseMode && s.settings.touchpadNav
-            ? theme.accentPrimary
-            : lerpHexColor(theme.dotInactive, theme.accentPrimary, 0.62);
 
-        traceRoundedRect(ctx, trackX, trackY - 2, trackW, 4, 2);
-        ctx.fillStyle = railCol;
-        ctx.fill();
-        if (fillW >= 4) {
-          traceRoundedRect(ctx, trackX, trackY - 2, fillW, 4, 2);
-          ctx.fillStyle = activeRailCol;
-          ctx.fill();
-        }
-
-        for (let n = 0; n < NL_TP_SENS_COUNT; n++) {
-          const nx = trackX + n * 63;
-          const passed = n <= sens;
-          const isCur = n === sens;
-          const hovN =
+        for (const r of rects) {
+          const ry = r.y;
+          const rh = r.h;
+          const isCur = curRow === r.row;
+          const isHov =
             mouseOn &&
-            sui.hoverKind === 'SET_SLIDER_NOTCH' &&
-            sui.hoverIndex === 2 &&
-            sui.hoverSub === n;
+            ((sui.hoverKind === 'SET_ROW' && sui.hoverIndex === r.row) ||
+              (sui.hoverKind === 'SET_SLIDER_NOTCH' && sui.hoverIndex === r.row));
+          const rowBg = isCur
+            ? lerpHexColor(theme.cardBg, theme.cardBgSel, selGlow * 0.45)
+            : theme.cardBg;
 
-          if ((isCur && pulse > 0.03) || hovN) {
-            ctx.save();
-            ctx.globalAlpha = hovN ? 0.5 : pulse * 0.45;
-            ctx.fillStyle = theme.accentSecondary;
-            ctx.beginPath();
-            ctx.arc(nx, trackY, 5.5 + (hovN ? 1.5 : pulse * 2), 0, Math.PI * 2);
-            ctx.fill();
-            ctx.restore();
-          }
-
-          const tickCol = isCur
-            ? theme.accentSecondary
-            : passed
-            ? activeRailCol
-            : lerpHexColor(theme.textSecondary, theme.dotInactive, 0.5);
-          ctx.fillStyle = tickCol;
-          ctx.beginPath();
-          ctx.arc(nx, trackY, 3.5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = row2Bg;
-          ctx.beginPath();
-          ctx.arc(nx, trackY, 1.5, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.font = 'bold 6.5px "JetBrains Mono", monospace';
-          ctx.fillStyle = isCur || hovN ? theme.accentSecondary : theme.textSecondary;
-          ctx.fillText(String(n + 1), nx - 2, 138);
-        }
-
-        const expand = pulse > 0.45 ? 1 : 0;
-        const kw = 10 + expand * 2;
-        const kh = 11 + expand * 2;
-        const kx = Math.round(handleX - kw / 2);
-        const ky = Math.round(trackY - kh / 2);
-        traceRoundedRect(ctx, kx - 1, ky - 1, kw + 2, kh + 2, 3);
-        ctx.fillStyle =
-          curRow === 2 || pulse > 0
-            ? lerpHexColor(theme.accentPrimary, theme.accentSecondary, 0.5 + pulse * 0.45)
-            : theme.borderSubtle;
-        ctx.fill();
-        traceRoundedRect(ctx, kx, ky, kw, kh, 3);
-        ctx.fillStyle = '#f8fafc';
-        ctx.fill();
-        ctx.fillStyle = activeRailCol;
-        ctx.fillRect(Math.round(handleX - 1), ky + 2, 2, kh - 4);
-
-        /* Row 3 (y=146..184, h=38): 5-Detent Mouse Pointer Speed Slider (Mode 2) */
-        const row3Bg =
-          curRow === 3 ? lerpHexColor(theme.cardBg, theme.cardBgSel, selGlow * 0.45) : theme.cardBg;
-        traceRoundedRect(ctx, 14, 146, 292, 38, 6);
-        ctx.fillStyle =
-          curRow === 3
+          traceRoundedRect(ctx, 14, ry, 290, rh, 6);
+          ctx.fillStyle = isCur
             ? lerpHexColor(theme.borderSubtle, theme.accentPrimary, selGlow)
-            : hovR3
+            : isHov
             ? theme.accentSecondary
             : theme.borderSubtle;
-        ctx.fill();
-        traceRoundedRect(ctx, 15, 147, 290, 36, 5);
-        ctx.fillStyle = row3Bg;
-        ctx.fill();
-
-        ctx.font = 'bold 7.4px "JetBrains Mono", monospace';
-        ctx.fillStyle = theme.textPrimary;
-        ctx.fillText('Vitesse souris (5 crans)', 22, 155);
-
-        const spdPulse = Math.max(0, Math.min(1, anim.tpSpeedDetentPulse));
-        const spdLabel = CURSOR_SPEED_LABELS[cspd] ?? CURSOR_SPEED_LABELS[NL_CURSOR_SPEED_DEFAULT];
-        ctx.font = 'bold 7px "JetBrains Mono", monospace';
-        const slblW = Math.ceil(ctx.measureText(spdLabel).width) + 10;
-        const slblX = 294 - slblW;
-        traceRoundedRect(ctx, slblX, 149, slblW, 12, 4);
-        ctx.fillStyle =
-          curRow === 3
-            ? lerpHexColor(theme.pillBg, theme.accentPrimary, 0.38 + spdPulse * 0.45)
-            : theme.pillBg;
-        ctx.fill();
-        ctx.fillStyle =
-          curRow === 3
-            ? lerpHexColor(theme.accentSecondary, theme.textOnAccent, 0.44)
-            : theme.accentSecondary;
-        ctx.fillText(spdLabel, slblX + 5, 155.2);
-
-        const strackY = 168;
-        const sposFp = anim.tpSpeedSliderDragging ? anim.tpSpeedSliderDragPos : anim.tpSpeedSliderPos;
-        const shandleX = Math.max(
-          trackX - 3,
-          Math.min(trackX + trackW + 3, trackX + (sposFp * trackW) / 1024)
-        );
-        const sfillW = Math.max(0, Math.min(trackW, shandleX - trackX));
-        const sactiveRail = isMouseMode
-          ? theme.accentPrimary
-          : lerpHexColor(theme.dotInactive, theme.accentPrimary, 0.62);
-
-        traceRoundedRect(ctx, trackX, strackY - 2, trackW, 4, 2);
-        ctx.fillStyle = railCol;
-        ctx.fill();
-        if (sfillW >= 4) {
-          traceRoundedRect(ctx, trackX, strackY - 2, sfillW, 4, 2);
-          ctx.fillStyle = sactiveRail;
           ctx.fill();
-        }
+          traceRoundedRect(ctx, 15, ry + 1, 288, rh - 2, 5);
+          ctx.fillStyle = rowBg;
+          ctx.fill();
 
-        for (let n = 0; n < NL_CURSOR_SPEED_COUNT; n++) {
-          const nx = trackX + n * 63;
-          const passed = n <= cspd;
-          const isCur = n === cspd;
-          const hovN =
-            mouseOn &&
-            sui.hoverKind === 'SET_SLIDER_NOTCH' &&
-            sui.hoverIndex === 3 &&
-            sui.hoverSub === n;
+          const midY = ry + rh / 2;
 
-          if ((isCur && spdPulse > 0.03) || hovN) {
-            ctx.save();
-            ctx.globalAlpha = hovN ? 0.5 : spdPulse * 0.45;
-            ctx.fillStyle = theme.accentSecondary;
-            ctx.beginPath();
-            ctx.arc(nx, strackY, 5.5 + (hovN ? 1.5 : spdPulse * 2), 0, Math.PI * 2);
+          if (r.row === 0) {
+            ctx.font = 'bold 7.4px "JetBrains Mono", monospace';
+            ctx.fillStyle = theme.textPrimary;
+            ctx.fillText('Mode de navigation', 22, midY);
+            const modeTxt = `< ${TOUCHPAD_MODE_LABELS[s.settings.touchpadMode]} >`;
+            const mw = Math.ceil(ctx.measureText(modeTxt).width) + 10;
+            const mxPill = 294 - mw;
+            traceRoundedRect(ctx, mxPill, ry + 5, mw, 16, 4);
+            ctx.fillStyle = isMouseMode ? theme.accentPrimary : theme.pillBg;
             ctx.fill();
-            ctx.restore();
+            ctx.fillStyle = isMouseMode ? theme.textOnAccent : theme.accentSecondary;
+            ctx.fillText(modeTxt, mxPill + 5, midY + 0.3);
+          } else if (r.row === 1) {
+            ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
+            ctx.fillStyle = isMouseMode ? theme.textSecondary : theme.textPrimary;
+            ctx.fillText('Glissement au pave (Mode 1)', 22, midY);
+            drawToggleSwitch(ctx, 260, ry + 5, anim.switchTouchpadAnim, theme);
+          } else if (r.row === 2 || r.row === 3) {
+            const isSens = r.row === 2;
+            const val = isSens ? sens : cspd;
+            const cnt = isSens ? NL_TP_SENS_COUNT : NL_CURSOR_SPEED_COUNT;
+            const pulse = Math.max(0, Math.min(1, isSens ? anim.tpDetentPulse : anim.tpSpeedDetentPulse));
+            const lbl = isSens
+              ? TP_SENS_LABELS[sens] ?? TP_SENS_LABELS[NL_TP_SENS_DEFAULT]
+              : CURSOR_SPEED_LABELS[cspd] ?? CURSOR_SPEED_LABELS[NL_CURSOR_SPEED_DEFAULT];
+
+            ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
+            ctx.fillStyle = theme.textPrimary;
+            ctx.fillText(isSens ? 'Sensibilite pave (5 crans)' : 'Vitesse du curseur (5 crans)', 22, ry + 9);
+
+            ctx.font = 'bold 6.8px "JetBrains Mono", monospace';
+            const lblW = Math.ceil(ctx.measureText(lbl).width) + 10;
+            const lblX = 294 - lblW;
+            traceRoundedRect(ctx, lblX, ry + 3, lblW, 12, 4);
+            ctx.fillStyle = isCur
+              ? lerpHexColor(theme.pillBg, theme.accentPrimary, 0.38 + pulse * 0.45)
+              : theme.pillBg;
+            ctx.fill();
+            ctx.fillStyle = isCur
+              ? lerpHexColor(theme.accentSecondary, theme.textOnAccent, 0.44)
+              : theme.accentSecondary;
+            ctx.fillText(lbl, lblX + 5, ry + 9.2);
+
+            const trackX = 34;
+            const trackW = 252;
+            const trackY = ry + 22;
+            const posFp = isSens
+              ? anim.tpSliderDragging
+                ? anim.tpSliderDragPos
+                : anim.tpSliderPos
+              : anim.tpSpeedSliderDragging
+              ? anim.tpSpeedSliderDragPos
+              : anim.tpSpeedSliderPos;
+            const handleX = Math.max(trackX - 3, Math.min(trackX + trackW + 3, trackX + (posFp * trackW) / 1024));
+            const fillW = Math.max(0, Math.min(trackW, handleX - trackX));
+            const activeRail = (isSens ? !isMouseMode && s.settings.touchpadNav : isMouseMode)
+              ? theme.accentPrimary
+              : lerpHexColor(theme.dotInactive, theme.accentPrimary, 0.62);
+
+            traceRoundedRect(ctx, trackX, trackY - 2, trackW, 4, 2);
+            ctx.fillStyle = railCol;
+            ctx.fill();
+            if (fillW >= 4) {
+              traceRoundedRect(ctx, trackX, trackY - 2, fillW, 4, 2);
+              ctx.fillStyle = activeRail;
+              ctx.fill();
+            }
+
+            for (let n = 0; n < cnt; n++) {
+              const nx = trackX + n * 63;
+              const isN = n === val;
+              const hovN =
+                mouseOn &&
+                sui.hoverKind === 'SET_SLIDER_NOTCH' &&
+                sui.hoverIndex === r.row &&
+                sui.hoverSub === n;
+              ctx.fillStyle = isN
+                ? theme.accentSecondary
+                : n <= val
+                ? activeRail
+                : lerpHexColor(theme.textSecondary, theme.dotInactive, 0.5);
+              ctx.beginPath();
+              ctx.arc(nx, trackY, 3.2, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.fillStyle = rowBg;
+              ctx.beginPath();
+              ctx.arc(nx, trackY, 1.4, 0, Math.PI * 2);
+              ctx.fill();
+
+              ctx.font = 'bold 6.2px "JetBrains Mono", monospace';
+              ctx.fillStyle = isN || hovN ? theme.accentSecondary : theme.textSecondary;
+              ctx.fillText(String(n + 1), nx - 2, ry + 31.5);
+            }
+
+            const kw = 10 + (pulse > 0.45 ? 2 : 0);
+            const kh = 10 + (pulse > 0.45 ? 2 : 0);
+            const kx = Math.round(handleX - kw / 2);
+            const ky = Math.round(trackY - kh / 2);
+            traceRoundedRect(ctx, kx - 1, ky - 1, kw + 2, kh + 2, 3);
+            ctx.fillStyle = isCur || pulse > 0 ? theme.accentSecondary : theme.borderSubtle;
+            ctx.fill();
+            traceRoundedRect(ctx, kx, ky, kw, kh, 3);
+            ctx.fillStyle = '#f8fafc';
+            ctx.fill();
+            ctx.fillStyle = activeRail;
+            ctx.fillRect(Math.round(handleX - 1), ky + 2, 2, kh - 4);
+          } else if (r.row === 4) {
+            ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
+            ctx.fillStyle = theme.textPrimary;
+            ctx.fillText('Tapotement pour cliquer', 22, midY);
+            const tapTxt = s.settings.tapToClick ? 'OUI' : 'NON';
+            ctx.font = 'bold 6.8px "JetBrains Mono", monospace';
+            ctx.fillStyle = s.settings.tapToClick ? '#4ade80' : theme.textSecondary;
+            ctx.fillText(tapTxt, 232, midY + 0.3);
+            drawToggleSwitch(ctx, 260, ry + 5, anim.switchTapClickAnim, theme);
+          } else if (r.row === 5) {
+            ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
+            ctx.fillStyle = theme.textPrimary;
+            ctx.fillText('Taille du curseur', 22, midY);
+            const szTxt = `< ${CURSOR_SIZE_LABELS[activeSize]} >`;
+            const sw = Math.ceil(ctx.measureText(szTxt).width) + 10;
+            const sxPill = 294 - sw;
+            traceRoundedRect(ctx, sxPill, ry + 5, sw, 16, 4);
+            ctx.fillStyle = isCur || isHov ? theme.accentPrimary : theme.pillBg;
+            ctx.fill();
+            ctx.fillStyle = isCur || isHov ? theme.textOnAccent : theme.accentSecondary;
+            ctx.fillText(szTxt, sxPill + 5, midY + 0.3);
+          } else if (r.row === 6) {
+            ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
+            ctx.fillStyle = theme.textPrimary;
+            ctx.fillText('Personnaliser le curseur', 22, ry + 9);
+            ctx.font = 'bold 6.8px "JetBrains Mono", monospace';
+            ctx.fillStyle = theme.accentSecondary;
+            ctx.fillText(`${CURSOR_STYLE_LABELS[activeStyle]} · ${CURSOR_SIZE_LABELS[activeSize]}`, 22, ry + 20);
+            traceRoundedRect(ctx, 234, ry + 6, 60, 15, 4);
+            ctx.fillStyle = isCur || isHov ? theme.accentPrimary : theme.pillBg;
+            ctx.fill();
+            ctx.font = 'bold 6.8px "JetBrains Mono", monospace';
+            ctx.fillStyle = isCur || isHov ? theme.textOnAccent : theme.accentSecondary;
+            ctx.fillText('TAB / EXE', 239, ry + 13.8);
           }
-
-          const tickCol = isCur
-            ? theme.accentSecondary
-            : passed
-            ? sactiveRail
-            : lerpHexColor(theme.textSecondary, theme.dotInactive, 0.5);
-          ctx.fillStyle = tickCol;
-          ctx.beginPath();
-          ctx.arc(nx, strackY, 3.5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = row3Bg;
-          ctx.beginPath();
-          ctx.arc(nx, strackY, 1.5, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.font = 'bold 6.5px "JetBrains Mono", monospace';
-          ctx.fillStyle = isCur || hovN ? theme.accentSecondary : theme.textSecondary;
-          ctx.fillText(String(n + 1), nx - 2, 178);
         }
 
-        const skExp = spdPulse > 0.45 ? 1 : 0;
-        const skw = 10 + skExp * 2;
-        const skh = 11 + skExp * 2;
-        const skx = Math.round(shandleX - skw / 2);
-        const sky = Math.round(strackY - skh / 2);
-        traceRoundedRect(ctx, skx - 1, sky - 1, skw + 2, skh + 2, 3);
-        ctx.fillStyle =
-          curRow === 3 || spdPulse > 0
-            ? lerpHexColor(theme.accentPrimary, theme.accentSecondary, 0.5 + spdPulse * 0.45)
-            : theme.borderSubtle;
+        /* Scrollbar track on right edge (7 rows, 5 visible) */
+        const sbY = 48;
+        const sbH = 164;
+        const thumbH = Math.round((sbH * 5) / 7);
+        const thumbY = sbY + Math.round(((sbH - thumbH) * Math.max(0, Math.min(2, sui.tpScroll))) / 2);
+        traceRoundedRect(ctx, 307, sbY, 3, sbH, 1.5);
+        ctx.fillStyle = theme.pillBg;
         ctx.fill();
-        traceRoundedRect(ctx, skx, sky, skw, skh, 3);
-        ctx.fillStyle = '#f8fafc';
+        traceRoundedRect(ctx, 307, thumbY, 3, thumbH, 1.5);
+        ctx.fillStyle = theme.accentPrimary;
         ctx.fill();
-        ctx.fillStyle = sactiveRail;
-        ctx.fillRect(Math.round(shandleX - 1), sky + 2, 2, skh - 4);
-
-        /* Row 4 (y=186..217, h=31): Open "Apparence du curseur" Tab Card */
-        traceRoundedRect(ctx, 14, 186, 292, 31, 6);
-        ctx.fillStyle =
-          curRow === 4
-            ? lerpHexColor(theme.borderSubtle, theme.accentPrimary, selGlow)
-            : hovR4
-            ? theme.accentSecondary
-            : theme.borderSubtle;
-        ctx.fill();
-        traceRoundedRect(ctx, 15, 187, 290, 29, 5);
-        ctx.fillStyle =
-          curRow === 4 ? lerpHexColor(theme.cardBg, theme.cardBgSel, selGlow * 0.45) : theme.cardBg;
-        ctx.fill();
-
-        ctx.font = 'bold 7.6px "JetBrains Mono", monospace';
-        ctx.fillStyle = theme.textPrimary;
-        ctx.fillText('Apparence du curseur', 22, 195);
-        ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
-        ctx.fillStyle = theme.accentSecondary;
-        const activeStyleLbl =
-          CURSOR_STYLE_LABELS[clampCursorStyleToCard(s.settings.touchpadCursorStyle)];
-        ctx.fillText(`Style actif : ${activeStyleLbl}`, 22, 207.5);
-
-        traceRoundedRect(ctx, 232, 194, 64, 15, 4);
-        ctx.fillStyle = curRow === 4 || hovR4 ? theme.accentPrimary : theme.pillBg;
-        ctx.fill();
-        ctx.font = 'bold 7px "JetBrains Mono", monospace';
-        ctx.fillStyle = curRow === 4 || hovR4 ? theme.textOnAccent : theme.accentSecondary;
-        ctx.fillText('TAB / EXE', 238, 201.8);
       } else {
-        /* TAB 1: "Apparence du curseur" — 3 Authentic Cursor Vignette Cards + Live Preview */
+        /* TAB 1: "Personnaliser le curseur" — Row 0: 3 Models (y=50..134) + Row 1: 3 Sizes (y=142..214) */
         const cardStyles: CursorStyle[] = ['arrow', 'circle', 'pointer'];
         const cardTitles = ['Fleche', 'Cercle', 'Pointeur'];
-        const cardSubs = ['Pointe exacte', 'Centre exact', 'Main animee'];
         const selCard = Math.max(0, Math.min(2, sui.tpStyleCursor));
+        const selSize = Math.max(0, Math.min(2, sui.tpSizeCursor));
         const styleGlow = Math.max(0, Math.min(1, anim.tpStyleGlowAnim));
-
         const cardW = 90;
-        const cardH = 116;
         const gapX = 11;
         const startX = 14;
-        const cardY = 50;
+        const stageBg = theme.isLight ? '#e2e8f0' : '#0c111c';
 
+        /* Row 0: 3 Cursor Model Cards (y=50..134, h=84) previewed at activeSize */
+        const row0Y = 50;
+        const row0H = 84;
         for (let c = 0; c < 3; c++) {
           const cstyle = cardStyles[c];
           const cx = startX + c * (cardW + gapX);
-          const isFocused = c === selCard;
-          const isSaved = clampCursorStyleToCard(s.settings.touchpadCursorStyle) === cstyle;
+          const isFocused = sui.tpCustomRow === 0 && c === selCard;
+          const isSaved = clampCursorStyleToCard(activeStyle) === c;
           const isHovered = mouseOn && sui.hoverKind === 'SET_STYLE_CARD' && sui.hoverIndex === c;
 
           if (isFocused || isHovered) {
             const haloWave = 0.5 + 0.5 * Math.sin(anim.tpStyleHaloPhase);
-            const haloCol = lerpHexColor(theme.bgMain, theme.accentSecondary, 0.35 + haloWave * 0.55);
-            traceRoundedRect(ctx, cx - 2, cardY - 2, cardW + 4, cardH + 4, 9);
-            ctx.fillStyle = haloCol;
+            traceRoundedRect(ctx, cx - 2, row0Y - 2, cardW + 4, row0H + 4, 8);
+            ctx.fillStyle = lerpHexColor(theme.bgMain, theme.accentSecondary, 0.35 + haloWave * 0.55);
             ctx.fill();
           }
-
-          traceRoundedRect(ctx, cx, cardY, cardW, cardH, 7);
+          traceRoundedRect(ctx, cx, row0Y, cardW, row0H, 7);
           ctx.fillStyle = isFocused
             ? lerpHexColor(theme.borderSubtle, theme.accentPrimary, styleGlow)
             : isHovered
@@ -4224,7 +5204,7 @@ function drawSingleSettingsSectionBody(
             ? theme.accentPrimary
             : theme.borderSubtle;
           ctx.fill();
-          traceRoundedRect(ctx, cx + 1, cardY + 1, cardW - 2, cardH - 2, 6);
+          traceRoundedRect(ctx, cx + 1, row0Y + 1, cardW - 2, row0H - 2, 6);
           ctx.fillStyle =
             isFocused || isHovered
               ? lerpHexColor(theme.cardBg, theme.cardBgSel, styleGlow * 0.45)
@@ -4232,82 +5212,89 @@ function drawSingleSettingsSectionBody(
           ctx.fill();
 
           if (isSaved) {
-            traceRoundedRect(ctx, cx + cardW - 38, cardY + 5, 33, 11, 3);
+            traceRoundedRect(ctx, cx + cardW - 36, row0Y + 4, 31, 10, 3);
             ctx.fillStyle = theme.accentPrimary;
             ctx.fill();
-            ctx.font = 'bold 6.5px "JetBrains Mono", monospace';
+            ctx.font = 'bold 6.2px "JetBrains Mono", monospace';
             ctx.fillStyle = theme.textOnAccent;
-            ctx.fillText('ACTIF', cx + cardW - 35, cardY + 10.7);
+            ctx.fillText('ACTIF', cx + cardW - 33, row0Y + 9.2);
           }
 
-          const stageX = cx + Math.floor((cardW - 62) / 2);
-          const stageY = cardY + 20;
-          const stageBg = theme.isLight ? '#e2e8f0' : '#0c111c';
-          traceRoundedRect(ctx, stageX, stageY, 62, 52, 6);
-          ctx.fillStyle = theme.borderSubtle;
-          ctx.fill();
-          traceRoundedRect(ctx, stageX + 1, stageY + 1, 60, 50, 5);
+          const stageX = cx + 16;
+          const stageY = row0Y + 17;
+          traceRoundedRect(ctx, stageX, stageY, 58, 42, 5);
           ctx.fillStyle = stageBg;
           ctx.fill();
 
-          const midX = stageX + 31;
-          const midY = stageY + 26;
-          ctx.fillStyle = lerpHexColor(stageBg, theme.accentPrimary, 0.32);
-          ctx.beginPath();
-          ctx.arc(midX - 11.5, midY + 10.5, 2.5, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = lerpHexColor(stageBg, theme.accentSecondary, 0.56);
-          ctx.beginPath();
-          ctx.arc(midX - 6, midY + 6, 3, 0, Math.PI * 2);
-          ctx.fill();
+          const m = getCursorSizeMetrics(cstyle, activeSize);
+          const midX = stageX + 29 - Math.floor(m.width / 2) + m.hotX;
+          const midY = stageY + 21 - Math.floor(m.height / 2) + m.hotY;
+          drawCursorAlphaSprite(ctx, cstyle, midX, midY, 1, theme, anim.curStylePhase, activeSize);
 
-          if (cstyle === 'arrow') {
-            drawCursorAlphaSprite(ctx, 'arrow', midX - 8, midY - 11, 1, theme, anim.curStylePhase);
-          } else if (cstyle === 'circle') {
-            drawCursorAlphaSprite(ctx, 'circle', midX + 1, midY, 1, theme, anim.curStylePhase);
-          } else {
-            drawCursorAlphaSprite(ctx, 'pointer', midX - 4, midY - 12, 1, theme, anim.curStylePhase);
-          }
-
-          ctx.font = 'bold 8px "JetBrains Mono", monospace';
+          ctx.font = 'bold 7.6px "JetBrains Mono", monospace';
           const tw = ctx.measureText(cardTitles[c]).width;
-          ctx.fillStyle = isFocused ? theme.textPrimary : theme.textSecondary;
-          ctx.fillText(cardTitles[c], Math.round(cx + (cardW - tw) / 2), cardY + 84);
-
-          ctx.font = 'bold 6.8px "JetBrains Mono", monospace';
-          const sw = ctx.measureText(cardSubs[c]).width;
-          ctx.fillStyle = isFocused ? theme.accentSecondary : theme.textSecondary;
-          ctx.fillText(cardSubs[c], Math.round(cx + (cardW - sw) / 2), cardY + 99);
+          ctx.fillStyle = isFocused || isSaved ? theme.textPrimary : theme.textSecondary;
+          ctx.fillText(cardTitles[c], Math.round(cx + (cardW - tw) / 2), row0Y + 71);
         }
 
-        /* Bottom Live Preview & Status Card (y=172..214) */
-        traceRoundedRect(ctx, 14, 172, 292, 42, 6);
-        ctx.fillStyle = theme.cardBg;
-        ctx.fill();
+        /* Row 1: 3 Independent Cursor Size Cards (y=142..214, h=72) previewing activeStyle */
+        const row1Y = 142;
+        const row1H = 72;
+        for (let sIdx = 0; sIdx < 3; sIdx++) {
+          const szVal = CURSOR_SIZE_ORDER[sIdx];
+          const cx = startX + sIdx * (cardW + gapX);
+          const isFocused = sui.tpCustomRow === 1 && sIdx === selSize;
+          const isSaved = cursorSizeToIndex(activeSize) === sIdx;
+          const isHovered = mouseOn && sui.hoverKind === 'SET_SIZE_CARD' && sui.hoverIndex === sIdx;
 
-        const prevBg = theme.isLight ? '#e2e8f0' : '#0c111c';
-        traceRoundedRect(ctx, 20, 177, 34, 32, 5);
-        ctx.fillStyle = theme.borderSubtle;
-        ctx.fill();
-        traceRoundedRect(ctx, 21, 178, 32, 30, 4);
-        ctx.fillStyle = prevBg;
-        ctx.fill();
+          if (isFocused || isHovered) {
+            const haloWave = 0.5 + 0.5 * Math.sin(anim.tpStyleHaloPhase);
+            traceRoundedRect(ctx, cx - 2, row1Y - 2, cardW + 4, row1H + 4, 8);
+            ctx.fillStyle = lerpHexColor(theme.bgMain, theme.accentSecondary, 0.35 + haloWave * 0.55);
+            ctx.fill();
+          }
+          traceRoundedRect(ctx, cx, row1Y, cardW, row1H, 7);
+          ctx.fillStyle = isFocused
+            ? lerpHexColor(theme.borderSubtle, theme.accentPrimary, styleGlow)
+            : isHovered
+            ? theme.accentSecondary
+            : isSaved
+            ? theme.accentPrimary
+            : theme.borderSubtle;
+          ctx.fill();
+          traceRoundedRect(ctx, cx + 1, row1Y + 1, cardW - 2, row1H - 2, 6);
+          ctx.fillStyle =
+            isFocused || isHovered
+              ? lerpHexColor(theme.cardBg, theme.cardBgSel, styleGlow * 0.45)
+              : theme.cardBg;
+          ctx.fill();
 
-        const savedStyle = clampCursorStyleToCard(s.settings.touchpadCursorStyle);
-        const phx = savedStyle === 'circle' ? 37 : savedStyle === 'pointer' ? 34 : 30;
-        const phy = savedStyle === 'circle' ? 193 : 181;
-        drawCursorAlphaSprite(ctx, savedStyle, phx, phy, 1, theme, anim.curStylePhase);
+          if (isSaved) {
+            traceRoundedRect(ctx, cx + cardW - 36, row1Y + 4, 31, 10, 3);
+            ctx.fillStyle = theme.accentPrimary;
+            ctx.fill();
+            ctx.font = 'bold 6.2px "JetBrains Mono", monospace';
+            ctx.fillStyle = theme.textOnAccent;
+            ctx.fillText('ACTIF', cx + cardW - 33, row1Y + 9.2);
+          }
 
-        const isM = s.settings.touchpadMode === 'mouse';
-        ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
-        ctx.fillStyle = isM ? '#4ade80' : theme.accentSecondary;
-        ctx.fillText(
-          `Mode : ${isM ? 'Souris' : 'Pave tactile'}  |  Style : ${CURSOR_STYLE_LABELS[savedStyle]}`,
-          62,
-          186
-        );
-        ctx.fillStyle = theme.textSecondary;
-        ctx.fillText('EXE : Appliquer  |  TAB : Retour options', 62, 200);
+          const stageX = cx + 18;
+          const stageY = row1Y + 15;
+          traceRoundedRect(ctx, stageX, stageY, 54, 34, 5);
+          ctx.fillStyle = stageBg;
+          ctx.fill();
+
+          const m = getCursorSizeMetrics(activeStyle, szVal);
+          const midX = stageX + 27 - Math.floor(m.width / 2) + m.hotX;
+          const midY = stageY + 17 - Math.floor(m.height / 2) + m.hotY;
+          drawCursorAlphaSprite(ctx, activeStyle, midX, midY, 1, theme, anim.curStylePhase, szVal);
+
+          const dimLbl = `${CURSOR_SIZE_LABELS[szVal]} ${m.width}x${m.height}`;
+          ctx.font = 'bold 6.6px "JetBrains Mono", monospace';
+          const dw = ctx.measureText(dimLbl).width;
+          ctx.fillStyle = isFocused || isSaved ? theme.accentSecondary : theme.textSecondary;
+          ctx.fillText(dimLbl, Math.round(cx + (cardW - dw) / 2), row1Y + 60);
+        }
       }
       break;
     }
@@ -4784,26 +5771,48 @@ function drawSingleSettingsSectionBody(
         ctx.fillText('Elles apparaissent en fondu au lancement.', 24, 154);
       }
 
-      if (sui.capActive) {
-        traceRoundedRect(ctx, 28, 170, 124, 24, 5);
-        ctx.fillStyle = theme.pillBg;
-        ctx.fill();
-        ctx.font = 'bold 7.5px "JetBrains Mono", monospace';
-        ctx.fillStyle = theme.accentSecondary;
-        ctx.fillText('DROITE : Passer', 44, 182.5);
-
-        traceRoundedRect(ctx, 168, 170, 124, 24, 5);
-        ctx.fillStyle = '#dc2626';
-        ctx.fill();
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText('ESC : Annuler', 190, 182.5);
-      } else {
-        traceRoundedRect(ctx, 76, 170, 168, 24, 5);
+      const capHov =
+        isActiveScreen && isMouseModeActive(s) && s.sui.hoverValid;
+      if (sui.capActive && sui.capTotal > 0) {
+        const hovSkip = capHov && s.sui.hoverKind === 'SET_ROW' && s.sui.hoverIndex === 0;
+        const hovCancel = capHov && s.sui.hoverKind === 'SET_ROW' && s.sui.hoverIndex === 1;
+        traceRoundedRect(ctx, 30, 174, 124, 24, 5);
         ctx.fillStyle = theme.accentPrimary;
         ctx.fill();
+        if (hovSkip) {
+          ctx.strokeStyle = theme.accentSecondary;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
         ctx.font = 'bold 7.5px "JetBrains Mono", monospace';
         ctx.fillStyle = theme.textOnAccent;
-        ctx.fillText('EXE / ESC : Retour', 112, 182.5);
+        ctx.fillText('DROITE Passer', 44, 186);
+
+        traceRoundedRect(ctx, 166, 174, 124, 24, 5);
+        ctx.fillStyle = theme.pillBg;
+        ctx.fill();
+        if (hovCancel) {
+          ctx.strokeStyle = theme.accentSecondary;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+        ctx.fillStyle = theme.textPrimary;
+        ctx.fillText('ESC Annuler', 190, 186);
+      } else {
+        const hovBtn = capHov && s.sui.hoverKind === 'SET_ROW' && s.sui.hoverIndex === 0;
+        const btnY = sui.capTotal <= 0 ? 168 : 172;
+        const btnH = sui.capTotal <= 0 ? 26 : 24;
+        traceRoundedRect(ctx, 96, btnY, 128, btnH, 6);
+        ctx.fillStyle = theme.accentPrimary;
+        ctx.fill();
+        if (hovBtn) {
+          ctx.strokeStyle = theme.accentSecondary;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+        ctx.font = 'bold 7.5px "JetBrains Mono", monospace';
+        ctx.fillStyle = theme.textOnAccent;
+        ctx.fillText(sui.capTotal <= 0 ? 'Retour (EXE)' : 'Valider (EXE)', 124, btnY + 12.5);
       }
       break;
     }
@@ -4927,18 +5936,41 @@ function drawSingleSettingsSectionBody(
         ctx.fillText("Le jeu (.tns) et sa capture d'ecran (.scr.tns)", 44, 109 + dy);
         ctx.fillText("seront integralement conserves.", 44, 121 + dy);
 
-        traceRoundedRect(ctx, 48, 138 + dy, 98, 24, 5);
+        const hovNo =
+          isActiveScreen &&
+          isMouseModeActive(s) &&
+          s.sui.hoverValid &&
+          s.sui.hoverKind === 'MODAL_BTN' &&
+          s.sui.hoverIndex === 0;
+        const hovYes =
+          isActiveScreen &&
+          isMouseModeActive(s) &&
+          s.sui.hoverValid &&
+          s.sui.hoverKind === 'MODAL_BTN' &&
+          s.sui.hoverIndex === 1;
+
+        traceRoundedRect(ctx, 46, 144 + dy, 102, 24, 5);
         ctx.fillStyle = lerpHexColor(theme.accentPrimary, theme.pillBg, btnT);
         ctx.fill();
+        if (hovNo) {
+          ctx.strokeStyle = theme.accentSecondary;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
         ctx.font = 'bold 8px "JetBrains Mono", monospace';
         ctx.fillStyle = lerpHexColor(theme.textOnAccent, theme.textPrimary, btnT);
-        ctx.fillText('Annuler', 74, 150.5 + dy);
+        ctx.fillText('Annuler', 74, 156 + dy);
 
-        traceRoundedRect(ctx, 174, 138 + dy, 98, 24, 5);
+        traceRoundedRect(ctx, 172, 144 + dy, 102, 24, 5);
         ctx.fillStyle = lerpHexColor(theme.pillBg, '#dc2626', btnT);
         ctx.fill();
+        if (hovYes) {
+          ctx.strokeStyle = theme.accentSecondary;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
         ctx.fillStyle = lerpHexColor(theme.textPrimary, '#ffffff', btnT);
-        ctx.fillText('Supprimer', 194, 150.5 + dy);
+        ctx.fillText('Supprimer', 196, 156 + dy);
         ctx.restore();
       }
       break;
@@ -5071,7 +6103,7 @@ function drawSingleSettingsSectionBody(
       const mode = sui.profMode;
 
       if (mode === 'LIST') {
-        const totalRows = pcount + 1;
+        const totalRows = pcount + 2;
         const vis = 6;
         const rowY0 = 32;
         const rowH = 28;
@@ -5105,6 +6137,27 @@ function drawSingleSettingsSectionBody(
           ctx.fill();
 
           if (row === 0) {
+            const lockEn = Boolean(s.settings.profileLockEnabled);
+            drawMiniPadlock(ctx, 24, ry + 9, theme);
+            ctx.font = 'bold 8px "JetBrains Mono", monospace';
+            drawEllipsisText(ctx, 44, ry + 9.5, 'Protection par cadenas', 180, theme.textPrimary);
+            ctx.font = '6.8px "JetBrains Mono", monospace';
+            drawEllipsisText(
+              ctx,
+              44,
+              ry + 20,
+              'Verrouiller les profils sensibles',
+              190,
+              theme.textSecondary
+            );
+            const stateStr = lockEn ? 'OUI' : 'NON';
+            traceRoundedRect(ctx, 256, ry + 7, 36, 14, 4);
+            ctx.fillStyle = lockEn ? theme.accentPrimary : theme.pillBg;
+            ctx.fill();
+            ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
+            ctx.fillStyle = lockEn ? theme.textOnAccent : theme.textSecondary;
+            ctx.fillText(stateStr, 265, ry + 14.5);
+          } else if (row === 1) {
             ctx.beginPath();
             ctx.arc(28, ry + 14, 10, 0, Math.PI * 2);
             ctx.fillStyle = lerpHexColor(theme.pillBg, theme.accentPrimary, rowT);
@@ -5118,7 +6171,7 @@ function drawSingleSettingsSectionBody(
             ctx.font = 'bold 8px "JetBrains Mono", monospace';
             drawEllipsisText(ctx, 44, ry + 9.5, 'Creer un profil', 180, theme.textPrimary);
             ctx.font = '6.8px "JetBrains Mono", monospace';
-            drawEllipsisText(ctx, 44, ry + 20, 'Choisir un nom et une icone', 190, theme.textSecondary);
+            drawEllipsisText(ctx, 44, ry + 20, 'Choisir une icone disponible', 190, theme.textSecondary);
 
             const cntStr = `${pcount}/${NL_MAX_PROFILES}`;
             ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
@@ -5129,9 +6182,10 @@ function drawSingleSettingsSectionBody(
             ctx.fillStyle = theme.accentSecondary;
             ctx.fillText(cntStr, 290 - cw, ry + 14.5);
           } else {
-            const pi = row - 1;
+            const pi = row - 2;
             const p = profiles[pi];
             const isAct = pi === s.profiles.activeIndex;
+            const isProt = isProfileProtected(s, pi);
             if (isAct) {
               ctx.beginPath();
               ctx.arc(28, ry + 14, 11, 0, Math.PI * 2);
@@ -5139,10 +6193,15 @@ function drawSingleSettingsSectionBody(
               ctx.fill();
             }
             drawCircularAvatar(ctx, 18, ry + 4, 20, p.avatarId, false, theme, imgCacheRef_global);
+            if (isProt) {
+              drawMiniPadlock(ctx, 30, ry + 14, theme);
+            }
 
             ctx.font = 'bold 8px "JetBrains Mono", monospace';
             drawEllipsisText(ctx, 44, ry + 9.5, p.name, 174, theme.textPrimary);
-            const sub = p.isPrimary
+            const sub = isProt
+              ? 'Verrouille'
+              : p.isPrimary
               ? 'Profil principal'
               : getAvatarCategoryLabel(getAvatarCategoryOf(p.avatarId));
             ctx.font = '6.8px "JetBrains Mono", monospace';
@@ -5176,7 +6235,9 @@ function drawSingleSettingsSectionBody(
         const di = Math.min(Math.max(0, sui.profDetailIdx), Math.max(0, pcount - 1));
         const dp = profiles[di] ?? getActiveProfile(s);
         const isAct = di === s.profiles.activeIndex;
-        const canDel = !dp.isPrimary && pcount > 1;
+        const lockEn = Boolean(s.settings.profileLockEnabled);
+        const isProt = isProfileProtected(s, di);
+        const canDel = !dp.isPrimary && pcount > 1 && !isProt;
 
         /* Top summary card */
         traceRoundedRect(ctx, 12, 31, 296, 46, 7);
@@ -5193,6 +6254,9 @@ function drawSingleSettingsSectionBody(
           ctx.fill();
         }
         drawCircularAvatar(ctx, 20, 37, 34, dp.avatarId, false, theme, imgCacheRef_global);
+        if (isProt) {
+          drawMiniPadlock(ctx, 46, 60, theme);
+        }
 
         ctx.font = 'bold 8.5px "JetBrains Mono", monospace';
         drawEllipsisText(ctx, 62, 46, dp.name, 178, theme.textPrimary);
@@ -5201,9 +6265,9 @@ function drawSingleSettingsSectionBody(
           ctx,
           62,
           60,
-          `${dp.isPrimary ? 'Principal' : 'Profil libre'}  |  ${getAvatarCategoryLabel(
-            getAvatarCategoryOf(dp.avatarId)
-          )}`,
+          `${dp.isPrimary ? 'Principal' : 'Profil libre'}  |  ${
+            isProt ? 'Verrouille' : getAvatarCategoryLabel(getAvatarCategoryOf(dp.avatarId))
+          }`,
           224,
           theme.textSecondary
         );
@@ -5216,20 +6280,30 @@ function drawSingleSettingsSectionBody(
           ctx.fillText('ACTIF', 264, 47.5);
         }
 
-        const actLabels = [
-          'Modifier le nom',
-          "Changer l'icone",
-          'Activer ce profil',
-          'Supprimer le profil',
-        ];
-        const rowY0 = 83;
-        const rowH = 28;
-        const stride = 32;
-        for (let r = 0; r < 4; r++) {
+        const actLabels = lockEn
+          ? [
+              'Modifier le nom',
+              "Changer l'icone",
+              'Activer ce profil',
+              dp.isLocked ? 'Deverrouiller le profil' : 'Verrouiller le profil',
+              'Supprimer le profil',
+            ]
+          : [
+              'Modifier le nom',
+              "Changer l'icone",
+              'Activer ce profil',
+              'Supprimer le profil',
+            ];
+        const detailRows = actLabels.length;
+        const delRow = detailRows - 1;
+        const rowY0 = detailRows === 5 ? 80 : 83;
+        const rowH = detailRows === 5 ? 24 : 28;
+        const stride = detailRows === 5 ? 27 : 32;
+        for (let r = 0; r < detailRows; r++) {
           const ry = rowY0 + r * stride;
           const sel = r === sui.profDetailCursor;
-          const danger = r === 3 && canDel;
-          const locked = r === 3 && !canDel;
+          const danger = r === delRow && canDel;
+          const lockedRow = (r === 0 || r === 1 || r === delRow) && (isProt || (r === delRow && !canDel));
           const bCol = sel ? (danger ? '#dc2626' : theme.accentPrimary) : theme.borderSubtle;
           traceRoundedRect(ctx, 12, ry - 1, 296, rowH + 2, 7);
           ctx.fillStyle = bCol;
@@ -5239,24 +6313,25 @@ function drawSingleSettingsSectionBody(
           ctx.fill();
 
           ctx.font = 'bold 8px "JetBrains Mono", monospace';
-          ctx.fillStyle = danger ? '#f87171' : locked ? theme.textSecondary : theme.textPrimary;
-          ctx.fillText(actLabels[r], 24, ry + 14.5);
+          ctx.fillStyle = danger ? '#f87171' : lockedRow ? theme.textSecondary : theme.textPrimary;
+          ctx.fillText(actLabels[r], 24, ry + rowH / 2 + 0.5);
 
           let rpill = '';
-          if (r === 0) rpill = dp.name;
-          else if (r === 1) rpill = `#${dp.avatarId + 1}`;
+          if (r === 0) rpill = isProt ? 'Verrouille' : dp.name;
+          else if (r === 1) rpill = isProt ? 'Verrouille' : `#${dp.avatarId + 1}`;
           else if (r === 2) rpill = isAct ? 'Actif' : 'Basculer';
+          else if (lockEn && r === 3) rpill = dp.isLocked ? 'ACTIF' : 'OFF';
           else rpill = canDel ? 'Suppr.' : 'Protege';
 
           ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
           const pw = Math.min(106, Math.ceil(ctx.measureText(rpill).width) + 10);
-          traceRoundedRect(ctx, 284 - pw, ry + 7, pw, 14, 4);
+          traceRoundedRect(ctx, 284 - pw, ry + Math.floor((rowH - 14) / 2), pw, 14, 4);
           ctx.fillStyle = danger ? '#7f1d1d' : theme.pillBg;
           ctx.fill();
           drawEllipsisText(
             ctx,
             289 - pw,
-            ry + 14.5,
+            ry + rowH / 2 + 0.5,
             rpill,
             pw - 8,
             danger ? '#fecaca' : theme.accentSecondary
@@ -5264,7 +6339,7 @@ function drawSingleSettingsSectionBody(
 
           ctx.font = 'bold 8px "JetBrains Mono", monospace';
           ctx.fillStyle = sel ? theme.accentPrimary : theme.textSecondary;
-          ctx.fillText('>', 291, ry + 14.5);
+          ctx.fillText('>', 291, ry + rowH / 2 + 0.5);
         }
 
         if (mode === 'CONFIRM_DELETE') {
@@ -5444,6 +6519,333 @@ function drawSingleSettingsSectionBody(
       }
       break;
     }
+
+    case 'SETTINGS_DIAG': {
+      const mAct = isMouseModeActive(s) && s.sui.hoverValid;
+      const diagEntries = s.diag.entries;
+      const diagCount = diagEntries.length;
+
+      /* Top Tabs (y=28..44) */
+      for (let t = 0; t < 2; t++) {
+        const tx = t === 0 ? 14 : 160;
+        const tw = t === 0 ? 142 : 146;
+        const selTab = sui.diagTab === t;
+        const hovTab = mAct && sui.hoverKind === 'DIAG_TAB' && sui.hoverIndex === t;
+        traceRoundedRect(ctx, tx, 28, tw, 16, 4);
+        ctx.fillStyle = selTab ? theme.accentPrimary : hovTab ? theme.cardBgSel : theme.pillBg;
+        ctx.fill();
+        if (hovTab && !selTab) {
+          ctx.strokeStyle = theme.accentSecondary;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+        const tLabel = t === 0 ? `1. Erreurs (${diagCount})` : '2. Boot & Systeme';
+        ctx.font = 'bold 7.4px "JetBrains Mono", monospace';
+        const lw = ctx.measureText(tLabel).width;
+        ctx.fillStyle = selTab ? theme.textOnAccent : theme.textSecondary;
+        ctx.fillText(tLabel, Math.round(tx + (tw - lw) / 2), 36.5);
+      }
+
+      if (sui.diagTab === 0) {
+        /* Summary bar (y=47..63) */
+        traceRoundedRect(ctx, 14, 47, 292, 16, 4);
+        ctx.fillStyle = theme.cardBg;
+        ctx.fill();
+        ctx.font = 'bold 6.8px "JetBrains Mono", monospace';
+        const sumText =
+          diagCount > 0
+            ? `${diagCount} diag(s) | Log ${s.diag.logBytes} o | ${s.sys.hwIsCx2 ? 'CX II-T' : 'CX CAS'} ${s.sys.osVersion.split(' ')[0]}`
+            : `Journal sain (${s.diag.logBytes} o) | ${s.sys.hwIsCx2 ? 'CX II-T' : 'CX CAS'} ${s.sys.osVersion.split(' ')[0]}`;
+        drawEllipsisText(
+          ctx,
+          20,
+          55.5,
+          sumText,
+          280,
+          diagCount > 0 ? '#fbbf24' : '#34d399'
+        );
+
+        if (diagCount === 0) {
+          traceRoundedRect(ctx, 14, 72, 292, 108, 7);
+          ctx.fillStyle = theme.borderSubtle;
+          ctx.fill();
+          traceRoundedRect(ctx, 15, 73, 290, 106, 6);
+          ctx.fillStyle = theme.cardBg;
+          ctx.fill();
+
+          ctx.textAlign = 'center';
+          ctx.font = 'bold 8.5px "JetBrains Mono", monospace';
+          ctx.fillStyle = '#34d399';
+          ctx.fillText('Aucun probleme detecte', 160, 104);
+          ctx.font = '7.2px "JetBrains Mono", monospace';
+          ctx.fillStyle = theme.textSecondary;
+          ctx.fillText(
+            `Boot sain (${s.diag.currentStage}/12 etapes) · ${s.sys.ndlessPersistent ? 'Ndless Persistant' : 'Ndless Classique'}`,
+            160,
+            124
+          );
+          ctx.fillText(
+            `Cache CRC32 ${s.sys.cacheValid ? 'valide' : 'reconstruit'} · Reprises OOM : ${s.sys.oomRecoveries}`,
+            160,
+            140
+          );
+          ctx.textAlign = 'left';
+        } else {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(12, 66, 296, 124);
+          ctx.clip();
+
+          for (let i = 0; i < diagCount; i++) {
+            const ry = 67 + (i - sui.diagScroll) * 30;
+            if (ry + 28 < 66 || ry > 190) continue;
+            const entry = diagEntries[i];
+            const selRow = !sui.diagDetailOpen && !sui.diagConfirmModal && sui.diagCursor === i;
+            const hovRow = mAct && sui.hoverKind === 'DIAG_ROW' && sui.hoverIndex === i;
+
+            traceRoundedRect(ctx, 14, ry, 288, 28, 6);
+            ctx.fillStyle = selRow
+              ? theme.accentPrimary
+              : hovRow
+                ? theme.accentSecondary
+                : theme.borderSubtle;
+            ctx.fill();
+            traceRoundedRect(ctx, 15, ry + 1, 286, 26, 5);
+            ctx.fillStyle = selRow || hovRow ? theme.cardBgSel : theme.cardBg;
+            ctx.fill();
+
+            /* Error Code Pill */
+            traceRoundedRect(ctx, 19, ry + 5, 32, 18, 4);
+            ctx.fillStyle =
+              entry.code === 'E801' || entry.code === 'E901' || entry.code === 'E201'
+                ? '#7f1d1d'
+                : '#78350f';
+            ctx.fill();
+            ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
+            ctx.fillStyle = '#fef3c7';
+            ctx.fillText(entry.code, 22, ry + 14.5);
+
+            ctx.font = 'bold 7.6px "JetBrains Mono", monospace';
+            drawEllipsisText(ctx, 56, ry + 9.5, entry.title, 200, theme.textPrimary);
+
+            ctx.font = '6.8px "JetBrains Mono", monospace';
+            drawEllipsisText(
+              ctx,
+              56,
+              ry + 20,
+              `${entry.target} · ${entry.recovery}`,
+              204,
+              theme.textSecondary
+            );
+
+            if (entry.count > 1) {
+              const cntTxt = `x${entry.count}`;
+              ctx.font = 'bold 7px "JetBrains Mono", monospace';
+              const cw = Math.ceil(ctx.measureText(cntTxt).width) + 6;
+              traceRoundedRect(ctx, 294 - cw, ry + 7, cw, 13, 3);
+              ctx.fillStyle = theme.pillBg;
+              ctx.fill();
+              ctx.fillStyle = theme.accentSecondary;
+              ctx.fillText(cntTxt, 297 - cw, ry + 14);
+            }
+          }
+          ctx.restore();
+
+          drawScrollbarV(
+            ctx,
+            67,
+            122,
+            sui.diagScroll * 30,
+            4 * 30,
+            diagCount * 30,
+            theme
+          );
+        }
+
+        /* Clear button at bottom (y=193..215) */
+        const selClr =
+          !sui.diagDetailOpen && !sui.diagConfirmModal && sui.diagCursor === diagCount;
+        const hovClr = mAct && sui.hoverKind === 'DIAG_CLEAR_BTN';
+        traceRoundedRect(ctx, 14, 193, 292, 22, 6);
+        ctx.fillStyle = selClr ? '#dc2626' : hovClr ? theme.accentSecondary : theme.borderSubtle;
+        ctx.fill();
+        traceRoundedRect(ctx, 15, 194, 290, 20, 5);
+        ctx.fillStyle = selClr ? '#7f1d1d' : hovClr ? theme.cardBgSel : theme.cardBg;
+        ctx.fill();
+        ctx.font = 'bold 7.5px "JetBrains Mono", monospace';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = selClr ? '#fecaca' : '#f87171';
+        ctx.fillText('Effacer les anciens journaux', 160, 204.5);
+        ctx.textAlign = 'left';
+
+        /* Detail modal overlay */
+        if (sui.diagDetailOpen && diagCount > 0) {
+          const entry = diagEntries[Math.min(Math.max(0, sui.diagCursor), diagCount - 1)];
+          ctx.save();
+          ctx.fillStyle = theme.isLight ? 'rgba(180, 190, 205, 0.56)' : 'rgba(6, 8, 14, 0.68)';
+          ctx.fillRect(0, 26, NL_SCREEN_W, 194);
+
+          traceRoundedRect(ctx, 12, 30, 296, 184, 8);
+          ctx.fillStyle = theme.accentPrimary;
+          ctx.fill();
+          traceRoundedRect(ctx, 14, 32, 292, 180, 7);
+          ctx.fillStyle = theme.bgTopBar;
+          ctx.fill();
+
+          traceRoundedRect(ctx, 22, 39, 34, 14, 4);
+          ctx.fillStyle = '#7f1d1d';
+          ctx.fill();
+          ctx.font = 'bold 7.4px "JetBrains Mono", monospace';
+          ctx.fillStyle = '#fef3c7';
+          ctx.fillText(entry.code, 26, 46.5);
+
+          ctx.font = 'bold 8px "JetBrains Mono", monospace';
+          drawEllipsisText(ctx, 62, 46.5, entry.title, 210, theme.textPrimary);
+
+          const detailLines: [string, string, string][] = [
+            ['Categorie', `${entry.category} (occ. x${entry.count})`, theme.accentSecondary],
+            ['Element', entry.target, theme.textPrimary],
+            ['Chemin', entry.path, theme.textSecondary],
+            ['Operation', entry.operation, theme.textPrimary],
+            ['Cause', entry.reason, '#fbbf24'],
+            ['Impact', entry.impact, theme.textSecondary],
+            ['Action', entry.recovery, '#34d399'],
+            ['Etape boot', getBootStageLabel(entry.stage), theme.textSecondary],
+          ];
+          detailLines.forEach(([lbl, val, col], idx) => {
+            const ly = 64 + idx * 17;
+            ctx.font = 'bold 6.8px "JetBrains Mono", monospace';
+            ctx.fillStyle = theme.textSecondary;
+            ctx.fillText(`${lbl}:`, 22, ly);
+            ctx.font = '6.8px "JetBrains Mono", monospace';
+            drawEllipsisText(ctx, 84, ly, val, 214, col);
+          });
+          ctx.restore();
+        }
+
+        /* Confirm Clear modal overlay */
+        if (sui.diagConfirmModal) {
+          const mEase = 1 - Math.pow(1 - Math.max(0, Math.min(1, anim.modalProgress)), 3);
+          const dy = Math.round((1 - mEase) * 6);
+          const btnT = anim.modalBtnProgress;
+
+          ctx.save();
+          ctx.fillStyle = theme.isLight
+            ? `rgba(180, 190, 205, ${0.44 * mEase})`
+            : `rgba(6, 8, 14, ${0.52 * mEase})`;
+          ctx.fillRect(0, 26, NL_SCREEN_W, 194);
+
+          ctx.globalAlpha = Math.max(0.25, mEase);
+          traceRoundedRect(ctx, 24, 52 + dy, 272, 132, 8);
+          ctx.fillStyle = '#dc2626';
+          ctx.fill();
+          traceRoundedRect(ctx, 26, 54 + dy, 268, 128, 7);
+          ctx.fillStyle = theme.bgTopBar;
+          ctx.fill();
+
+          ctx.font = 'bold 8.5px "JetBrains Mono", monospace';
+          ctx.fillStyle = '#f87171';
+          ctx.fillText('Effacer les journaux diagnostiques ?', 36, 68 + dy);
+
+          ctx.font = '7.2px "JetBrains Mono", monospace';
+          ctx.fillStyle = theme.textSecondary;
+          ctx.fillText('Seuls les journaux et erreurs seront supprimes.', 36, 89 + dy);
+          ctx.fillStyle = '#34d399';
+          ctx.fillText('Jeux, sauvegardes, profils, icones et reglages', 36, 108 + dy);
+          ctx.fillText('restent entierement conserves.', 36, 120 + dy);
+
+          traceRoundedRect(ctx, 42, 152 + dy, 108, 24, 5);
+          ctx.fillStyle = lerpHexColor(theme.accentPrimary, theme.pillBg, btnT);
+          ctx.fill();
+          ctx.font = 'bold 8px "JetBrains Mono", monospace';
+          ctx.fillStyle = lerpHexColor(theme.textOnAccent, theme.textPrimary, btnT);
+          ctx.fillText('Annuler', 74, 164.5 + dy);
+
+          traceRoundedRect(ctx, 170, 152 + dy, 108, 24, 5);
+          ctx.fillStyle = lerpHexColor(theme.pillBg, '#dc2626', btnT);
+          ctx.fill();
+          ctx.fillStyle = lerpHexColor(theme.textPrimary, '#ffffff', btnT);
+          ctx.fillText('Effacer', 202, 164.5 + dy);
+          ctx.restore();
+        }
+      } else {
+        /* Tab 1: 12-stage Boot Forensics & Hardware Info */
+        traceRoundedRect(ctx, 14, 47, 292, 44, 6);
+        ctx.fillStyle = theme.cardBg;
+        ctx.fill();
+        ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
+        drawEllipsisText(
+          ctx,
+          22,
+          57,
+          `${s.sys.hwIsCx2 ? 'TI-Nspire CX II-T' : 'TI-Nspire CX CAS'} | OS ${s.sys.osVersion}`,
+          276,
+          theme.textPrimary
+        );
+        ctx.font = '6.8px "JetBrains Mono", monospace';
+        drawEllipsisText(
+          ctx,
+          22,
+          69,
+          `Ndless: ${s.sys.ndlessPersistent ? 'Persistant' : 'Classique'} (rev ${s.sys.ndlessRev}) | Cache: ${s.sys.cacheLoadedAtBoot ? 'oui' : 'non'} | OOM: ${s.sys.oomRecoveries}`,
+          276,
+          theme.accentSecondary
+        );
+        drawEllipsisText(
+          ctx,
+          22,
+          81,
+          s.sys.priorIncompleteBoot
+            ? `Dernier crash trace: Etape ${s.sys.lastCrashStage} (${s.sys.lastCrashMode || 'Ndless'})`
+            : `Etape boot atteinte: ${s.diag.currentStage}/12 (${getBootStageLabel(s.diag.currentStage)})`,
+          276,
+          s.sys.priorIncompleteBoot ? '#fbbf24' : '#34d399'
+        );
+
+        /* Scrollable 12-stage list (6 rows visible in y=96..212) */
+        const visStages = 6;
+        for (let v = 0; v < visStages; v++) {
+          const st = 1 + sui.diagScroll + v;
+          if (st > NL_BOOT_STAGE_COUNT) break;
+          const ry = 96 + v * 19;
+          const reached = Boolean(s.diag.stageReached[st]);
+          const isCrashStage = s.sys.priorIncompleteBoot && st === s.sys.lastCrashStage;
+
+          traceRoundedRect(ctx, 14, ry, 286, 17, 4);
+          ctx.fillStyle = isCrashStage ? '#7f1d1d' : theme.cardBg;
+          ctx.fill();
+
+          ctx.font = 'bold 6.8px "JetBrains Mono", monospace';
+          ctx.fillStyle = isCrashStage
+            ? '#fecaca'
+            : reached
+              ? '#34d399'
+              : theme.textSecondary;
+          ctx.fillText(isCrashStage ? '[CRASH]' : reached ? '[ OK  ]' : '[ ... ]', 20, ry + 9);
+
+          ctx.font = '7px "JetBrains Mono", monospace';
+          drawEllipsisText(
+            ctx,
+            66,
+            ry + 9,
+            getBootStageLabel(st),
+            228,
+            isCrashStage ? '#fecaca' : reached ? theme.textPrimary : theme.textSecondary
+          );
+        }
+
+        drawScrollbarV(
+          ctx,
+          96,
+          112,
+          sui.diagScroll * 19,
+          visStages * 19,
+          NL_BOOT_STAGE_COUNT * 19,
+          theme
+        );
+      }
+      break;
+    }
   }
 }
 
@@ -5466,8 +6868,13 @@ function drawSettingsView(
           return t * 0.3 + cubic * 0.7;
         })();
   const gearRot = openEase * Math.PI * 0.75;
-  const meta = getScreenChromeMeta(activeScreen);
-  drawSettingsChrome(ctx, theme, meta.title, meta.icon, meta.hints, gearRot);
+  const meta = getScreenChromeMeta(activeScreen, s);
+  const hidePowerBtn =
+    activeScreen === 'SETTINGS_SHORTCUTS' ||
+    activeScreen === 'SETTINGS_ICONS' ||
+    activeScreen === 'SETTINGS_PROFILES' ||
+    activeScreen === 'SETTINGS_DIAG';
+  drawSettingsChrome(ctx, theme, meta.title, meta.icon, meta.hints, gearRot, hidePowerBtn);
 
   if (
     anim.secTransProgress < 0.99 &&
@@ -5567,6 +6974,16 @@ function stepSettingsAnimations(s: LauncherState, anim: SettingsAnimState) {
   anim.switchTouchpadModeAnim += (targetTpMode - anim.switchTouchpadModeAnim) * 0.28;
   if (Math.abs(targetTpMode - anim.switchTouchpadModeAnim) < 0.008) {
     anim.switchTouchpadModeAnim = targetTpMode;
+  }
+
+  const targetTapClick = s.settings.tapToClick ? 1 : 0;
+  anim.switchTapClickAnim += (targetTapClick - anim.switchTapClickAnim) * 0.28;
+  if (Math.abs(targetTapClick - anim.switchTapClickAnim) < 0.008) {
+    anim.switchTapClickAnim = targetTapClick;
+  }
+
+  if (anim.curClickPulse > 0) {
+    anim.curClickPulse = Math.max(0, anim.curClickPulse - 0.12);
   }
 
   anim.curStylePhase = (anim.curStylePhase + 0.14) % (Math.PI * 2);
@@ -5799,7 +7216,12 @@ function stepSettingsAnimations(s: LauncherState, anim: SettingsAnimState) {
     cursor = sui.displayCursor;
     scroll = sui.displayScroll;
     rowY0 = 30;
-    stride = 30;
+    stride = 31;
+  } else if (curScreen === 'SETTINGS_ANIMATIONS') {
+    cursor = sui.animCursor;
+    scroll = 0;
+    rowY0 = 48;
+    stride = 28;
   } else if (curScreen === 'SETTINGS_TOUCHPAD') {
     cursor = sui.tpCursor;
     scroll = 0;
@@ -5909,14 +7331,15 @@ function stepSettingsAnimations(s: LauncherState, anim: SettingsAnimState) {
   if (curSwitchSeq !== anim.lastProfSwitchSeq) {
     anim.lastProfSwitchSeq = curSwitchSeq;
     anim.profSwitchProgress = 0;
+    anim.profSwitchFromAvatarId = s.profSwitchFromAvatarId ?? getActiveProfile(s).avatarId;
     anim.profSwitchAvatarId = s.profSwitchAvatarId ?? getActiveProfile(s).avatarId;
     anim.profSwitchOriginX = s.profSwitchOriginX ?? 160;
     anim.profSwitchOriginY = s.profSwitchOriginY ?? 114;
     anim.profSwitchOriginD = s.profSwitchOriginD ?? 36;
   }
   if (anim.profSwitchProgress < 1) {
-    anim.qpGlowPhase = (anim.qpGlowPhase + 0.14) % (Math.PI * 2);
-    anim.profSwitchProgress = Math.min(1, anim.profSwitchProgress + 1 / 22);
+    anim.qpGlowPhase = (anim.qpGlowPhase + 0.16) % (Math.PI * 2);
+    anim.profSwitchProgress = Math.min(1, anim.profSwitchProgress + 1 / 20);
   }
 
   const curPlusSeq = s.profPlusSeq ?? 0;
@@ -5927,8 +7350,8 @@ function stepSettingsAnimations(s: LauncherState, anim: SettingsAnimState) {
     anim.profPlusOriginY = s.profPlusOriginY ?? 114;
   }
   if (anim.profPlusProgress < 1) {
-    anim.qpGlowPhase = (anim.qpGlowPhase + 0.14) % (Math.PI * 2);
-    anim.profPlusProgress = Math.min(1, anim.profPlusProgress + 1 / 18);
+    anim.qpGlowPhase = (anim.qpGlowPhase + 0.16) % (Math.PI * 2);
+    anim.profPlusProgress = Math.min(1, anim.profPlusProgress + 1 / 14);
   }
 
   const curBirthSeq = s.profBirthSeq ?? 0;
@@ -5944,8 +7367,13 @@ function stepSettingsAnimations(s: LauncherState, anim: SettingsAnimState) {
   }
 
   const targetQp = curScreen === 'LIBRARY' && sui.qpOpen ? 1 : 0;
+  if (targetQp > anim.qpOpenAnim + 0.01) anim.qpOpening = true;
+  else if (targetQp < anim.qpOpenAnim - 0.01) anim.qpOpening = false;
   anim.qpOpenAnim += (targetQp - anim.qpOpenAnim) * 0.34;
-  if (Math.abs(targetQp - anim.qpOpenAnim) < 0.01) anim.qpOpenAnim = targetQp;
+  if (Math.abs(targetQp - anim.qpOpenAnim) < 0.01) {
+    anim.qpOpenAnim = targetQp;
+    if (targetQp === 0) anim.qpOpening = false;
+  }
   if (
     sui.qpOpen ||
     (curScreen === 'SETTINGS_PROFILES' &&
@@ -5971,9 +7399,9 @@ function stepSettingsAnimations(s: LauncherState, anim: SettingsAnimState) {
     anim.qpPlusFocus += (tgtPlus - anim.qpPlusFocus) * 0.38;
     if (Math.abs(tgtPlus - anim.qpPlusFocus) < 0.015) anim.qpPlusFocus = tgtPlus;
 
-    for (let slot = 0; slot < 9; slot++) {
+    for (let slot = 0; slot < NL_MAX_PROFILES + 1; slot++) {
       const tgtScale = slot === cur ? 1.06 : 0.88;
-      anim.qpSlotScales[slot] += (tgtScale - anim.qpSlotScales[slot]) * 0.42;
+      anim.qpSlotScales[slot] = (anim.qpSlotScales[slot] ?? 0.88) + (tgtScale - (anim.qpSlotScales[slot] ?? 0.88)) * 0.42;
       if (Math.abs(tgtScale - anim.qpSlotScales[slot]) < 0.008) {
         anim.qpSlotScales[slot] = tgtScale;
       }
@@ -6036,7 +7464,8 @@ function stepSettingsAnimations(s: LauncherState, anim: SettingsAnimState) {
     curScreen === 'SETTINGS_RESET' ||
     (curScreen === 'SETTINGS_SHORTCUTS' && (sui.scPickingKey || sui.scConflictPrompt)) ||
     (curScreen === 'SETTINGS_ICONS' && sui.iconConfirmModal) ||
-    (curScreen === 'SETTINGS_PROFILES' && sui.profMode === 'CONFIRM_DELETE');
+    (curScreen === 'SETTINGS_PROFILES' && sui.profMode === 'CONFIRM_DELETE') ||
+    (curScreen === 'SETTINGS_DIAG' && sui.diagConfirmModal);
   if (modalOpen && !anim.lastModalOpen) {
     anim.modalProgress = 0.14;
   }
@@ -6054,6 +7483,8 @@ function stepSettingsAnimations(s: LauncherState, anim: SettingsAnimState) {
       ? sui.iconConfirmYes
       : curScreen === 'SETTINGS_PROFILES' && sui.profMode === 'CONFIRM_DELETE'
       ? sui.profDeleteYes
+      : curScreen === 'SETTINGS_DIAG' && sui.diagConfirmModal
+      ? sui.diagConfirmYes
       : false;
   const targetBtn = confirmYes ? 1 : 0;
   anim.modalBtnProgress += (targetBtn - anim.modalBtnProgress) * 0.36;
@@ -6066,6 +7497,7 @@ function drawLibraryGridForLayout(
   layout: LayoutMode,
   nameT: number,
   scT: number,
+  scrollX: number,
   scrollY: number,
   vSettled: boolean,
   searchH: number,
@@ -6080,10 +7512,11 @@ function drawLibraryGridForLayout(
   otherCardsAlpha = 1
 ) {
   const itemCount = s.filteredIndices.length;
-  const m00 = getLayoutMetrics(layout, false, false, itemCount);
-  const m01 = getLayoutMetrics(layout, false, true, itemCount);
-  const m10 = getLayoutMetrics(layout, true, false, itemCount);
-  const m11 = getLayoutMetrics(layout, true, true, itemCount);
+  const scrollDir = s.settings.scrollDir ?? 'vertical';
+  const m00 = getLayoutMetrics(layout, false, false, itemCount, scrollDir);
+  const m01 = getLayoutMetrics(layout, false, true, itemCount, scrollDir);
+  const m10 = getLayoutMetrics(layout, true, false, itemCount, scrollDir);
+  const m11 = getLayoutMetrics(layout, true, true, itemCount, scrollDir);
 
   const bilerp = (v00: number, v01: number, v10: number, v11: number) => {
     const a = v00 + (v01 - v00) * scT;
@@ -6102,6 +7535,7 @@ function drawLibraryGridForLayout(
   const topY = bilerp(m00.topY, m01.topY, m10.topY, m11.topY);
   const rowStrideY = bilerp(m00.rowStrideY, m01.rowStrideY, m10.rowStrideY, m11.rowStrideY);
   const pageStrideY = bilerp(m00.pageStrideY, m01.pageStrideY, m10.pageStrideY, m11.pageStrideY);
+  const pageStrideX = bilerp(m00.pageStrideX, m01.pageStrideX, m10.pageStrideX, m11.pageStrideX);
   const viewBottom = bilerp(m00.viewBottom, m01.viewBottom, m10.viewBottom, m11.viewBottom);
   const paginationY = bilerp(m00.paginationY, m01.paginationY, m10.paginationY, m11.paginationY);
   const labelH = bilerp(m00.labelH, m01.labelH, m10.labelH, m11.labelH);
@@ -6121,6 +7555,8 @@ function drawLibraryGridForLayout(
     labelH,
     rowStrideY,
     pageStrideY,
+    pageStrideX,
+    isHorizontal: m11.isHorizontal,
     viewBottom,
     paginationY,
   };
@@ -6141,9 +7577,12 @@ function drawLibraryGridForLayout(
       const glideDx = launchSkipGameIdx < 0 ? Math.round(cardOffsetX.get(g.id) ?? 0) : 0;
       const glideDy = launchSkipGameIdx < 0 ? Math.round(cardOffsetY.get(g.id) ?? 0) : 0;
       const slotCoords = computeGridSlotPos(mInterp, itemCount, fIdx);
-      const baseX = slotCoords.x + catDx + glideDx;
+      const baseX = slotCoords.x - scrollX + catDx + glideDx;
       const baseY = slotCoords.y + searchH - scrollY + glideDy;
 
+      if (baseX + cardW + 12 < 0 || baseX - 12 >= NL_SCREEN_W) {
+        continue;
+      }
       if (baseY + cardH + labelH + 12 < clipTop || baseY - 12 >= viewBottom) {
         continue;
       }
@@ -6155,7 +7594,7 @@ function drawLibraryGridForLayout(
       let drawY = baseY - (drawH - cardH) / 2;
 
       /* Clamp row-0 only when vertical scroll has settled (prevents upward pagination overlap) */
-      if (vSettled && searchH === 0 && drawY < NL_VIEW_TOP && row === s.currentPage * rows) {
+      if (!mInterp.isHorizontal && vSettled && searchH === 0 && drawY < NL_VIEW_TOP && row === s.currentPage * rows) {
         drawY = NL_VIEW_TOP + 1;
       }
 
@@ -6301,6 +7740,7 @@ function drawLauncherView(
   ctx: CanvasRenderingContext2D,
   s: LauncherState,
   anim: SettingsAnimState & {
+    scrollX: number;
     scrollY: number;
     dotPos: number;
     cardScales: Map<string, number>;
@@ -6320,6 +7760,7 @@ function drawLauncherView(
   const prevCatBeforeStep = anim.lastCategory;
   stepSettingsAnimations(s, anim);
   if (s.activeCategory !== prevCatBeforeStep) {
+    anim.scrollX = 0;
     anim.scrollY = 0;
     anim.cardOffsetX.clear();
     anim.cardOffsetY.clear();
@@ -6331,7 +7772,7 @@ function drawLauncherView(
   if (s.sui.screen !== 'LIBRARY' && anim.setOpenProgress >= 0.995) {
     drawSettingsView(ctx, s, anim, theme, s.sui.screen);
     if (anim.profPlusProgress < 1) {
-      drawProfilePlusTransition(ctx, anim, theme);
+      drawProfilePlusTransition(ctx, anim, theme, s.displayMode);
     }
     if (anim.profSwitchProgress < 1) {
       drawProfileSwitchTransition(ctx, s, anim, theme, imgCache);
@@ -6342,8 +7783,9 @@ function drawLauncherView(
   }
 
   const itemCount = s.filteredIndices.length;
-  const mOff = getLayoutMetrics(s.settings.layout, s.settings.showNames, false, itemCount);
-  const mOn = getLayoutMetrics(s.settings.layout, s.settings.showNames, true, itemCount);
+  const scrollDir = s.settings.scrollDir ?? 'vertical';
+  const mOff = getLayoutMetrics(s.settings.layout, s.settings.showNames, false, itemCount, scrollDir);
+  const mOn = getLayoutMetrics(s.settings.layout, s.settings.showNames, true, itemCount, scrollDir);
   const scT = anim.switchShortcutsAnim;
   const nameT = anim.switchShowNamesAnim;
   const m = {
@@ -6356,6 +7798,7 @@ function drawLauncherView(
     topY: Math.round(mOff.topY + (mOn.topY - mOff.topY) * scT),
     rowStrideY: Math.round(mOff.rowStrideY + (mOn.rowStrideY - mOff.rowStrideY) * scT),
     pageStrideY: Math.round(mOff.pageStrideY + (mOn.pageStrideY - mOff.pageStrideY) * scT),
+    pageStrideX: Math.round(mOff.pageStrideX + (mOn.pageStrideX - mOff.pageStrideX) * scT),
     viewBottom: Math.round(mOff.viewBottom + (mOn.viewBottom - mOff.viewBottom) * scT),
     paginationY: Math.round(mOff.paginationY + (mOn.paginationY - mOff.paginationY) * scT),
   };
@@ -6412,11 +7855,14 @@ function drawLauncherView(
     }
   }
 
-  /* Smooth vertical scroll & dot interpolation (interruptible at 60 FPS) */
-  const targetScrollY = s.currentPage * m.pageStrideY;
+  /* Smooth vertical/horizontal scroll & dot interpolation (interruptible at 60 FPS) */
+  const targetScrollX = m.isHorizontal ? s.currentPage * m.pageStrideX : 0;
+  const targetScrollY = m.isHorizontal ? 0 : s.currentPage * m.pageStrideY;
+  anim.scrollX += (targetScrollX - anim.scrollX) * 0.28;
+  if (Math.abs(targetScrollX - anim.scrollX) < 0.35) anim.scrollX = targetScrollX;
   anim.scrollY += (targetScrollY - anim.scrollY) * 0.28;
   if (Math.abs(targetScrollY - anim.scrollY) < 0.35) anim.scrollY = targetScrollY;
-  const vSettled = Math.abs(targetScrollY - anim.scrollY) <= 1.0;
+  const vSettled = Math.abs(targetScrollY - anim.scrollY) <= 1.0 && Math.abs(targetScrollX - anim.scrollX) <= 1.0;
 
   const targetDot = s.currentPage;
   anim.dotPos += (targetDot - anim.dotPos) * 0.3;
@@ -6516,6 +7962,18 @@ function drawLauncherView(
     ctx.fillText('★', 151.8, 12.8);
   }
 
+  /* Subtle non-intrusive diagnostic warning pill in Library top bar when errors/warnings exist */
+  if (s.diag.entries.length > 0) {
+    const warnLabel = `! ${s.diag.entries.length}`;
+    ctx.font = 'bold 7.2px "JetBrains Mono", monospace';
+    const warnW = Math.min(40, Math.ceil(ctx.measureText(warnLabel).width) + 10);
+    traceRoundedRect(ctx, 170, 5, warnW, 15, 4);
+    ctx.fillStyle = '#78350f';
+    ctx.fill();
+    ctx.fillStyle = '#fef3c7';
+    ctx.fillText(warnLabel, 175, 12.8);
+  }
+
   const gearOpenEase =
     anim.setOpenProgress <= 0
       ? 0
@@ -6596,12 +8054,64 @@ function drawLauncherView(
     ctx.restore();
   }
 
+  const drawPaginationLayer = () => {
+    const indicators = computePaginationIndicators(
+      s.currentPage,
+      s.totalPages,
+      anim.dotPos,
+      m.paginationY
+    );
+    let pSx = NL_SCREEN_W;
+    let pEx = 0;
+    indicators.forEach((ind, iIdx) => {
+      if (ind.x < pSx) pSx = ind.x;
+      if (ind.x + ind.width > pEx) pEx = ind.x + ind.width;
+      const hovDot = mAct && s.sui.hoverKind === 'PAGE_DOT' && s.sui.hoverIndex === iIdx;
+      ctx.fillStyle = hovDot
+        ? theme.accentSecondary
+        : lerpHexColor(theme.dotInactive, theme.accentPrimary, ind.activeWeight);
+      if (ind.mode === 'dashes') {
+        traceRoundedRect(ctx, ind.x, ind.y, ind.width, ind.height, ind.radius);
+      } else {
+        traceCapsule(ctx, ind.x, ind.y, ind.width, ind.height);
+      }
+      ctx.fill();
+    });
+
+    if (isMouseModeActive(s) && s.totalPages > 1) {
+      const axL = pSx >= 13 ? pSx - 12 : 2;
+      const axR = pEx + 13 <= NL_SCREEN_W ? pEx + 7 : NL_SCREEN_W - 7;
+      ctx.font = 'bold 8px "JetBrains Mono", monospace';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = mAct && s.sui.hoverKind === 'PAGE_PREV' ? theme.accentPrimary : theme.textSecondary;
+      ctx.fillText('<', axL, m.paginationY + 4);
+      ctx.fillStyle = mAct && s.sui.hoverKind === 'PAGE_NEXT' ? theme.accentPrimary : theme.textSecondary;
+      ctx.fillText('>', axR, m.paginationY + 4);
+    }
+  };
+
+  /* #R18 Horizontal Mode ONLY: draw pagination in background layer BEFORE library cards
+   * and allow cards/halos to extend cleanly over the pagination band up to the bottom bar.
+   * Vertical Mode remains 100% untouched. */
+  let gridClipBot = m.viewBottom;
+  if (m.isHorizontal) {
+    drawPaginationLayer();
+    let hClipBot = NL_SCREEN_H;
+    if (scT > 0.005) {
+      const barY = Math.max(NL_BOTTOM_BAR_Y, Math.round(NL_SCREEN_H - NL_BOTTOM_BAR_H * scT));
+      if (barY - 1 < hClipBot) hClipBot = barY - 1;
+    }
+    if (hClipBot < m.viewBottom) hClipBot = m.viewBottom;
+    gridClipBot = hClipBot;
+  }
+
   ctx.save();
   ctx.beginPath();
-  ctx.rect(0, gridClipTop, NL_SCREEN_W, Math.max(0, m.viewBottom - gridClipTop));
+  ctx.rect(0, gridClipTop, NL_SCREEN_W, Math.max(0, gridClipBot - gridClipTop));
   ctx.clip();
 
   if (s.filteredIndices.length > 0) {
+    const scrollX = Math.round(anim.scrollX);
     const scrollY = Math.round(anim.scrollY);
     if (anim.layoutTransProgress < 0.99 && anim.layoutFrom !== s.settings.layout) {
       const ease = 1 - Math.pow(1 - Math.max(0, Math.min(1, anim.layoutTransProgress)), 3);
@@ -6613,6 +8123,7 @@ function drawLauncherView(
         anim.layoutFrom,
         nameT,
         scT,
+        scrollX,
         scrollY,
         vSettled,
         searchH,
@@ -6633,6 +8144,7 @@ function drawLauncherView(
         s.settings.layout,
         nameT,
         scT,
+        scrollX,
         scrollY,
         vSettled,
         searchH,
@@ -6654,6 +8166,7 @@ function drawLauncherView(
         s.settings.layout,
         nameT,
         scT,
+        scrollX,
         scrollY,
         vSettled,
         searchH,
@@ -6670,11 +8183,38 @@ function drawLauncherView(
     }
 
     const [br, bg, bb] = theme.bgMainRgb;
-    const fadeGrad = ctx.createLinearGradient(0, m.viewBottom - 6, 0, m.viewBottom);
-    fadeGrad.addColorStop(0, `rgba(${br}, ${bg}, ${bb}, 0)`);
-    fadeGrad.addColorStop(1, theme.bgMain);
-    ctx.fillStyle = fadeGrad;
-    ctx.fillRect(0, m.viewBottom - 6, NL_SCREEN_W, 6);
+    if (m.isHorizontal && s.totalPages > 1 && searchH === 0 && otherCardsAlpha >= 0.99) {
+      /* Exact R15 Horizontal Mode: subtle 10 px left & right edge fade for natural side icon peeks */
+      const lGrad = ctx.createLinearGradient(0, 0, 10, 0);
+      lGrad.addColorStop(0, `rgba(${br}, ${bg}, ${bb}, 0.56)`);
+      lGrad.addColorStop(1, `rgba(${br}, ${bg}, ${bb}, 0)`);
+      ctx.fillStyle = lGrad;
+      ctx.fillRect(0, gridClipTop, 10, gridClipBot - gridClipTop);
+      const rGrad = ctx.createLinearGradient(NL_SCREEN_W - 10, 0, NL_SCREEN_W, 0);
+      rGrad.addColorStop(0, `rgba(${br}, ${bg}, ${bb}, 0)`);
+      rGrad.addColorStop(1, `rgba(${br}, ${bg}, ${bb}, 0.56)`);
+      ctx.fillStyle = rGrad;
+      ctx.fillRect(NL_SCREEN_W - 10, gridClipTop, 10, gridClipBot - gridClipTop);
+    } else if (!m.isHorizontal && s.totalPages > 1 && searchH === 0 && otherCardsAlpha >= 0.99) {
+      /* R17 Vertical Mode (exact mirror of R15 horizontal): subtle 8 px top & bottom edge fade
+       * for natural peeking neighboring page icons */
+      const tGrad = ctx.createLinearGradient(0, gridClipTop, 0, gridClipTop + 8);
+      tGrad.addColorStop(0, `rgba(${br}, ${bg}, ${bb}, 0.44)`);
+      tGrad.addColorStop(1, `rgba(${br}, ${bg}, ${bb}, 0)`);
+      ctx.fillStyle = tGrad;
+      ctx.fillRect(0, gridClipTop, NL_SCREEN_W, 8);
+      const bGrad = ctx.createLinearGradient(0, m.viewBottom - 8, 0, m.viewBottom);
+      bGrad.addColorStop(0, `rgba(${br}, ${bg}, ${bb}, 0)`);
+      bGrad.addColorStop(1, `rgba(${br}, ${bg}, ${bb}, 0.44)`);
+      ctx.fillStyle = bGrad;
+      ctx.fillRect(0, m.viewBottom - 8, NL_SCREEN_W, 8);
+    } else if (!m.isHorizontal) {
+      const fadeGrad = ctx.createLinearGradient(0, m.viewBottom - 6, 0, m.viewBottom);
+      fadeGrad.addColorStop(0, `rgba(${br}, ${bg}, ${bb}, 0)`);
+      fadeGrad.addColorStop(1, theme.bgMain);
+      ctx.fillStyle = fadeGrad;
+      ctx.fillRect(0, m.viewBottom - 6, NL_SCREEN_W, 6);
+    }
   } else {
     const emptyY = Math.round((gridClipTop + m.viewBottom - 48) / 2);
     traceRoundedRect(ctx, 48 + catDx, emptyY, 224, 48, 7);
@@ -6692,39 +8232,9 @@ function drawLauncherView(
   }
   ctx.restore();
 
-  /* 4. Smart Adaptive Pagination: circular dots (<= 19) or compact horizontal dashes (> 19) */
-  const indicators = computePaginationIndicators(
-    s.currentPage,
-    s.totalPages,
-    anim.dotPos,
-    m.paginationY
-  );
-  let pSx = NL_SCREEN_W;
-  let pEx = 0;
-  indicators.forEach((ind, iIdx) => {
-    if (ind.x < pSx) pSx = ind.x;
-    if (ind.x + ind.width > pEx) pEx = ind.x + ind.width;
-    const hovDot = mAct && s.sui.hoverKind === 'PAGE_DOT' && s.sui.hoverIndex === iIdx;
-    ctx.fillStyle = hovDot
-      ? theme.accentSecondary
-      : lerpHexColor(theme.dotInactive, theme.accentPrimary, ind.activeWeight);
-    if (ind.mode === 'dashes') {
-      traceRoundedRect(ctx, ind.x, ind.y, ind.width, ind.height, ind.radius);
-    } else {
-      traceCapsule(ctx, ind.x, ind.y, ind.width, ind.height);
-    }
-    ctx.fill();
-  });
-
-  if (isMouseModeActive(s) && s.totalPages > 1) {
-    const axL = pSx >= 13 ? pSx - 12 : 2;
-    const axR = pEx + 13 <= NL_SCREEN_W ? pEx + 7 : NL_SCREEN_W - 7;
-    ctx.font = 'bold 8px "JetBrains Mono", monospace';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = mAct && s.sui.hoverKind === 'PAGE_PREV' ? theme.accentPrimary : theme.textSecondary;
-    ctx.fillText('<', axL, m.paginationY + 4);
-    ctx.fillStyle = mAct && s.sui.hoverKind === 'PAGE_NEXT' ? theme.accentPrimary : theme.textSecondary;
-    ctx.fillText('>', axR, m.paginationY + 4);
+  /* 4. Smart Adaptive Pagination — Vertical Mode keeps exact post-grid z-order (Horizontal Mode already rendered behind library) */
+  if (!m.isHorizontal) {
+    drawPaginationLayer();
   }
 
   /* 5. Bottom Centered Shortcuts Bar (smoothly hidden when showShortcuts is OFF) */
@@ -6761,6 +8271,22 @@ function drawLauncherView(
     }
   }
 
+  /* 6. #R20 Ultra-discreet bottom-left micro-signature "daniel.b" (zero overlap) */
+  if (otherCardsAlpha >= 0.99) {
+    const sigBg = scT > 0.35 ? theme.bgBottomBar : theme.bgMain;
+    ctx.save();
+    ctx.font = '500 5.5px "JetBrains Mono", monospace';
+    ctx.textBaseline = 'bottom';
+    ctx.fillStyle = lerpHexColor(sigBg, theme.textSecondary, 0.42);
+    ctx.fillText('daniel.b', 3, NL_SCREEN_H - 1.5);
+    ctx.restore();
+  }
+
+  /* #R22 Non-blocking Return-from-Game Reverse 4-Layer Organic Liquid Reveal over live Library */
+  if (anim.returnDropStartMs !== null && !isSettingsOpenOrClosing && !s.sui.qpOpen && anim.qpOpenAnim <= 0.005) {
+    drawReturnDropOverlay(ctx, s, anim, nowMs, theme);
+  }
+
   /* Quick Profile Selector Overlay (Library only) */
   if (anim.qpOpenAnim > 0.005 || s.sui.qpOpen) {
     drawQuickProfileOverlay(ctx, s, anim, theme, imgCache);
@@ -6772,7 +8298,7 @@ function drawLauncherView(
       s.sui.screen !== 'LIBRARY' ? s.sui.screen : anim.prevUiScreen;
     compositeSettingsLiquidDrop(ctx, s, anim, theme, activeSettingsScreen);
     if (anim.profPlusProgress < 1) {
-      drawProfilePlusTransition(ctx, anim, theme);
+      drawProfilePlusTransition(ctx, anim, theme, s.displayMode);
     }
   }
 

@@ -1,8 +1,8 @@
-export const EXPECTED_TNS_BUILD_STAMP = 'Build 2026-11-17 #R7';
+export const EXPECTED_TNS_BUILD_STAMP = 'Build 2026-11-18 #R23';
 export const EXPECTED_TNS_VERSION = 'v3.1';
-export const EXPECTED_TNS_SIZE_BYTES = 382728;
+export const EXPECTED_TNS_SIZE_BYTES = 579004;
 export const EXPECTED_TNS_SHA256 =
-  '72481d382b714e3cac2e7d4701010419bb7a75bff0293d4fedbc30478ea06875';
+  '8928ad36a1d7440aeb5fae6abdf5840eabd3709ad35e42cb6c229b1dfd2d84d0';
 
 export interface TnsVerificationResult {
   valid: boolean;
@@ -22,7 +22,7 @@ export interface TnsVerificationResult {
 
 /**
  * Extracts ASCII strings from the Zehn extra data / notice region to locate
- * the embedded Notice and Build Stamp (e.g. "Build 2026-11-16 #R5").
+ * the embedded Notice and Build Stamp (e.g. "Build 2026-11-18 #R15").
  */
 function extractZehnNoticeAndStamp(
   bytes: Uint8Array,
@@ -154,7 +154,7 @@ export function verifyTnsBuffer(
           ? `Le binaire ARM est valide (${bytes.byteLength} octets), MAIS le nom « ${filename} » contient un espace avant .tns. Renommez-le exactement « N-Launcher.tns » sans espace.`
           : isLatestBuild
             ? `Binaire ARM Ndless authentique et À JOUR (${EXPECTED_TNS_VERSION} · ${buildStamp} · ${bytes.byteLength.toLocaleString('fr-FR')} octets, Zehn v1 @ 0x${zehnOffset.toString(16)}, ${relocCount} relocations ARM).`
-            : `Binaire ARM Ndless valide (${bytes.byteLength.toLocaleString('fr-FR')} octets, ${buildStamp ?? 'ancienne compilation sans estampille #R7'}). Téléchargez la dernière compilation ${EXPECTED_TNS_VERSION} (${EXPECTED_TNS_BUILD_STAMP}, ${EXPECTED_TNS_SIZE_BYTES.toLocaleString('fr-FR')} octets) ci-dessus.`,
+            : `Binaire ARM Ndless valide (${bytes.byteLength.toLocaleString('fr-FR')} octets, ${buildStamp ?? 'ancienne compilation sans estampille #R17'}). Téléchargez la dernière compilation ${EXPECTED_TNS_VERSION} (${EXPECTED_TNS_BUILD_STAMP}, ${EXPECTED_TNS_SIZE_BYTES.toLocaleString('fr-FR')} octets) ci-dessus.`,
       };
     }
   }

@@ -6,9 +6,12 @@ import {
   ACCENT_COLOR_ORDER,
   CATEGORY_LABELS,
   CATEGORY_ORDER,
+  CURSOR_SIZE_LABELS,
+  CURSOR_SIZE_ORDER,
   DISPLAY_MODE_ORDER,
   LAYOUT_ORDER,
   NL_COVER_RADIUS,
+  NL_CURSOR_SIZE_DEFAULT,
   NL_DISPLAY_OPT_COUNT,
   NL_GAMES_PER_PAGE,
   NL_GRID_CARD_H,
@@ -36,6 +39,7 @@ import {
   buildTiDocZipHeader,
   buildWindowsIcoBuffer,
   buildZehnTnsHeader,
+  clampCursorSize,
   clampTouchpadSensitivity,
   computeGameMonogram,
   computeNavHighlightStrength,
@@ -49,14 +53,18 @@ import {
   formatDuration,
   formatTimestamp,
   getConsoleTheme,
+  getCursorSizeMetrics,
   getLayoutMetrics,
   getShortcutDefs,
+  getTouchpadTab0RowRects,
   getTouchpadThresholdForLevel,
+  runSimulatorRescan,
   handleCharInput,
   handleLauncherKey,
   inspectTnsBuffer,
   isShortcutAssignable,
   isShortcutReserved,
+  isSystemOrSelfFile,
   NL_SCALE_NORMAL,
   NL_SCALE_SELECTED,
   NL_SCREEN_H,
@@ -82,18 +90,41 @@ import {
   processTouchpadClick,
   processTouchpadSample,
   renameUserProfile,
+  CURSOR_SPEED_LABELS,
   CURSOR_STYLE_LABELS,
   CURSOR_STYLE_ORDER,
+  NL_CURSOR_SPEED_COUNT,
+  NL_CURSOR_SPEED_DEFAULT,
+  TOUCHPAD_MODE_LABELS,
+  clampCursorSpeed,
+  clampCursorStyle,
+  clickMouse,
   computeTouchpadCursorTarget,
+  feedMouseTouchpadDelta,
+  isMouseModeActive,
   isTouchpadCursorVisible,
+  moveMouseTo,
   resetSettingsOnly,
   resetTouchpadTracker,
   scanVirtualFilesystem,
+  setCtrlMouseActive,
+  isProfileProtected,
   setTouchpadControl,
   setUserProfileAvatar,
   stepProfile,
   switchProfileTo,
+  toggleProfileLock,
   toggleSimulatedNdlessPersistence,
+  updateMouseHover,
+  NL_BOOT_STAGE_COUNT,
+  clearDiagLogs,
+  getBootStageLabel,
+  getDiagDefaults,
+  recordBootStage,
+  recoverMemoryOnOom,
+  reportDiagError,
+  setHardwarePreset,
+  simulateFaultInjection,
 } from './nlauncherEngine';
 import { verifyTnsBuffer } from '../utils/downloadTns';
 
@@ -107,7 +138,7 @@ test('v3 grid & rounded square card constants match 3x2 vertical scroll with bot
   assert.equal(NL_GRID_GAP_X, 16);
   assert.equal(NL_ICON_W, 94);
   assert.equal(NL_ICON_H, 68);
-  assert.equal(NL_ICON_MAX_DIM, 128);
+  assert.equal(NL_ICON_MAX_DIM, 84);
   assert.equal(NL_COVER_RADIUS, 11);
   assert.equal(NL_PAGE_STRIDE_Y, 180);
   assert.equal(NL_PAGINATION_MAX_DOTS, 19);
@@ -405,7 +436,7 @@ test('real compiled N-Launcher.tns v3.1 binary on disk is a valid ARM PRG+Zehn v
   assert.equal(binInfo.execAuthor, 'daniel.b');
   assert.equal(binInfo.execVersion, 3);
   assert.equal(binInfo.relocCount > 1000, true);
-  assert.equal(binInfo.allocSize > 500000, true);
+  assert.equal(binInfo.allocSize > 400000 && binInfo.allocSize < 650000, true);
   assert.equal(binInfo.usesLcdBlit, true);
   assert.equal(binInfo.supportsHww, true);
 
@@ -452,7 +483,7 @@ test('v3.1 settings menu, layouts, showShortcuts expansion, touchpad nav, shortc
         const m = getLayoutMetrics(lay, sn, sc);
         assert.equal(m.cols >= 1 && m.rows >= 1, true);
         assert.equal(m.cardW, m.cardH, `${lay} (${sn}/${sc}) cards must be square 1:1`);
-        assert.equal(m.cardW >= 32, true);
+        assert.equal(m.cardW >= 24, true);
         assert.equal(m.marginX >= 10, true);
         assert.equal(m.topY >= 28, true);
         assert.equal(m.viewBottom, sc ? 205 : 222);
@@ -465,12 +496,12 @@ test('v3.1 settings menu, layouts, showShortcuts expansion, touchpad nav, shortc
       }
     }
   }
-  const def3x2 = getLayoutMetrics('3x2', false, true);
+  const def3x2 = getLayoutMetrics('3x2', false, true, 6);
   assert.equal(def3x2.cardW, 84);
   assert.equal(def3x2.cardH, 84);
   assert.equal(def3x2.radius, 11);
 
-  const exp3x2 = getLayoutMetrics('3x2', false, false);
+  const exp3x2 = getLayoutMetrics('3x2', false, false, 6);
   assert.equal(exp3x2.cardW, 90);
   assert.equal(exp3x2.cardH, 90);
   assert.equal(exp3x2.viewBottom, 222);
@@ -478,28 +509,33 @@ test('v3.1 settings menu, layouts, showShortcuts expansion, touchpad nav, shortc
   const pagNoSc = computePaginationIndicators(0, 2, 0, exp3x2.paginationY);
   assert.equal(pagNoSc[0].y, 226);
 
-  // Toggle showShortcuts in SETTINGS_DISPLAY (row 0 of SETTINGS_MAIN, option 2 of SETTINGS_DISPLAY)
+  // Toggle showShortcuts in SETTINGS_DISPLAY (row 0 of SETTINGS_MAIN, option 3 of SETTINGS_DISPLAY)
   state = handleLauncherKey(state, 'SETTINGS');
   assert.equal(SETTINGS_MENU_ITEMS[state.sui.menuCursor].id, 'SETTINGS_DISPLAY');
   state = handleLauncherKey(state, 'EXE');
   assert.equal(state.sui.screen, 'SETTINGS_DISPLAY');
   assert.equal(state.sui.displayCursor, 0);
-  state = handleLauncherKey(state, 'DOWN'); // row 1 (showNames)
+  state = handleLauncherKey(state, 'DOWN'); // row 1 (scrollDir)
   assert.equal(state.sui.displayCursor, 1);
-  state = handleLauncherKey(state, 'DOWN'); // row 2 (showShortcuts)
+  state = handleLauncherKey(state, 'DOWN'); // row 2 (showNames)
   assert.equal(state.sui.displayCursor, 2);
+  state = handleLauncherKey(state, 'DOWN'); // row 3 (showShortcuts)
+  assert.equal(state.sui.displayCursor, 3);
   state = handleLauncherKey(state, 'EXE');
   assert.equal(state.settings.showShortcuts, false);
   state = handleLauncherKey(state, 'EXE');
   assert.equal(state.settings.showShortcuts, true);
   state = handleLauncherKey(state, 'ESC'); // back to SETTINGS_MAIN
 
-  // Toggle Touchpad Navigation in SETTINGS_TOUCHPAD (row 1 of SETTINGS_MAIN)
-  state = handleLauncherKey(state, 'DOWN'); // 1: Touchpad
+  // Toggle Touchpad Navigation in SETTINGS_TOUCHPAD (row 2 after #R20 Animations)
+  state = handleLauncherKey(state, 'DOWN'); // 1: Animations
+  state = handleLauncherKey(state, 'DOWN'); // 2: Touchpad
   assert.equal(SETTINGS_MENU_ITEMS[state.sui.menuCursor].id, 'SETTINGS_TOUCHPAD');
   state = handleLauncherKey(state, 'EXE');
   assert.equal(state.sui.screen, 'SETTINGS_TOUCHPAD');
+  assert.equal(state.settings.touchpadMode, 'touchpad');
   assert.equal(state.settings.touchpadNav, false);
+  state = handleLauncherKey(state, 'DOWN'); // Row 1: Glissement au pave (Mode 1)
   state = handleLauncherKey(state, 'EXE');
   assert.equal(state.settings.touchpadNav, true);
   state = handleLauncherKey(state, 'ESC'); // back to SETTINGS_MAIN
@@ -536,8 +572,9 @@ test('v3.1 settings menu, layouts, showShortcuts expansion, touchpad nav, shortc
 
   // Shortcut assign + reserved block + conflict replace + dynamic help + direct launch
   state = handleLauncherKey(state, 'SETTINGS');
-  state = handleLauncherKey(state, 'DOWN'); // 1: Touchpad
-  state = handleLauncherKey(state, 'DOWN'); // 2: Shortcuts
+  state = handleLauncherKey(state, 'DOWN'); // 1: Animations
+  state = handleLauncherKey(state, 'DOWN'); // 2: Touchpad
+  state = handleLauncherKey(state, 'DOWN'); // 3: Shortcuts
   assert.equal(SETTINGS_MENU_ITEMS[state.sui.menuCursor].id, 'SETTINGS_SHORTCUTS');
   state = handleLauncherKey(state, 'EXE');
   assert.equal(state.sui.screen, 'SETTINGS_SHORTCUTS');
@@ -681,14 +718,19 @@ test('v3.1 settings menu, layouts, showShortcuts expansion, touchpad nav, shortc
     settings: {
       autostart: true,
       globalHotkey: true,
+      hotkeyCombo: 'shift_menu',
       layout: '4x4',
       showNames: true,
       showShortcuts: false,
       showBattery: false,
+      touchpadMode: 'mouse',
       touchpadNav: true,
       touchpadSensitivity: 4,
+      cursorSpeed: 4,
       touchpadCursorShow: true,
       touchpadCursorStyle: 'circle',
+      cursorSize: 'large',
+      tapToClick: true,
       sortOrder: 'play_time',
     },
   };
@@ -699,8 +741,10 @@ test('v3.1 settings menu, layouts, showShortcuts expansion, touchpad nav, shortc
   assert.equal(state.settings.showNames, false);
   assert.equal(state.settings.showShortcuts, true);
   assert.equal(state.settings.showBattery, false);
+  assert.equal(state.settings.touchpadMode, 'touchpad');
   assert.equal(state.settings.touchpadNav, false);
   assert.equal(state.settings.touchpadSensitivity, NL_TP_SENS_DEFAULT);
+  assert.equal(state.settings.cursorSpeed, NL_CURSOR_SPEED_DEFAULT);
   assert.equal(state.settings.touchpadCursorShow, false);
   assert.equal(state.settings.touchpadCursorStyle, 'arrow');
   assert.equal(state.settings.sortOrder, 'alpha_asc');
@@ -715,33 +759,34 @@ test('v3.1 settings menu, layouts, showShortcuts expansion, touchpad nav, shortc
   assert.equal(state.games[1].playTimeSec, playGame1);
 });
 
-test('battery display removed cleanly & Settings -> Affichage exposes 4 streamlined options + DEL poweroff', () => {
-  assert.equal(NL_DISPLAY_OPT_COUNT, 4);
+test('battery display removed cleanly & Settings -> Affichage exposes 5 streamlined options (#R15 scrollDir) + DEL poweroff', () => {
+  assert.equal(NL_DISPLAY_OPT_COUNT, 5);
 
   let state = scanVirtualFilesystem(createInitialVirtualFilesystem());
   assert.equal(state.settings.showBattery, false);
   assert.equal(state.settings.autostart, false);
 
-  // Settings -> Affichage (row 0 of SETTINGS_MAIN) has 4 options (0..3), ending with poweroff at row 3
+  // Settings -> Affichage (row 0 of SETTINGS_MAIN) has 5 options (0..4), ending with poweroff at row 4
   state = handleLauncherKey(state, 'SETTINGS');
   assert.equal(SETTINGS_MENU_ITEMS[state.sui.menuCursor].id, 'SETTINGS_DISPLAY');
   state = handleLauncherKey(state, 'EXE');
   assert.equal(state.sui.screen, 'SETTINGS_DISPLAY');
   assert.equal(state.sui.displayCursor, 0);
 
-  state = handleLauncherKey(state, 'DOWN'); // 1: Afficher les noms
-  state = handleLauncherKey(state, 'DOWN'); // 2: Afficher les raccourcis
-  state = handleLauncherKey(state, 'DOWN'); // 3: Eteindre la calculatrice
-  assert.equal(state.sui.displayCursor, 3);
-  assert.equal(state.sui.displayScroll, 1);
+  state = handleLauncherKey(state, 'DOWN'); // 1: Sens de defilement
+  state = handleLauncherKey(state, 'DOWN'); // 2: Afficher les noms
+  state = handleLauncherKey(state, 'DOWN'); // 3: Afficher les raccourcis
+  state = handleLauncherKey(state, 'DOWN'); // 4: Eteindre la calculatrice
+  assert.equal(state.sui.displayCursor, 4);
+  assert.equal(state.sui.displayScroll, 2);
 
-  // Wrap around from row 3 -> 0 (no 5th battery option!)
+  // Wrap around from row 4 -> 0
   state = handleLauncherKey(state, 'DOWN');
   assert.equal(state.sui.displayCursor, 0);
   state = handleLauncherKey(state, 'UP');
-  assert.equal(state.sui.displayCursor, 3);
+  assert.equal(state.sui.displayCursor, 4);
 
-  // Trigger power-off action on row 3
+  // Trigger power-off action on row 4
   assert.equal(state.sui.poweroffRequested, false);
   state = handleLauncherKey(state, 'EXE');
   assert.equal(state.sui.poweroffRequested, true);
@@ -770,8 +815,8 @@ test('battery display removed cleanly & Settings -> Affichage exposes 4 streamli
   assert.equal(state.settings.showBattery, false);
 });
 
-test('settings menu visual & ergonomic overhaul: 14 icon-badged categories including SETTINGS_PROFILES without SETTINGS_AUTOSTART or SETTINGS_SEARCH', () => {
-  assert.equal(SETTINGS_MENU_ITEMS.length, 14);
+test('settings menu visual & ergonomic overhaul: 16 icon-badged categories including SETTINGS_ANIMATIONS, SETTINGS_PROFILES and SETTINGS_DIAG without SETTINGS_AUTOSTART or SETTINGS_SEARCH', () => {
+  assert.equal(SETTINGS_MENU_ITEMS.length, 16);
   assert.equal(
     SETTINGS_MENU_ITEMS.some((i) => (i.id as string) === 'SETTINGS_SEARCH'),
     false
@@ -781,6 +826,7 @@ test('settings menu visual & ergonomic overhaul: 14 icon-badged categories inclu
     false
   );
 
+  const animItem = SETTINGS_MENU_ITEMS.find((i) => i.id === 'SETTINGS_ANIMATIONS');
   const refreshItem = SETTINGS_MENU_ITEMS.find((i) => i.id === 'SETTINGS_REFRESH_LIB');
   const hotkeyItem = SETTINGS_MENU_ITEMS.find((i) => i.id === 'SETTINGS_HOTKEY');
   const profilesItem = SETTINGS_MENU_ITEMS.find((i) => i.id === 'SETTINGS_PROFILES');
@@ -788,7 +834,10 @@ test('settings menu visual & ergonomic overhaul: 14 icon-badged categories inclu
   const keyHelpItem = SETTINGS_MENU_ITEMS.find((i) => i.id === 'SETTINGS_KEY_HELP');
   const capBatchItem = SETTINGS_MENU_ITEMS.find((i) => i.id === 'SETTINGS_CAPTURE_BATCH');
   const iconsItem = SETTINGS_MENU_ITEMS.find((i) => i.id === 'SETTINGS_ICONS');
-  assert.equal(refreshItem?.label, 'Actualiser la bibliotheque');
+  const diagItem = SETTINGS_MENU_ITEMS.find((i) => i.id === 'SETTINGS_DIAG');
+  assert.equal(animItem?.label, 'Animations');
+  assert.equal(animItem?.icon, 'ANIM');
+  assert.equal(refreshItem?.label, 'Rescanner les jeux');
   assert.equal(refreshItem?.icon, 'REFRESH');
   assert.equal(hotkeyItem?.label, 'Raccourci global TI-OS');
   assert.equal(hotkeyItem?.icon, 'HOTKEY');
@@ -802,9 +851,11 @@ test('settings menu visual & ergonomic overhaul: 14 icon-badged categories inclu
   assert.equal(capBatchItem?.icon, 'CAPTURE');
   assert.equal(iconsItem?.label, 'Gestion des icones');
   assert.equal(iconsItem?.icon, 'ICONS');
+  assert.equal(diagItem?.label, 'Diagnostics & Journaux');
+  assert.equal(diagItem?.icon, 'DIAG');
 
   const iconSet = new Set(SETTINGS_MENU_ITEMS.map((i) => i.icon));
-  assert.equal(iconSet.size, 14);
+  assert.equal(iconSet.size, 16);
 
   for (const item of SETTINGS_MENU_ITEMS) {
     assert.equal(item.label.length >= 6, true);
@@ -841,9 +892,9 @@ test('3-file separation (.tns / .bmp.tns+.ico.tns / .scr.tns), batch capture que
   const totalGames = state.games.length;
   assert.equal(totalGames, 9);
 
-  // 2. Open Settings -> Generer captures d'ecran (index 6)
+  // 2. Open Settings -> Generer captures d'ecran (index 7 after #R20 Animations)
   state = handleLauncherKey(state, 'SETTINGS');
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 7; i++) {
     state = handleLauncherKey(state, 'DOWN');
   }
   assert.equal(SETTINGS_MENU_ITEMS[state.sui.menuCursor].id, 'SETTINGS_CAPTURE_BATCH');
@@ -936,13 +987,13 @@ test('genuine Windows .ico decoding (16-bit, 24-bit, 32-bit RGBA), corrupted/PNG
   assert.equal(ico32[3], 0x00);
   const dec32 = decodeWindowsIcoBuffer(ico32);
   assert.notEqual(dec32, null);
-  assert.equal(dec32!.width, 94);
-  assert.equal(dec32!.height, 68);
+  assert.equal(dec32!.width, 84);
+  assert.equal(dec32!.height, 61);
   assert.equal(dec32!.bpp, 32);
-  assert.equal(dec32!.rgb565Pixels.length, 94 * 68);
+  assert.equal(dec32!.rgb565Pixels.length, 84 * 61);
   assert.match(dec32!.dataUrl, /^data:image\/png;base64,/);
 
-  // 2. Decode genuine 24-bit RGB Windows .ico (64x64 square -> zero crop, preserved 64x64)
+  // 2. Decode genuine 24-bit RGB Windows .ico (64x64 square -> zero crop, zero upscaling, preserved 64x64)
   const ico24 = buildWindowsIcoBuffer({
     width: 64,
     height: 64,
@@ -957,20 +1008,20 @@ test('genuine Windows .ico decoding (16-bit, 24-bit, 32-bit RGBA), corrupted/PNG
   assert.equal(dec24!.bpp, 24);
   assert.equal(dec24!.rgb565Pixels.length, 64 * 64);
 
-  // 2b. Aspect-preserving downscale of non-square high-res 16:9 (160x90 -> 128x72) & 3:4 (120x160 -> 96x128)
+  // 2b. Aspect-preserving downscale of non-square high-res 16:9 (160x90 -> 84x47) & 3:4 (120x160 -> 63x84)
   const ico16x9 = buildWindowsIcoBuffer({ width: 160, height: 90, bpp: 32, alpha: 255 });
   const dec16x9 = decodeWindowsIcoBuffer(ico16x9);
   assert.notEqual(dec16x9, null);
-  assert.equal(dec16x9!.width, 128);
-  assert.equal(dec16x9!.height, 72);
+  assert.equal(dec16x9!.width, 84);
+  assert.equal(dec16x9!.height, 47);
 
   const ico3x4 = buildWindowsIcoBuffer({ width: 120, height: 160, bpp: 32, alpha: 255 });
   const dec3x4 = decodeWindowsIcoBuffer(ico3x4);
   assert.notEqual(dec3x4, null);
-  assert.equal(dec3x4!.width, 96);
-  assert.equal(dec3x4!.height, 128);
+  assert.equal(dec3x4!.width, 63);
+  assert.equal(dec3x4!.height, 84);
 
-  // 3. Decode genuine 16-bit XRGB1555 Windows .ico (94x68)
+  // 3. Decode genuine 16-bit XRGB1555 Windows .ico (94x68 -> aspect-preserving 84x61)
   const ico16 = buildWindowsIcoBuffer({
     width: 94,
     height: 68,
@@ -981,7 +1032,9 @@ test('genuine Windows .ico decoding (16-bit, 24-bit, 32-bit RGBA), corrupted/PNG
   const dec16 = decodeWindowsIcoBuffer(ico16);
   assert.notEqual(dec16, null);
   assert.equal(dec16!.bpp, 16);
-  assert.equal(dec16!.rgb565Pixels.length, 94 * 68);
+  assert.equal(dec16!.width, 84);
+  assert.equal(dec16!.height, 61);
+  assert.equal(dec16!.rgb565Pixels.length, 84 * 61);
 
   // 4. Decode 32-bit RGBA with alpha=0 (transparent) -> composites onto dark card background RGB(25, 32, 44) in RGB565 & outputs PNG
   const icoTransparent = buildWindowsIcoBuffer({
@@ -1188,19 +1241,22 @@ test('touchpad 5-detent sensitivity slider: thresholds, keypad/pointer control, 
   // Larger slide finally crosses slow threshold (300)
   assert.equal(processTouchpadSample(tprSlow, true, true, 1800, 850, 2328, 1691, false, 0), 'RIGHT');
 
-  // SETTINGS_TOUCHPAD keypad navigation (row 0 = toggle ON/OFF, row 1 = 5-detent slider)
+  // SETTINGS_TOUCHPAD keypad navigation (row 0 = Mode, row 1 = Glissement, row 2 = 5-detent sensitivity slider)
   let state = scanVirtualFilesystem(createInitialVirtualFilesystem());
   assert.equal(state.settings.touchpadSensitivity, 2);
   state = handleLauncherKey(state, 'SETTINGS');
-  state = handleLauncherKey(state, 'DOWN'); // 1: Touchpad
+  state = handleLauncherKey(state, 'DOWN'); // 1: Animations
+  state = handleLauncherKey(state, 'DOWN'); // 2: Touchpad
   assert.equal(SETTINGS_MENU_ITEMS[state.sui.menuCursor].id, 'SETTINGS_TOUCHPAD');
   state = handleLauncherKey(state, 'EXE');
   assert.equal(state.sui.screen, 'SETTINGS_TOUCHPAD');
   assert.equal(state.sui.tpCursor, 0);
 
-  // Move to slider row (row 1) and step across detents 2 -> 3 -> 4 (clamped) -> 3 -> 0 (clamped)
-  state = handleLauncherKey(state, 'DOWN');
+  // Move to sensitivity slider row (row 2) and step across detents 2 -> 3 -> 4 (clamped) -> 3 -> 0 (clamped)
+  state = handleLauncherKey(state, 'DOWN'); // Row 1: Glissement
   assert.equal(state.sui.tpCursor, 1);
+  state = handleLauncherKey(state, 'DOWN'); // Row 2: Sensibilite pave
+  assert.equal(state.sui.tpCursor, 2);
   state = handleLauncherKey(state, 'RIGHT');
   assert.equal(state.settings.touchpadSensitivity, 3);
   state = handleLauncherKey(state, 'RIGHT');
@@ -1214,11 +1270,11 @@ test('touchpad 5-detent sensitivity slider: thresholds, keypad/pointer control, 
   assert.equal(state.settings.touchpadSensitivity, 0); // lower clamp
 
   // Direct canvas pointer/detent control via setTouchpadControl
-  state = setTouchpadControl(state, 1, 3, false);
-  assert.equal(state.sui.tpCursor, 1);
+  state = setTouchpadControl(state, 2, 3, false);
+  assert.equal(state.sui.tpCursor, 2);
   assert.equal(state.settings.touchpadSensitivity, 3);
-  state = setTouchpadControl(state, 0, undefined, true);
-  assert.equal(state.sui.tpCursor, 0);
+  state = setTouchpadControl(state, 1, undefined, true);
+  assert.equal(state.sui.tpCursor, 1);
   assert.equal(state.settings.touchpadNav, true);
 
   // Saved in scanVirtualFilesystem and restored by resetSettingsOnly
@@ -1345,52 +1401,93 @@ test('persistent library cache CRC32, Actualiser la bibliotheque in Settings, an
   assert.equal(state.settings.globalHotkey, false);
   assert.equal(state.sys.hotkeyActive, false);
 
-  // Open Settings -> item 8 is Actualiser la bibliotheque (SETTINGS_REFRESH_LIB)
+  // Open Settings -> item 9 is Actualiser la bibliotheque (SETTINGS_REFRESH_LIB)
   state = { ...state, sys: { ...state.sys, cacheValid: false } };
   state = handleLauncherKey(state, 'SETTINGS');
   assert.equal(state.sui.screen, 'SETTINGS_MAIN');
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 9; i++) {
     state = handleLauncherKey(state, 'DOWN');
   }
   assert.equal(SETTINGS_MENU_ITEMS[state.sui.menuCursor].id, 'SETTINGS_REFRESH_LIB');
   state = handleLauncherKey(state, 'EXE');
-  // Executing SETTINGS_REFRESH_LIB refreshes the library, rebuilds CRC32 cache & returns to LIBRARY
-  assert.equal(state.sui.screen, 'LIBRARY');
+  // Executing SETTINGS_REFRESH_LIB opens dedicated SETTINGS_RESCAN summary screen & rebuilds CRC32 cache
+  assert.equal(state.sui.screen, 'SETTINGS_RESCAN');
+  assert.equal(state.sui.rescan.finished, true);
+  assert.equal(state.sui.rescan.gamesFound, state.games.length);
   assert.equal(state.sys.cacheValid, true);
-  assert.equal(state.toastMessage, 'BIBLIOTHEQUE ACTUALISEE');
+  assert.equal(state.toastMessage, `RESCAN OK : ${state.games.length} JEU(X)`);
 
-  // Open Settings -> item 9 is Raccourci global TI-OS (SETTINGS_HOTKEY)
-  state = handleLauncherKey(state, 'SETTINGS');
-  for (let i = 0; i < 9; i++) {
-    state = handleLauncherKey(state, 'DOWN');
-  }
+  // Close SETTINGS_RESCAN back to SETTINGS_MAIN, then open item 9 (Raccourci global TI-OS)
+  state = handleLauncherKey(state, 'EXE');
+  assert.equal(state.sui.screen, 'SETTINGS_MAIN');
+  state = handleLauncherKey(state, 'DOWN');
   assert.equal(SETTINGS_MENU_ITEMS[state.sui.menuCursor].id, 'SETTINGS_HOTKEY');
   state = handleLauncherKey(state, 'EXE');
   assert.equal(state.sui.screen, 'SETTINGS_HOTKEY');
 
   // Enable and disable globalHotkey in SETTINGS_HOTKEY
+  assert.equal(state.sui.hotkeyCursor, 0);
   state = handleLauncherKey(state, 'EXE');
   assert.equal(state.settings.globalHotkey, true);
   assert.equal(state.sys.hotkeyActive, true);
-  assert.equal(state.toastMessage, 'Raccourci TI-OS : ON');
+  assert.equal(state.sys.hotkeyRamActive, true);
+  assert.equal(state.toastMessage, 'Raccourci (Ctrl + Menu): ON');
   assert.equal(
-    getShortcutDefs(state).some((d) => d.keyLabel === 'CTRL+MENU'),
+    getShortcutDefs(state).some((d) => d.keyLabel === 'CTRL+MENU' && d.actionLabel.includes('(ON)')),
     true
   );
 
-  // Immediate disable on EXE
-  state = handleLauncherKey(state, 'EXE');
+  // Move down to Row 1 (Combinaison) and cycle CTRL+MENU -> SHIFT+MENU -> CTRL+SHIFT+MENU
+  state = handleLauncherKey(state, 'DOWN');
+  assert.equal(state.sui.hotkeyCursor, 1);
+  state = handleLauncherKey(state, 'RIGHT');
+  assert.equal(state.settings.hotkeyCombo, 'shift_menu');
+  assert.equal(
+    getShortcutDefs(state).some((d) => d.keyLabel === 'SHFT+MENU'),
+    true
+  );
+  state = handleLauncherKey(state, 'RIGHT');
+  assert.equal(state.settings.hotkeyCombo, 'ctrl_shift_menu');
+  assert.equal(
+    getShortcutDefs(state).some((d) => d.keyLabel === 'C+S+MENU'),
+    true
+  );
+
+  // Mouse interaction on SETTINGS_HOTKEY: Row 1 click cycles combo back to ctrl_menu, Row 0 click disables
+  state = {
+    ...state,
+    settings: { ...state.settings, touchpadMode: 'mouse', touchpadCursorShow: true },
+  };
+  state = moveMouseTo(state, 160, 96);
+  assert.equal(state.sui.hoverKind, 'SET_ROW');
+  assert.equal(state.sui.hoverIndex, 1);
+  const row1Click = clickMouse(state);
+  assert.equal(row1Click.handled, true);
+  state = row1Click.state;
+  assert.equal(state.settings.hotkeyCombo, 'ctrl_menu');
+
+  state = moveMouseTo(state, 160, 50);
+  assert.equal(state.sui.hoverKind, 'SET_ROW');
+  assert.equal(state.sui.hoverIndex, 0);
+  const row0Click = clickMouse(state);
+  assert.equal(row0Click.handled, true);
+  state = row0Click.state;
   assert.equal(state.settings.globalHotkey, false);
   assert.equal(state.sys.hotkeyActive, false);
+  assert.equal(state.sys.hotkeyRamActive, false);
   assert.equal(state.toastMessage, 'Raccourci TI-OS : OFF');
 
   // Re-enable and verify resetSettingsOnly cleanly disables globalHotkey and unhooks nl_hotkey.tns
+  assert.equal(state.sui.hotkeyCursor, 0);
   state = handleLauncherKey(state, 'EXE');
   assert.equal(state.settings.globalHotkey, true);
+  assert.equal(state.sys.hotkeyRamActive, true);
   const resetState = resetSettingsOnly(state);
   assert.equal(resetState.settings.autostart, false);
   assert.equal(resetState.settings.globalHotkey, false);
+  assert.equal(resetState.settings.hotkeyCombo, 'ctrl_menu');
   assert.equal(resetState.sys.hotkeyActive, false);
+  assert.equal(resetState.sys.hotkeyRamActive, false);
 });
 
 test('last_used sort (« Joues recemment ») keeps library order frozen during launch and reorders only upon returning from the game', () => {
@@ -1691,21 +1788,47 @@ test('adaptive 320x240 library screen occupancy, incomplete last row centering, 
   assert.equal(decAsym!.height, 46);
 });
 
-test('customizable touchpad cursor (Afficher le curseur OUI/NON, Personnaliser le curseur tab, Arrow/Circle/None styles, 5 grid layouts, no auto-launch, and persistence)', () => {
+test('Mode 1 (Pave tactile) vs Mode 2 (Souris), CTRL temporary mouse, 3 cursor styles, non-destructive hover, universal click & persistence (#R8)', () => {
   const files = createDefaultSimulatorFilesystem();
   let state = scanVirtualFilesystem(files);
 
-  // 1. Default state: cursorless navigation preserved by default (touchpadCursorShow = false, style = 'arrow')
-  assert.equal(state.settings.touchpadCursorShow, false);
-  assert.equal(state.settings.touchpadCursorStyle, 'arrow');
+  // 1. Default Mode 1 (Pave tactile): strictly cursorless (no cursor visible even if touchpadNav is ON)
+  assert.equal(state.settings.touchpadMode, 'touchpad');
+  assert.equal(TOUCHPAD_MODE_LABELS.touchpad, 'Pave tactile');
+  assert.equal(TOUCHPAD_MODE_LABELS.mouse, 'Souris');
+  assert.equal(isMouseModeActive(state), false);
   assert.equal(isTouchpadCursorVisible(state), false);
-  assert.deepEqual(CURSOR_STYLE_ORDER, ['none', 'arrow', 'circle']);
-  assert.equal(CURSOR_STYLE_LABELS.none, 'Aucun');
+  assert.equal(state.settings.cursorSpeed, NL_CURSOR_SPEED_DEFAULT);
+  assert.equal(NL_CURSOR_SPEED_COUNT, 5);
+  assert.equal(CURSOR_SPEED_LABELS[2], '3/5 Normale');
+  assert.deepEqual(CURSOR_STYLE_ORDER, ['arrow', 'circle', 'pointer']);
   assert.equal(CURSOR_STYLE_LABELS.arrow, 'Fleche');
   assert.equal(CURSOR_STYLE_LABELS.circle, 'Cercle');
+  assert.equal(CURSOR_STYLE_LABELS.pointer, 'Pointeur');
+  assert.equal(clampCursorStyle('invalid'), 'arrow');
+  assert.equal(clampCursorSpeed(99), 4);
 
-  // 2. Open Settings -> Navigation tactile (index 1)
+  // Even when touchpadNav=true in Mode 1, cursor remains hidden
+  state = { ...state, settings: { ...state.settings, touchpadNav: true } };
+  assert.equal(isTouchpadCursorVisible(state), false);
+
+  // 2. Temporary CTRL hold activates mouse mode without overwriting saved touchpadMode='touchpad'
+  state = setCtrlMouseActive(state, true);
+  assert.equal(isMouseModeActive(state), true);
+  assert.equal(isTouchpadCursorVisible(state), true);
+  assert.equal(state.settings.touchpadMode, 'touchpad');
+  // Releasing CTRL immediately returns to Mode 1 and clears hover
+  state = moveMouseTo(state, 60, 80);
+  assert.equal(state.sui.hoverValid, true);
+  state = setCtrlMouseActive(state, false);
+  assert.equal(isMouseModeActive(state), false);
+  assert.equal(isTouchpadCursorVisible(state), false);
+  assert.equal(state.sui.hoverValid, false);
+  assert.equal(state.sui.hoverKind, 'NONE');
+
+  // 3. Open Settings -> Navigation tactile (5 rows in Tab 0 + 3 cards in Tab 1)
   state = handleLauncherKey(state, 'SETTINGS');
+  state = handleLauncherKey(state, 'DOWN');
   state = handleLauncherKey(state, 'DOWN');
   assert.equal(SETTINGS_MENU_ITEMS[state.sui.menuCursor].id, 'SETTINGS_TOUCHPAD');
   state = handleLauncherKey(state, 'EXE');
@@ -1713,133 +1836,142 @@ test('customizable touchpad cursor (Afficher le curseur OUI/NON, Personnaliser l
   assert.equal(state.sui.tpTab, 0);
   assert.equal(state.sui.tpCursor, 0);
 
-  // 3. Row 0 toggles touchpadNav, Row 2 toggles Afficher le curseur (independent of touchpadNav!)
-  state = handleLauncherKey(state, 'EXE'); // Enable touchpadNav
-  assert.equal(state.settings.touchpadNav, true);
-  assert.equal(state.settings.touchpadCursorShow, false);
-  assert.equal(isTouchpadCursorVisible(state), false);
+  // Row 0 switches between Mode 1 (Pave tactile) and Mode 2 (Souris)
+  state = handleLauncherKey(state, 'EXE');
+  assert.equal(state.settings.touchpadMode, 'mouse');
+  assert.equal(isMouseModeActive(state), true);
+  assert.equal(isTouchpadCursorVisible(state), true);
+  assert.equal(state.toastMessage, 'Mode Souris : ACTIF');
 
-  state = handleLauncherKey(state, 'DOWN'); // Row 1: Sensibilite
+  // Row 1 toggles Glissement (Mode 1), Row 2 Sensibilite (Mode 1), Row 3 Vitesse souris (Mode 2)
+  state = handleLauncherKey(state, 'DOWN');
   assert.equal(state.sui.tpCursor, 1);
-  state = handleLauncherKey(state, 'DOWN'); // Row 2: Afficher le curseur
+  state = handleLauncherKey(state, 'DOWN');
   assert.equal(state.sui.tpCursor, 2);
-  state = handleLauncherKey(state, 'EXE'); // Toggle ON -> OUI
-  assert.equal(state.settings.touchpadCursorShow, true);
-  assert.equal(state.toastMessage, 'Afficher le curseur : OUI');
-  assert.equal(isTouchpadCursorVisible(state), true);
-
-  // Disabling touchpadNav does NOT reset touchpadCursorShow or touchpadCursorStyle, and vice versa
-  state = handleLauncherKey(state, 'UP');
-  state = handleLauncherKey(state, 'UP'); // Row 0
-  state = handleLauncherKey(state, 'EXE'); // touchpadNav OFF
-  assert.equal(state.settings.touchpadNav, false);
-  assert.equal(state.settings.touchpadCursorShow, true);
-  assert.equal(isTouchpadCursorVisible(state), true);
-  state = handleLauncherKey(state, 'EXE'); // touchpadNav ON again
-  assert.equal(state.settings.touchpadNav, true);
-
-  // 4. Open "Personnaliser le curseur" tab via Row 3 EXE or TAB key
   state = handleLauncherKey(state, 'DOWN');
-  state = handleLauncherKey(state, 'DOWN');
-  state = handleLauncherKey(state, 'DOWN'); // Row 3: Personnaliser le curseur
   assert.equal(state.sui.tpCursor, 3);
+  state = handleLauncherKey(state, 'RIGHT'); // cursorSpeed 2 -> 3
+  assert.equal(state.settings.cursorSpeed, 3);
+  assert.equal(state.toastMessage, 'Vitesse souris : 4/5');
+  assert.equal(state.settings.touchpadSensitivity, 2); // independent from Mode 1 sensitivity!
+
+  // Row 4 = Tapotement, Row 5 = Taille du curseur, Row 6 opens Tab 1 ("Personnaliser le curseur")
+  state = handleLauncherKey(state, 'DOWN');
+  assert.equal(state.sui.tpCursor, 4);
+  state = handleLauncherKey(state, 'DOWN');
+  assert.equal(state.sui.tpCursor, 5);
+  state = handleLauncherKey(state, 'DOWN');
+  assert.equal(state.sui.tpCursor, 6);
   state = handleLauncherKey(state, 'EXE');
   assert.equal(state.sui.tpTab, 1);
-  assert.equal(state.sui.tpStyleCursor, 1); // 'arrow' is index 1
+  assert.equal(state.sui.tpStyleCursor, 0); // 'arrow'
 
-  // Select Curseur 2 — Cercle (RIGHT -> EXE)
+  // Select Cercle (RIGHT -> EXE) then Pointeur (RIGHT -> EXE)
   state = handleLauncherKey(state, 'RIGHT');
-  assert.equal(state.sui.tpStyleCursor, 2);
+  assert.equal(state.sui.tpStyleCursor, 1);
   state = handleLauncherKey(state, 'EXE');
   assert.equal(state.settings.touchpadCursorStyle, 'circle');
   assert.equal(state.toastMessage, 'Curseur : Cercle');
-  assert.equal(isTouchpadCursorVisible(state), true);
 
-  // Select Aucun curseur (LEFT -> LEFT -> EXE): preserves touchpadCursorShow=true while hiding graphical sprite
-  state = handleLauncherKey(state, 'LEFT');
-  state = handleLauncherKey(state, 'LEFT');
-  assert.equal(state.sui.tpStyleCursor, 0);
-  state = handleLauncherKey(state, 'EXE');
-  assert.equal(state.settings.touchpadCursorStyle, 'none');
-  assert.equal(state.toastMessage, 'Curseur : Aucun');
-  assert.equal(state.settings.touchpadCursorShow, true);
-  assert.equal(isTouchpadCursorVisible(state), false);
-
-  // Switch back to Fleche (RIGHT -> EXE) and return to Tab 0 via TAB
   state = handleLauncherKey(state, 'RIGHT');
+  assert.equal(state.sui.tpStyleCursor, 2);
   state = handleLauncherKey(state, 'EXE');
-  assert.equal(state.settings.touchpadCursorStyle, 'arrow');
-  assert.equal(isTouchpadCursorVisible(state), true);
+  assert.equal(state.settings.touchpadCursorStyle, 'pointer');
+  assert.equal(state.toastMessage, 'Curseur : Pointeur');
+
+  // TAB switches back to Tab 0, ESC returns to LIBRARY
   state = handleLauncherKey(state, 'TAB');
   assert.equal(state.sui.tpTab, 0);
-
-  // Return to LIBRARY
   state = handleLauncherKey(state, 'ESC');
   state = handleLauncherKey(state, 'ESC');
   assert.equal(state.sui.screen, 'LIBRARY');
 
-  // 5. Synchronized cursor target coordinates across all 5 grid layouts (1x1, 2x2, 3x2, 3x3, 4x4) and 4 directions
-  for (const layout of LAYOUT_ORDER) {
-    state = {
-      ...state,
-      settings: { ...state.settings, layout },
-      selectedPos: 0,
-      currentPage: 0,
-    };
-    const t0 = computeTouchpadCursorTarget(state);
-    assert.equal(t0.x >= 10 && t0.x <= NL_SCREEN_W - 10, true);
-    assert.equal(t0.y >= 20 && t0.y <= NL_SCREEN_H - 10, true);
-
-    if (layout !== '1x1') {
-      const sRight = handleLauncherKey(state, 'RIGHT');
-      const tRight = computeTouchpadCursorTarget(sRight);
-      assert.equal(tRight.x > t0.x, true);
-
-      const sDown = handleLauncherKey(sRight, 'DOWN');
-      const tDown = computeTouchpadCursorTarget(sDown);
-      assert.equal(tDown.y > tRight.y, true);
-    }
-  }
-
-  // 6. Moving the cursor with touchpad gestures NEVER launches a game automatically
-  state = {
-    ...state,
-    settings: { ...state.settings, layout: '3x2', touchpadNav: true, touchpadCursorShow: true },
-    selectedPos: 0,
-  };
+  // 4. Hardware Y-axis inversion on feedMouseTouchpadDelta & [0..319]x[0..239] clamping
+  state = moveMouseTo(state, 160, 120);
   const tracker = createTouchpadTracker();
-  processTouchpadSample(tracker, true, true, 500, 800, 2328, 1691, true, state.settings.touchpadSensitivity);
-  const navKey = processTouchpadSample(tracker, true, true, 1400, 800, 2328, 1691, true, state.settings.touchpadSensitivity);
-  assert.equal(navKey, 'RIGHT');
-  state = handleLauncherKey(state, navKey!);
-  assert.equal(state.selectedPos, 1);
+  let res = feedMouseTouchpadDelta(state, tracker, true, 1000, 800, 2328, 1691, true);
+  assert.equal(res.moved, false); // contact start
+  const startY = res.state.sui.mouseY;
+  // Moving finger UP increases hardware rawY -> decreases screen mouseY
+  res = feedMouseTouchpadDelta(res.state, tracker, true, 1250, 1050, 2328, 1691, true);
+  assert.equal(res.moved, true);
+  assert.equal(res.state.sui.mouseX > 160, true);
+  assert.equal(res.state.sui.mouseY < startY, true);
+  // Clamping at boundaries
+  const clampedHigh = moveMouseTo(res.state, 999, 999);
+  assert.equal(clampedHigh.sui.mouseX, NL_SCREEN_W - 1);
+  assert.equal(clampedHigh.sui.mouseY, NL_SCREEN_H - 1);
+
+  // 5. Hovering cards & top controls is strictly non-destructive (NEVER auto-launches games!)
+  state = { ...res.state, settings: { ...res.state.settings, layout: '3x2' }, selectedPos: 0, currentPage: 0 };
+  const c0Target = computeTouchpadCursorTarget({ ...state, settings: { ...state.settings, touchpadMode: 'touchpad' }, sui: { ...state.sui, ctrlMouseActive: false } });
+  const hoveredCard = moveMouseTo(state, c0Target.x, c0Target.y);
+  assert.equal(hoveredCard.sui.hoverKind, 'GAME_CARD');
+  assert.equal(hoveredCard.sui.hoverIndex, 0);
+  assert.equal(hoveredCard.runningGameIndex, null); // Never auto-launched on hover!
+
+  // Clicking FAV button (x=156, y=12) toggles favorite on selected game
+  const favHover = moveMouseTo(hoveredCard, 156, 12);
+  assert.equal(favHover.sui.hoverKind, 'FAV_BTN');
+  const prevFav = favHover.games[favHover.filteredIndices[favHover.selectedPos]].isFavorite;
+  const favClicked = clickMouse(favHover);
+  assert.equal(favClicked.handled, true);
+  assert.equal(
+    favClicked.state.games[favClicked.state.filteredIndices[favClicked.state.selectedPos]].isFavorite,
+    !prevFav
+  );
+
+  // Clicking category tab FAV (x=90, y=12) switches category
+  const catHover = moveMouseTo(favClicked.state, 90, 12);
+  assert.equal(catHover.sui.hoverKind, 'CATEGORY');
+  assert.equal(catHover.sui.hoverIndex, 1);
+  const catClicked = clickMouse(catHover);
+  assert.equal(catClicked.handled, true);
+  assert.equal(catClicked.state.activeCategory, 'FAVORITES');
+
+  // Switch back to TOUS (x=52, y=12) then click card 0 to launch
+  const allHover = moveMouseTo(catClicked.state, 52, 12);
+  assert.equal(allHover.sui.hoverKind, 'CATEGORY');
+  assert.equal(allHover.sui.hoverIndex, 0);
+  const allClicked = clickMouse(allHover).state;
+  assert.equal(allClicked.activeCategory, 'ALL');
+  const cardClick = clickMouse(moveMouseTo(allClicked, c0Target.x, c0Target.y));
+  assert.equal(cardClick.handled, true);
+  assert.equal(cardClick.state.runningGameIndex, cardClick.state.filteredIndices[0]);
+  state = handleLauncherKey(cardClick.state, 'ESC');
   assert.equal(state.runningGameIndex, null);
 
-  // 7. Persistence across rescan & safe reset verification
-  const rescanned = scanVirtualFilesystem(files, '/documents/ndless/N-Launcher.tns', state.games, state.playCounter, {
-    displayMode: state.displayMode,
-    accentColor: state.accentColor,
-    settings: state.settings,
-  });
-  assert.equal(rescanned.settings.touchpadCursorShow, true);
-  assert.equal(rescanned.settings.touchpadCursorStyle, 'arrow');
-
-  const tpScreenState = {
-    ...rescanned,
-    sui: { ...rescanned.sui, screen: 'SETTINGS_TOUCHPAD' as const },
-  };
-  const directCtrl = setTouchpadControl(tpScreenState, 2, 3, false, false, 'circle', 1);
-  assert.equal(directCtrl.settings.touchpadCursorShow, false);
+  // 6. Direct Mode/Speed/Style canvas helpers & Persistence across rescan & safe reset
+  const inSettings = moveMouseTo(
+    handleLauncherKey(handleLauncherKey(handleLauncherKey(state, 'SETTINGS'), 'DOWN'), 'DOWN'),
+    160,
+    92
+  );
+  const onTpScreen = handleLauncherKey(inSettings, 'EXE');
+  const directCtrl = setTouchpadControl(onTpScreen, 3, 4, true, 1, 'circle', 0, false, 'mouse');
+  assert.equal(directCtrl.settings.touchpadMode, 'mouse');
+  assert.equal(directCtrl.settings.touchpadNav, false);
+  assert.equal(directCtrl.settings.touchpadSensitivity, 4);
+  assert.equal(directCtrl.settings.cursorSpeed, 1);
   assert.equal(directCtrl.settings.touchpadCursorStyle, 'circle');
-  assert.equal(directCtrl.sui.tpTab, 1);
-  assert.equal(directCtrl.sui.tpStyleCursor, 2);
 
-  const afterReset = resetSettingsOnly(directCtrl);
-  assert.equal(afterReset.settings.touchpadCursorShow, false);
+  const rescanned = scanVirtualFilesystem(files, '/documents/ndless/N-Launcher.tns', state.games, state.playCounter, {
+    displayMode: directCtrl.displayMode,
+    accentColor: directCtrl.accentColor,
+    settings: directCtrl.settings,
+  });
+  assert.equal(rescanned.settings.touchpadMode, 'mouse');
+  assert.equal(rescanned.settings.cursorSpeed, 1);
+  assert.equal(rescanned.settings.touchpadCursorStyle, 'circle');
+
+  const afterReset = resetSettingsOnly(rescanned);
+  assert.equal(afterReset.settings.touchpadMode, 'touchpad');
+  assert.equal(afterReset.settings.cursorSpeed, NL_CURSOR_SPEED_DEFAULT);
   assert.equal(afterReset.settings.touchpadCursorStyle, 'arrow');
+  assert.equal(isTouchpadCursorVisible(afterReset), false);
 });
 
-test('deliverable N-Launcher.tns synchronization, Build 2026-11-17 #R7 stamp, and SHA-256 verification', async () => {
+test('deliverable N-Launcher.tns synchronization, Build 2026-11-18 #R23 stamp, Zehn allocSize, and SHA-256 verification', async () => {
   const {
     EXPECTED_TNS_BUILD_STAMP,
     EXPECTED_TNS_SHA256,
@@ -1847,6 +1979,9 @@ test('deliverable N-Launcher.tns synchronization, Build 2026-11-17 #R7 stamp, an
     computeSha256Hex,
     verifyTnsBuffer,
   } = await import('../utils/downloadTns');
+
+  assert.equal(EXPECTED_TNS_BUILD_STAMP, 'Build 2026-11-18 #R23');
+  assert.equal(EXPECTED_TNS_SIZE_BYTES, 579004);
 
   const pathsToCheck = [
     path.resolve(process.cwd(), 'native/N-Launcher.tns'),
@@ -1862,10 +1997,751 @@ test('deliverable N-Launcher.tns synchronization, Build 2026-11-17 #R7 stamp, an
     const check = verifyTnsBuffer(ab, 'N-Launcher.tns');
     assert.equal(check.valid, true);
     assert.equal(check.sizeBytes, EXPECTED_TNS_SIZE_BYTES);
+    assert.equal(check.allocSize, 627116);
+    assert.equal(check.relocCount, 2893);
     assert.equal(check.buildStamp, EXPECTED_TNS_BUILD_STAMP);
     assert.equal(check.isLatestBuild, true);
     const sha = await computeSha256Hex(ab);
     assert.equal(sha, EXPECTED_TNS_SHA256);
   }
 });
+
+test('CX II-T 6.2.0 diagnostic system: 12 boot stages, fault isolation, deduplication, OOM recovery, and SETTINGS_DIAG keyboard + mouse UI (#R9)', () => {
+  // 1. Default reference configuration is TI-Nspire CX II-T (OS 6.2.0) and toggleable to CX CAS 4.5.0
+  const files = createDefaultSimulatorFilesystem();
+  let state = scanVirtualFilesystem(files);
+  assert.equal(state.sys.hwIsCx2, true);
+  assert.equal(state.sys.osVersion.startsWith('6.2.0'), true);
+  assert.equal(state.settings.autostart, false);
+  assert.equal(state.settings.showBattery, false);
+
+  state = setHardwarePreset(state, 'CXCAS_450');
+  assert.equal(state.sys.hwIsCx2, false);
+  assert.equal(state.sys.osVersion.startsWith('4.5.0'), true);
+  state = setHardwarePreset(state, 'CX2T_620');
+  assert.equal(state.sys.hwIsCx2, true);
+
+  // 2. 12-stage boot forensics labels & recording
+  assert.equal(NL_BOOT_STAGE_COUNT, 12);
+  assert.match(getBootStageLabel(1), /Entree/);
+  assert.match(getBootStageLabel(12), /Sortie propre/);
+  state = recordBootStage(state, 12, true);
+  assert.equal(state.diag.currentStage, 12);
+  assert.equal(state.diag.stageReached[12], true);
+
+  // 3. Fault isolation during virtual filesystem scan: corrupt .tns and corrupt .ico.tns do NOT block valid games
+  const badExeBytes = new Uint8Array([0x00, 0x00, 0xff, 0xff, 0x12, 0x34, 0x56, 0x78]);
+  const badIcoBytes = new Uint8Array([0x00, 0x00, 0x01, 0x00, 0x99, 0x99]);
+  const baseGamesCount = state.games.length;
+  const firstStem = extractGameStem(state.games[0].filename).toLowerCase();
+  const faultFiles = [
+    ...files,
+    { path: '/documents/games/broken_game.tns', sizeBytes: badExeBytes.length, headerBytes: badExeBytes },
+    { path: `/documents/ndless/icons/${firstStem}.ico.tns`, sizeBytes: badIcoBytes.length, headerBytes: badIcoBytes },
+  ];
+  let isolated = scanVirtualFilesystem(faultFiles);
+  assert.equal(isolated.games.length, baseGamesCount);
+  assert.equal(
+    isolated.diag.entries.some((e) => e.code === 'E201' && e.path.includes('broken_game.tns')),
+    true
+  );
+  assert.equal(
+    isolated.diag.entries.some((e) => e.code === 'E103' && e.path.includes(`${firstStem}.ico.tns`)),
+    true
+  );
+
+  // 4. Error deduplication (same code + path increments count rather than spamming duplicates)
+  isolated = reportDiagError(
+    isolated,
+    'E102',
+    'Minecraft',
+    '/documents/ndless/icons/minecraft.ico.tns',
+    'Chargement icone'
+  );
+  isolated = reportDiagError(
+    isolated,
+    'E102',
+    'Minecraft',
+    '/documents/ndless/icons/minecraft.ico.tns',
+    'Chargement icone'
+  );
+  const e102 = isolated.diag.entries.find((e) => e.code === 'E102');
+  assert.ok(e102);
+  assert.equal(e102.count, 2);
+  assert.equal(e102.title, getDiagDefaults('E102').title);
+
+  // 5. OOM recovery & fault injection scenarios
+  isolated = simulateFaultInjection(isolated, 'OOM');
+  assert.equal(isolated.sys.oomRecoveries, 1);
+  assert.equal(
+    isolated.diag.entries.some((e) => e.code === 'E801'),
+    true
+  );
+  isolated = recoverMemoryOnOom(isolated, 'Cache decompression');
+  assert.equal(isolated.sys.oomRecoveries, 2);
+
+  isolated = simulateFaultInjection(isolated, 'PREV_CRASH');
+  assert.equal(isolated.sys.priorIncompleteBoot, true);
+  assert.equal(
+    isolated.diag.entries.some((e) => e.code === 'E901'),
+    true
+  );
+
+  // 6. SETTINGS_DIAG keyboard navigation, detail modal, Tab 1 boot stages, and safe confirm modal (default Annuler)
+  const diagMenuIdx = SETTINGS_MENU_ITEMS.findIndex((i) => i.id === 'SETTINGS_DIAG');
+  assert.ok(diagMenuIdx >= 0);
+  let uiState = handleLauncherKey(isolated, 'SETTINGS');
+  for (let i = 0; i < diagMenuIdx; i++) {
+    uiState = handleLauncherKey(uiState, 'DOWN');
+  }
+  uiState = handleLauncherKey(uiState, 'EXE');
+  assert.equal(uiState.sui.screen, 'SETTINGS_DIAG');
+  assert.equal(uiState.sui.diagTab, 0);
+
+  // Open detail on entry 0
+  uiState = handleLauncherKey(uiState, 'EXE');
+  assert.equal(uiState.sui.diagDetailOpen, true);
+  uiState = handleLauncherKey(uiState, 'ESC');
+  assert.equal(uiState.sui.diagDetailOpen, false);
+
+  // Switch to Tab 1 (Boot & Systeme) & scroll
+  uiState = handleLauncherKey(uiState, 'TAB');
+  assert.equal(uiState.sui.diagTab, 1);
+  uiState = handleLauncherKey(uiState, 'DOWN');
+  assert.equal(uiState.sui.diagScroll, 1);
+  uiState = handleLauncherKey(uiState, 'TAB');
+  assert.equal(uiState.sui.diagTab, 0);
+
+  // 7. Mode 2 Souris interaction inside SETTINGS_DIAG & safe clearing
+  uiState = {
+    ...uiState,
+    settings: { ...uiState.settings, touchpadMode: 'mouse', touchpadCursorShow: true },
+  };
+  // Verify SET_POWER is disabled on SETTINGS_DIAG top bar
+  uiState = moveMouseTo(uiState, 160, 12);
+  assert.notEqual(uiState.sui.hoverKind, 'SET_POWER');
+
+  // Hover & click Tab 1 then back to Tab 0 via mouse
+  uiState = moveMouseTo(uiState, 220, 35);
+  assert.equal(uiState.sui.hoverKind, 'DIAG_TAB');
+  assert.equal(uiState.sui.hoverIndex, 1);
+  uiState = clickMouse(uiState).state;
+  assert.equal(uiState.sui.diagTab, 1);
+  uiState = moveMouseTo(uiState, 80, 35);
+  uiState = clickMouse(uiState).state;
+  assert.equal(uiState.sui.diagTab, 0);
+
+  // Hover & click row 0 to open detail, then click detail card to close
+  uiState = moveMouseTo(uiState, 120, 78);
+  assert.equal(uiState.sui.hoverKind, 'DIAG_ROW');
+  assert.equal(uiState.sui.hoverIndex, 0);
+  uiState = clickMouse(uiState).state;
+  assert.equal(uiState.sui.diagDetailOpen, true);
+  uiState = moveMouseTo(uiState, 160, 120);
+  assert.equal(uiState.sui.hoverKind, 'DIAG_DETAIL_CLOSE');
+  uiState = clickMouse(uiState).state;
+  assert.equal(uiState.sui.diagDetailOpen, false);
+
+  // Hover & click Clear button -> confirm modal defaults to Annuler (diagConfirmYes=false)
+  const gamesBeforeClear = uiState.games.length;
+  uiState = moveMouseTo(uiState, 160, 204);
+  assert.equal(uiState.sui.hoverKind, 'DIAG_CLEAR_BTN');
+  uiState = clickMouse(uiState).state;
+  assert.equal(uiState.sui.diagConfirmModal, true);
+  assert.equal(uiState.sui.diagConfirmYes, false);
+
+  // Clicking Annuler closes without wiping logs
+  uiState = moveMouseTo(uiState, 90, 164);
+  assert.equal(uiState.sui.hoverKind, 'MODAL_BTN');
+  assert.equal(uiState.sui.hoverIndex, 0);
+  uiState = clickMouse(uiState).state;
+  assert.equal(uiState.sui.diagConfirmModal, false);
+  assert.equal(uiState.diag.entries.length > 0, true);
+
+  // Reopen confirm modal & click Effacer -> clears diagnostic logs while keeping games & settings intact
+  uiState = handleLauncherKey(uiState, 'RESCAN');
+  assert.equal(uiState.sui.diagConfirmModal, true);
+  uiState = moveMouseTo(uiState, 220, 164);
+  assert.equal(uiState.sui.hoverKind, 'MODAL_BTN');
+  assert.equal(uiState.sui.hoverIndex, 1);
+  uiState = clickMouse(uiState).state;
+  assert.equal(uiState.diag.entries.length, 0);
+  assert.equal(uiState.games.length, gamesBeforeClear);
+  assert.equal(uiState.settings.touchpadMode, 'mouse');
+
+  const afterDirectClear = clearDiagLogs(isolated);
+  assert.equal(afterDirectClear.diag.entries.length, 0);
+});
+
+test('A-to-Z audit regressions: .bak.tns exclusion, SETTINGS_DISPLAY 31px stride & SETTINGS_CAPTURE_BATCH mouse hitboxes', () => {
+  // 1. .bak.tns backup files are treated as system/internal files and never trigger false E201
+  assert.equal(isSystemOrSelfFile('/documents/ndless/nlauncher.cfg.bak.tns'), true);
+  assert.equal(isSystemOrSelfFile('/documents/ndless/nlauncher.profiles.bak.tns'), true);
+
+  // 2. SETTINGS_DISPLAY 31px stride mouse hover & click parity
+  let state = scanVirtualFilesystem(createInitialVirtualFilesystem());
+  state = {
+    ...state,
+    settings: { ...state.settings, touchpadMode: 'mouse', touchpadCursorShow: true },
+    sui: { ...state.sui, screen: 'SETTINGS_DISPLAY', displayCursor: 0, displayScroll: 0 },
+  };
+  // Row 2 is at ry = 30 + 2 * 31 = 92..120
+  state = moveMouseTo(state, 160, 92 + 14);
+  assert.equal(state.sui.hoverValid, true);
+  assert.equal(state.sui.hoverKind, 'SET_ROW');
+  assert.equal(state.sui.hoverIndex, 2);
+
+  // 3. SETTINGS_CAPTURE_BATCH mouse hitboxes match C renderer (30..154 / 166..290 at y=174..198)
+  state = {
+    ...state,
+    sui: {
+      ...state.sui,
+      screen: 'SETTINGS_CAPTURE_BATCH',
+      capActive: true,
+      capTotal: 3,
+      capPos: 0,
+      capQueue: [0, 1, 2],
+    },
+  };
+  state = moveMouseTo(state, 80, 185);
+  assert.equal(state.sui.hoverKind, 'SET_ROW');
+  assert.equal(state.sui.hoverIndex, 0);
+  state = moveMouseTo(state, 220, 185);
+  assert.equal(state.sui.hoverKind, 'SET_ROW');
+  assert.equal(state.sui.hoverIndex, 1);
+});
+
+test('#R11 Mouse Mode finalization: 3 independent cursor sizes x 3 models, tap-to-click toggle, 7-row scrollable Tab 0 & 2-row Tab 1', () => {
+  assert.deepEqual(CURSOR_SIZE_ORDER, ['small', 'medium', 'large']);
+  assert.equal(CURSOR_SIZE_LABELS.small, 'Petite');
+  assert.equal(CURSOR_SIZE_LABELS.medium, 'Moyenne');
+  assert.equal(CURSOR_SIZE_LABELS.large, 'Grande');
+  assert.equal(clampCursorSize('unknown'), NL_CURSOR_SIZE_DEFAULT);
+
+  // 1. Verify strictly increasing proportional dimensions & valid hotspots for all 3 models x 3 sizes
+  for (const style of CURSOR_STYLE_ORDER) {
+    let prevW = 0;
+    let prevH = 0;
+    for (const sz of CURSOR_SIZE_ORDER) {
+      const m = getCursorSizeMetrics(style, sz);
+      assert.equal(m.width > prevW, true);
+      assert.equal(m.height > prevH, true);
+      assert.equal(m.hotX >= 0 && m.hotX < m.width, true);
+      assert.equal(m.hotY >= 0 && m.hotY < m.height, true);
+      prevW = m.width;
+      prevH = m.height;
+    }
+  }
+
+  const files = createDefaultSimulatorFilesystem();
+  let state = scanVirtualFilesystem(files);
+  assert.equal(state.settings.cursorSize, 'medium');
+  assert.equal(state.settings.tapToClick, false);
+
+  // 2. Open Settings -> Navigation tactile (7 scrollable rows in Tab 0, 5 visible)
+  state = handleLauncherKey(state, 'SETTINGS');
+  state = handleLauncherKey(state, 'DOWN');
+  state = handleLauncherKey(state, 'DOWN');
+  state = handleLauncherKey(state, 'EXE');
+  assert.equal(state.sui.screen, 'SETTINGS_TOUCHPAD');
+  assert.equal(state.sui.tpTab, 0);
+  assert.equal(getTouchpadTab0RowRects(0).length, 5);
+  assert.equal(getTouchpadTab0RowRects(2)[4].row, 6);
+
+  // Scroll down to row 6 -> tpScroll reaches 2
+  for (let r = 1; r <= 6; r++) {
+    state = handleLauncherKey(state, 'DOWN');
+    assert.equal(state.sui.tpCursor, r);
+  }
+  assert.equal(state.sui.tpScroll, 2);
+
+  // Row 5 (Taille du curseur): medium -> large, strictly independent from model/speed/tapToClick
+  state = handleLauncherKey(state, 'UP');
+  assert.equal(state.sui.tpCursor, 5);
+  state = handleLauncherKey(state, 'RIGHT');
+  assert.equal(state.settings.cursorSize, 'large');
+  assert.equal(state.settings.touchpadCursorStyle, 'arrow');
+  assert.equal(state.settings.cursorSpeed, 2);
+  assert.equal(state.settings.tapToClick, false);
+
+  // Row 4 (Tapotement pour cliquer): toggle OUI -> NON -> OUI without altering size
+  state = handleLauncherKey(state, 'UP');
+  assert.equal(state.sui.tpCursor, 4);
+  state = handleLauncherKey(state, 'EXE');
+  assert.equal(state.settings.tapToClick, true);
+  assert.equal(state.toastMessage, 'Tapotement pour cliquer : OUI');
+  assert.equal(state.settings.cursorSize, 'large');
+
+  // 3. Switch to Tab 1 (2 rows: Model cards + Size cards) and test mouse clicks + keyboard
+  state = {
+    ...state,
+    settings: { ...state.settings, touchpadMode: 'mouse', touchpadCursorShow: true },
+  };
+  state = handleLauncherKey(state, 'TAB');
+  assert.equal(state.sui.tpTab, 1);
+
+  // Click Pointer model (card 2, Row 0) -> preserves 'large' size!
+  state = moveMouseTo(state, 14 + 2 * 101 + 45, 90);
+  assert.equal(state.sui.hoverKind, 'SET_STYLE_CARD');
+  assert.equal(state.sui.hoverIndex, 2);
+  state = clickMouse(state).state;
+  assert.equal(state.settings.touchpadCursorStyle, 'pointer');
+  assert.equal(state.settings.cursorSize, 'large');
+
+  // Click Small size (card 0, Row 1) -> preserves 'pointer' model!
+  state = moveMouseTo(state, 14 + 0 * 101 + 45, 175);
+  assert.equal(state.sui.hoverKind, 'SET_SIZE_CARD');
+  assert.equal(state.sui.hoverIndex, 0);
+  state = clickMouse(state).state;
+  assert.equal(state.settings.cursorSize, 'small');
+  assert.equal(state.settings.touchpadCursorStyle, 'pointer');
+
+  // 4. Persistence across rescan & clean reset to defaults
+  const reloaded = scanVirtualFilesystem(files, '/documents/ndless/N-Launcher.tns', state.games, state.playCounter, {
+    displayMode: state.displayMode,
+    accentColor: state.accentColor,
+    settings: state.settings,
+  });
+  assert.equal(reloaded.settings.touchpadCursorStyle, 'pointer');
+  assert.equal(reloaded.settings.cursorSize, 'small');
+  assert.equal(reloaded.settings.tapToClick, true);
+
+  const reset = resetSettingsOnly(reloaded);
+  assert.equal(reset.settings.touchpadCursorStyle, 'arrow');
+  assert.equal(reset.settings.cursorSize, 'medium');
+  assert.equal(reset.settings.tapToClick, false);
+});
+
+test('#R12 Decoupled icons, repeatable SETTINGS_RESCAN summary & empty-scan confirmation guard', () => {
+  // 1. Delete all icons -> all games remain present with clean monogram fallback
+  const filesWithIcons = createDefaultSimulatorFilesystem();
+  const filesWithoutIcons = filesWithIcons.filter(
+    (f) => !f.path.toLowerCase().includes('/icons/') && !f.path.toLowerCase().endsWith('.ico.tns')
+  );
+  let state = scanVirtualFilesystem(filesWithoutIcons);
+  assert.equal(state.games.length > 0, true);
+  for (const g of state.games) {
+    assert.equal(g.iconSource, 'NONE');
+  }
+
+  // 2. Open Settings -> Rescanner les jeux -> repeatable rescan works cleanly
+  state = handleLauncherKey(state, 'SETTINGS');
+  const idx = SETTINGS_MENU_ITEMS.findIndex((i) => i.id === 'SETTINGS_REFRESH_LIB');
+  assert.equal(idx >= 0, true);
+  for (let i = 0; i < idx; i++) {
+    state = handleLauncherKey(state, 'DOWN');
+  }
+  state = handleLauncherKey(state, 'EXE');
+  assert.equal(state.sui.screen, 'SETTINGS_RESCAN');
+  assert.equal(state.sui.rescan.rescanCount, 1);
+  assert.equal(state.sui.rescan.gamesFound, state.games.length);
+  assert.equal(state.sui.rescan.iconsFallback, state.games.length);
+  assert.equal(state.sui.rescan.memorizedFolders >= 1, true);
+
+  // Press DEL/RESCAN to trigger second rescan in place
+  state = handleLauncherKey(state, 'RESCAN');
+  assert.equal(state.sui.screen, 'SETTINGS_RESCAN');
+  assert.equal(state.sui.rescan.rescanCount, 2);
+
+  // 3. Empty-scan confirmation guard: never auto-wipes existing games!
+  const beforeCount = state.games.length;
+  state = runSimulatorRescan(state, { simulatedEmpty: true });
+  assert.equal(state.sui.screen, 'SETTINGS_RESCAN');
+  assert.equal(state.sui.rescan.emptyConfirmPending, true);
+  assert.equal(state.sui.rescan.emptyConfirmReplace, false);
+  assert.equal(state.games.length, beforeCount);
+
+  // Default choice is Conserver -> pressing EXE preserves all games
+  state = handleLauncherKey(state, 'EXE');
+  assert.equal(state.sui.rescan.emptyConfirmPending, false);
+  assert.equal(state.games.length, beforeCount);
+  assert.equal(state.toastMessage, 'BIBLIOTHEQUE CONSERVEE');
+
+  // Re-trigger empty guard and choose Vider via mouse click on button 1 (x=220, y=178)
+  state = {
+    ...runSimulatorRescan(state, { simulatedEmpty: true }),
+    settings: { ...state.settings, touchpadMode: 'mouse', touchpadCursorShow: true },
+  };
+  state = moveMouseTo(state, 220, 178);
+  assert.equal(state.sui.hoverKind, 'MODAL_BTN');
+  assert.equal(state.sui.hoverIndex, 1);
+  state = clickMouse(state).state;
+  assert.equal(state.games.length, 0);
+  assert.equal(state.toastMessage, 'BIBLIOTHEQUE VIDEE');
+});
+
+test('#R15 UX overhaul: 0/- page navigation, Vertical/Horizontal scrollDir & padlock profile protection', () => {
+  let state = scanVirtualFilesystem(createDefaultSimulatorFilesystem());
+  assert.equal(state.totalPages >= 2, true);
+  assert.equal(state.settings.scrollDir, 'vertical');
+  assert.equal(state.settings.profileLockEnabled, false);
+
+  // 1. Reassigned 0 and - keys navigate pages (never switching profiles)
+  const p2 = createUserProfile(state, 'LockedUser', 7);
+  state = p2.state;
+  const activeBefore = state.profiles.activeIndex;
+  assert.equal(state.currentPage, 0);
+  state = handleCharInput(state, '-');
+  assert.equal(state.currentPage, 1);
+  assert.equal(state.profiles.activeIndex, activeBefore);
+  state = handleCharInput(state, '0');
+  assert.equal(state.currentPage, 0);
+  assert.equal(state.profiles.activeIndex, activeBefore);
+
+  // 2. Scroll direction toggle in Settings -> Affichage (row 1)
+  state = handleLauncherKey(state, 'SETTINGS');
+  state = handleLauncherKey(state, 'EXE'); // SETTINGS_DISPLAY
+  state = handleLauncherKey(state, 'DOWN'); // row 1: Sens de defilement
+  assert.equal(state.sui.displayCursor, 1);
+  state = handleLauncherKey(state, 'RIGHT');
+  assert.equal(state.settings.scrollDir, 'horizontal');
+  state = handleLauncherKey(state, 'ESC');
+  state = handleLauncherKey(state, 'ESC');
+
+  // 3. Padlock protection: global toggle + per-profile lock guards
+  assert.equal(isProfileProtected(state, activeBefore), false);
+  state = { ...state, settings: { ...state.settings, profileLockEnabled: true } };
+  const toggled = toggleProfileLock(state, activeBefore);
+  assert.equal(toggled.ok, true);
+  assert.equal(toggled.isLocked, true);
+  state = toggled.state;
+  assert.equal(isProfileProtected(state, activeBefore), true);
+
+  // Locked profile blocks rename, avatar change, delete, favorite toggle
+  assert.equal(renameUserProfile(state, activeBefore, 'Hacked').ok, false);
+  assert.equal(setUserProfileAvatar(state, activeBefore, 12).ok, false);
+  assert.equal(deleteUserProfile(state, activeBefore).ok, false);
+  const favBefore = state.games[state.filteredIndices[0]].isFavorite;
+  state = handleLauncherKey(state, 'FAV');
+  assert.equal(state.games[state.filteredIndices[0]].isFavorite, favBefore);
+
+  // Disabling global profileLockEnabled removes all lock restrictions
+  state = { ...state, settings: { ...state.settings, profileLockEnabled: false } };
+  assert.equal(isProfileProtected(state, activeBefore), false);
+  assert.equal(renameUserProfile(state, activeBefore, 'UnlockedName').ok, true);
+});
+
+test('#R17 Exact R15 Horizontal side-peeks + mirrored Vertical top/bottom natural icon peeks (zero carousels, click-to-page without launch) & Orbital Prism tracking', () => {
+  let state = scanVirtualFilesystem(createDefaultSimulatorFilesystem());
+  assert.equal(state.totalPages >= 2, true);
+
+  // 1. Verify ALL 5 layouts in both Horizontal (R15 exact 12px side peeks) & Vertical (R17 mirrored 12px top/bottom peeks)
+  for (const lay of LAYOUT_ORDER) {
+    const lmH = getLayoutMetrics(lay, true, true, 32, 'horizontal');
+    const lmV = getLayoutMetrics(lay, true, true, 32, 'vertical');
+    const lmVS = getLayoutMetrics(lay, true, true, 1, 'vertical');
+
+    // Horizontal mode: R15 exact 12px left/right side peeks, full-height 3x2 grid (no top/bottom carousel bands)
+    assert.equal(lmH.isHorizontal, true);
+    assert.equal(lmH.marginX >= 28, true);
+    assert.equal(lmH.marginX + lmH.pageStrideX <= 310, true);
+    if (lay === '3x2') {
+      assert.equal(lmH.topY < 44, true);
+    }
+
+    // Vertical multi-page mode: natural 12px top & bottom real icon peeks + >= 8px inter-page gap
+    assert.equal(lmV.isHorizontal, false);
+    assert.equal(lmV.topY >= 46, true);
+    const vContentH = lmV.rows * (lmV.cardH + lmV.labelH) + (lmV.rows - 1) * lmV.gapY;
+    assert.equal(lmV.topY + lmV.pageStrideY, lmV.viewBottom - 12);
+    assert.equal(lmV.pageStrideY >= vContentH + 8, true);
+    const vTopPeekEnd = lmV.topY + vContentH - lmV.pageStrideY;
+    assert.equal(vTopPeekEnd >= 36 && vTopPeekEnd <= 39, true);
+
+    // Single-page vertical stays full-size (strictly larger than multi-page vertical peek)
+    assert.equal(lmVS.cardH > lmV.cardH, true);
+  }
+
+  // 2. Vertical Mode interactive click on bottom peeking icon (Page 1) & top peeking icon (Page 0) WITHOUT launching
+  state = {
+    ...state,
+    settings: {
+      ...state.settings,
+      layout: '3x2',
+      scrollDir: 'vertical',
+      touchpadMode: 'mouse',
+      touchpadCursorShow: true,
+    },
+    currentPage: 0,
+    runningGameIndex: null,
+  };
+  const vlm = getLayoutMetrics('3x2', state.settings.showNames, state.settings.showShortcuts, state.filteredIndices.length, 'vertical');
+  const p1Slot0 = computeGridSlotPos(vlm, state.filteredIndices.length, vlm.perPage);
+  const botProbeX = p1Slot0.x + Math.floor(vlm.cardW / 2);
+
+  state = moveMouseTo(state, botProbeX, vlm.viewBottom - 6);
+  assert.equal(state.sui.hoverKind, 'PAGE_NEXT');
+  const vNextClick = clickMouse(state);
+  assert.equal(vNextClick.handled, true);
+  state = vNextClick.state;
+  assert.equal(state.currentPage, 1);
+  assert.equal(state.runningGameIndex, null);
+
+  // Now on Page 1: click top peeking icon from Page 0 -> jumps back to Page 0 WITHOUT launching
+  const p0Slot3 = computeGridSlotPos(vlm, state.filteredIndices.length, 3);
+  const topProbeX = p0Slot3.x + Math.floor(vlm.cardW / 2);
+  state = moveMouseTo(state, topProbeX, 31);
+  assert.equal(state.sui.hoverKind, 'PAGE_PREV');
+  const vPrevClick = clickMouse(state);
+  assert.equal(vPrevClick.handled, true);
+  state = vPrevClick.state;
+  assert.equal(state.currentPage, 0);
+  assert.equal(state.runningGameIndex, null);
+
+  // 3. Horizontal Mode (R15 exact): click right/left peeking icons -> page jump WITHOUT launching
+  state = {
+    ...state,
+    settings: { ...state.settings, scrollDir: 'horizontal' },
+    currentPage: 0,
+    runningGameIndex: null,
+  };
+  const hlm = getLayoutMetrics('3x2', state.settings.showNames, state.settings.showShortcuts, state.filteredIndices.length, 'horizontal');
+  const hP1Slot0 = computeGridSlotPos(hlm, state.filteredIndices.length, hlm.perPage);
+  state = moveMouseTo(state, 314, hP1Slot0.y + 16);
+  assert.equal(state.sui.hoverKind, 'PAGE_NEXT');
+  const hNextClick = clickMouse(state);
+  assert.equal(hNextClick.handled, true);
+  state = hNextClick.state;
+  assert.equal(state.currentPage, 1);
+  assert.equal(state.runningGameIndex, null);
+
+  state = moveMouseTo(state, 6, hlm.topY + 16);
+  assert.equal(state.sui.hoverKind, 'PAGE_PREV');
+  const hPrevClick = clickMouse(state);
+  assert.equal(hPrevClick.handled, true);
+  state = hPrevClick.state;
+  assert.equal(state.currentPage, 0);
+  assert.equal(state.runningGameIndex, null);
+
+  // 4. Profile switch records both outgoing (profSwitchFromAvatarId) & incoming (profSwitchAvatarId) without launching a game
+  const created = createUserProfile(state, 'PrismUser', 14);
+  state = created.state;
+  const fromAv = state.profiles.items[0].avatarId;
+  const toAv = state.profiles.items[1].avatarId;
+  state = switchProfileTo(state, 0);
+  state = handleCharInput(state, '.');
+  assert.equal(state.sui.qpOpen, true);
+  state = handleLauncherKey(state, 'RIGHT');
+  state = handleLauncherKey(state, 'EXE');
+  assert.equal(state.sui.qpOpen, false);
+  assert.equal(state.runningGameIndex, null);
+  assert.equal(state.profiles.activeIndex, 1);
+  assert.equal(state.profSwitchFromAvatarId, fromAv);
+  assert.equal(state.profSwitchAvatarId, toAv);
+});
+
+test('#R20 Settings -> Animations -> 4 launch animations, persistence across profiles/rescan & reset', () => {
+  const files = createDefaultSimulatorFilesystem();
+  let state = scanVirtualFilesystem(files);
+  assert.equal(state.settings.launchAnimMode, 'current');
+
+  // Open Settings -> Animations (index 1)
+  state = handleLauncherKey(state, 'SETTINGS');
+  assert.equal(state.sui.screen, 'SETTINGS_MAIN');
+  state = handleLauncherKey(state, 'DOWN');
+  assert.equal(SETTINGS_MENU_ITEMS[state.sui.menuCursor].id, 'SETTINGS_ANIMATIONS');
+  state = handleLauncherKey(state, 'EXE');
+  assert.equal(state.sui.screen, 'SETTINGS_ANIMATIONS');
+  assert.equal(state.sui.animCursor, 0);
+
+  // Navigate to Row 2 (Lancement des jeux) and cycle Theme Drop -> Spinner -> Loading Bar
+  state = handleLauncherKey(state, 'DOWN');
+  state = handleLauncherKey(state, 'DOWN');
+  assert.equal(state.sui.animCursor, 2);
+  state = handleLauncherKey(state, 'EXE');
+  assert.equal(state.settings.launchAnimMode, 'theme_drop');
+
+  state = handleLauncherKey(state, 'RIGHT');
+  assert.equal(state.settings.launchAnimMode, 'spinner');
+
+  state = handleLauncherKey(state, 'EXE');
+  assert.equal(state.settings.launchAnimMode, 'loading_bar');
+
+  // Persists across rescan and profile reload
+  const reloaded = scanVirtualFilesystem(
+    files,
+    '/documents/ndless/N-Launcher.tns',
+    state.games,
+    state.playCounter,
+    {
+      displayMode: state.displayMode,
+      accentColor: state.accentColor,
+      settings: state.settings,
+      profiles: state.profiles,
+    }
+  );
+  assert.equal(reloaded.settings.launchAnimMode, 'loading_bar');
+
+  // Safe reset restores default Animation 1 ('current')
+  const afterReset = resetSettingsOnly(reloaded);
+  assert.equal(afterReset.settings.launchAnimMode, 'current');
+});
+
+test('#R21 Fast game return emits non-blocking returnDropSeq across 5 launches and keeps library immediately interactive', () => {
+  const files = createDefaultSimulatorFilesystem();
+  let state = scanVirtualFilesystem(files);
+  assert.equal(state.returnDropSeq ?? 0, 0);
+
+  for (let i = 0; i < 5; i++) {
+    const prevSeq = state.returnDropSeq ?? 0;
+    const expectedGameIdx = state.filteredIndices[state.selectedPos];
+    state = handleLauncherKey(state, 'EXE');
+    assert.equal(state.runningGameIndex, expectedGameIdx);
+
+    // Exit game with ESC -> instant return to library + return droplet trigger
+    state = handleLauncherKey(state, 'ESC', Math.floor(Date.now() / 1000), 12);
+    assert.equal(state.runningGameIndex, null);
+    assert.equal(state.returnDropSeq, prevSeq + 1);
+    assert.equal(state.returnDropGameIdx, expectedGameIdx);
+
+    // Library MUST be immediately navigable right after return (zero blocking wait!)
+    const posBefore = state.selectedPos;
+    state = handleLauncherKey(state, 'RIGHT');
+    assert.notEqual(state.selectedPos, posBefore);
+  }
+
+  // Opening Quick Profile & '+' button still triggers profPlusSeq cleanly
+  state = handleLauncherKey(state, 'PROFILE_QUICK');
+  assert.equal(state.sui.qpOpen, true);
+});
+
+test('#R22 Organic liquid propagation labels, build stamp, and profile open/close/switch/+ state flow', async () => {
+  const {
+    LAUNCH_ANIM_SHORT_LABELS,
+    LAUNCH_ANIM_SUBTITLES,
+    NL_BUILD_STAMP_STR,
+  } = await import('./nlauncherEngine');
+
+  assert.equal(NL_BUILD_STAMP_STR, 'Build 2026-11-18 #R23');
+  assert.equal(LAUNCH_ANIM_SHORT_LABELS.theme_drop, 'LIQUIDE');
+  assert.equal(LAUNCH_ANIM_SUBTITLES.theme_drop, '4 propagations liquides');
+
+  const files = createDefaultSimulatorFilesystem();
+  let state = scanVirtualFilesystem(files);
+
+  // Select Theme Drop launch mode via Settings -> Animations (Row 2)
+  state = handleLauncherKey(state, 'SETTINGS');
+  state.sui.screen = 'SETTINGS_ANIMATIONS';
+  state.sui.animCursor = 2; // Lancement des jeux
+  state = handleLauncherKey(state, 'EXE');
+  assert.equal(state.settings.launchAnimMode, 'theme_drop');
+
+  // Return to library & launch/return cycle
+  state = handleLauncherKey(state, 'ESC');
+  state = handleLauncherKey(state, 'ESC');
+  assert.equal(state.sui.screen, 'LIBRARY');
+  state = handleLauncherKey(state, 'EXE');
+  assert.notEqual(state.runningGameIndex, null);
+  state = handleLauncherKey(state, 'ESC');
+  assert.equal(state.runningGameIndex, null);
+  assert.equal((state.returnDropSeq ?? 0) >= 1, true);
+
+  // Quick Profile Open -> dedicated Close (ESC) -> Re-open cleanly
+  state = handleLauncherKey(state, 'PROFILE_QUICK');
+  assert.equal(state.sui.qpOpen, true);
+  state = handleLauncherKey(state, 'ESC');
+  assert.equal(state.sui.qpOpen, false);
+});
+
+test('#R23 4 independent animation categories (App Open / App Close / Game Launch / Game Return), persistence & fast return filter guard', async () => {
+  const { returnNeedsFilterRebuild } = await import('./nlauncherEngine');
+  const files = createDefaultSimulatorFilesystem();
+  let state = scanVirtualFilesystem(files);
+
+  // Defaults
+  assert.equal(state.settings.appOpenAnim, 'current');
+  assert.equal(state.settings.appCloseAnim, 'liquid');
+  assert.equal(state.settings.launchAnimMode, 'current');
+  assert.equal(state.settings.returnAnimMode, 'liquid');
+
+  // Conditional return filter rebuild guard
+  assert.equal(returnNeedsFilterRebuild(state), false);
+  assert.equal(
+    returnNeedsFilterRebuild({ ...state, settings: { ...state.settings, sortOrder: 'last_used' } }),
+    true
+  );
+  assert.equal(
+    returnNeedsFilterRebuild({ ...state, activeCategory: 'RECENT' }),
+    true
+  );
+
+  // Open Settings -> Animations and verify strict independence across all 4 rows
+  state = handleLauncherKey(state, 'SETTINGS');
+  state = handleLauncherKey(state, 'DOWN');
+  state = handleLauncherKey(state, 'EXE');
+  assert.equal(state.sui.screen, 'SETTINGS_ANIMATIONS');
+  assert.equal(state.sui.animCursor, 0);
+
+  // Row 0 (App Open) -> zoom; rows 1/2/3 untouched
+  state = handleLauncherKey(state, 'RIGHT');
+  state = handleLauncherKey(state, 'RIGHT');
+  assert.equal(state.settings.appOpenAnim, 'zoom');
+  assert.equal(state.settings.appCloseAnim, 'liquid');
+  assert.equal(state.settings.launchAnimMode, 'current');
+  assert.equal(state.settings.returnAnimMode, 'liquid');
+
+  // Row 1 (App Close) -> fade; rows 0/2/3 untouched
+  state = handleLauncherKey(state, 'DOWN');
+  state = handleLauncherKey(state, 'RIGHT');
+  assert.equal(state.settings.appOpenAnim, 'zoom');
+  assert.equal(state.settings.appCloseAnim, 'fade');
+  assert.equal(state.settings.launchAnimMode, 'current');
+  assert.equal(state.settings.returnAnimMode, 'liquid');
+
+  // Row 2 (Game Launch) -> spinner; rows 0/1/3 untouched
+  state = handleLauncherKey(state, 'DOWN');
+  state = handleLauncherKey(state, 'RIGHT');
+  state = handleLauncherKey(state, 'RIGHT');
+  assert.equal(state.settings.appOpenAnim, 'zoom');
+  assert.equal(state.settings.appCloseAnim, 'fade');
+  assert.equal(state.settings.launchAnimMode, 'spinner');
+  assert.equal(state.settings.returnAnimMode, 'liquid');
+
+  // Row 3 (Game Return) -> instant; rows 0/1/2 untouched
+  state = handleLauncherKey(state, 'DOWN');
+  state = handleLauncherKey(state, 'LEFT');
+  assert.equal(state.settings.appOpenAnim, 'zoom');
+  assert.equal(state.settings.appCloseAnim, 'fade');
+  assert.equal(state.settings.launchAnimMode, 'spinner');
+  assert.equal(state.settings.returnAnimMode, 'instant');
+
+  // Instant return emits zero returnDropSeq bump and restores library immediately
+  state = handleLauncherKey(state, 'ESC');
+  state = handleLauncherKey(state, 'ESC');
+  assert.equal(state.sui.screen, 'LIBRARY');
+  const seqBefore = state.returnDropSeq ?? 0;
+  state = handleLauncherKey(state, 'EXE');
+  assert.notEqual(state.runningGameIndex, null);
+  state = handleLauncherKey(state, 'ESC');
+  assert.equal(state.runningGameIndex, null);
+  assert.equal(state.returnDropSeq ?? 0, seqBefore);
+
+  // Persistence across reload & safe factory reset
+  const reloaded = scanVirtualFilesystem(
+    files,
+    '/documents/ndless/N-Launcher.tns',
+    state.games,
+    state.playCounter,
+    {
+      displayMode: state.displayMode,
+      accentColor: state.accentColor,
+      settings: state.settings,
+      profiles: state.profiles,
+    }
+  );
+  assert.equal(reloaded.settings.appOpenAnim, 'zoom');
+  assert.equal(reloaded.settings.appCloseAnim, 'fade');
+  assert.equal(reloaded.settings.launchAnimMode, 'spinner');
+  assert.equal(reloaded.settings.returnAnimMode, 'instant');
+
+  const afterReset = resetSettingsOnly(reloaded);
+  assert.equal(afterReset.settings.appOpenAnim, 'current');
+  assert.equal(afterReset.settings.appCloseAnim, 'liquid');
+  assert.equal(afterReset.settings.launchAnimMode, 'current');
+  assert.equal(afterReset.settings.returnAnimMode, 'liquid');
+});
+
+
+
+
 

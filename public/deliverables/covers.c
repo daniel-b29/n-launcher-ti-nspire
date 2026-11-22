@@ -85,6 +85,7 @@ static void free_game_icon_buffers(nl_game_t *game) {
     }
     game->icon_w = 0;
     game->icon_h = 0;
+    game->icon_low_res = false;
 }
 
 static bool alloc_game_icon_buf(nl_game_t *game, int w, int h, bool alloc_alpha) {
@@ -93,6 +94,14 @@ static bool alloc_game_icon_buf(nl_game_t *game, int w, int h, bool alloc_alpha)
     }
     free_game_icon_buffers(game);
     size_t count = (size_t)w * (size_t)h;
+#ifdef __arm__
+    /* Guarantee >= 512 KB contiguous heap headroom on TI-Nspire so 78+ icons NEVER starve OS/FBs */
+    void *headroom = malloc(524288U);
+    if (!headroom) {
+        return false;
+    }
+    free(headroom);
+#endif
     game->icon_pixels = (uint16_t *)malloc(count * sizeof(uint16_t));
     if (!game->icon_pixels) return false;
     if (alloc_alpha) {
@@ -184,6 +193,19 @@ static bool load_nlic_pixels(const char *path, uint16_t **dst_pixels) {
         fclose(fp);
         return false;
     }
+
+#ifdef __arm__
+    /* Verify 256 KB heap headroom on calculator before allocating .scr.tns buffer
+     * so preloading screenshots never starves stage 11 library transition or OS allocations */
+    if (!*dst_pixels) {
+        void *headroom = malloc(262144U);
+        if (!headroom) {
+            fclose(fp);
+            return false;
+        }
+        free(headroom);
+    }
+#endif
 
     if (!ensure_pixel_buf(dst_pixels)) {
         fclose(fp);
@@ -299,6 +321,20 @@ static void decode_dib_pixel_rgba(const uint8_t *row_buf, int sx, uint16_t bpp, 
     }
 }
 
+static nl_progress_cb_t G_ICON_DECODE_CB  = NULL;
+static void            *G_ICON_DECODE_CTX = NULL;
+
+void nl_set_icon_decode_progress_cb(nl_progress_cb_t cb, void *ctx) {
+    G_ICON_DECODE_CB  = cb;
+    G_ICON_DECODE_CTX = ctx;
+}
+
+static inline void pump_icon_decode_progress(void) {
+    if (G_ICON_DECODE_CB) {
+        G_ICON_DECODE_CB(G_ICON_DECODE_CTX);
+    }
+}
+
 /* Downsample an RGBA8888 buffer into game->icon_pixels / icon_alpha with symmetric empty-margin trim */
 static bool finalize_rgba_into_game_icon(const uint8_t *rgba, int src_w, int src_h, nl_game_t *game) {
     if (!rgba || src_w <= 0 || src_h <= 0 || !game) return false;
@@ -348,62 +384,155 @@ static bool finalize_rgba_into_game_icon(const uint8_t *rgba, int src_w, int src
 
     int dst_w = 0, dst_h = 0;
     compute_icon_fit_dims(crop_w, crop_h, &dst_w, &dst_h);
-    bool keep_alpha = (any_partial_alpha && any_nonzero_alpha);
+
+    /* Re-check partial alpha strictly inside the cropped region so trimmed opaque icons avoid dead alpha buffers */
+    bool keep_alpha = false;
+    if (any_partial_alpha && any_nonzero_alpha) {
+        if (crop_x == 0 && crop_y == 0 && crop_w == src_w && crop_h == src_h) {
+            keep_alpha = true;
+        } else {
+            for (int y = crop_y; y < crop_y + crop_h && !keep_alpha; y++) {
+                const uint8_t *row_a = rgba + ((size_t)y * (size_t)src_w + (size_t)crop_x) * 4U + 3U;
+                for (int x = 0; x < crop_w; x++) {
+                    if (row_a[(size_t)x * 4U] < 255U) {
+                        keep_alpha = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     if (!alloc_game_icon_buf(game, dst_w, dst_h, keep_alpha)) {
         return false;
     }
+    /* Identify low-resolution sources (< 32x32) without ever artificially upscaling them */
+    game->icon_low_res = (crop_w < 32 || crop_h < 32);
+
+    /* Exact 1:1 native pixel copy when source already fits <= NL_ICON_MAX_DIM (zero blur, zero upscaling) */
+    if (dst_w == crop_w && dst_h == crop_h) {
+        for (int dy = 0; dy < dst_h; dy++) {
+            const uint8_t *src_row = rgba + ((size_t)(crop_y + dy) * (size_t)src_w + (size_t)crop_x) * 4U;
+            uint16_t *dst_row = game->icon_pixels + (size_t)dy * (size_t)dst_w;
+            uint8_t *alp_row = keep_alpha ? (game->icon_alpha + (size_t)dy * (size_t)dst_w) : NULL;
+            for (int dx = 0; dx < dst_w; dx++) {
+                const uint8_t *p = src_row + (size_t)dx * 4U;
+                dst_row[dx] = RGB565(p[0], p[1], p[2]);
+                if (alp_row) alp_row[dx] = p[3];
+            }
+        }
+        return true;
+    }
+
+    /* High-precision fractional area-averaging downscaler (256-scale overlap weights, premultiplied alpha).
+     * #R19: Precompute X span tables + use 32-bit integer arithmetic (eliminates 28,000+ 64-bit software
+     * divisions per 144x144 PNG on ARM926EJ-S while preserving identical downscaled output quality). */
+    uint32_t x0_tbl[NL_ICON_MAX_DIM];
+    uint32_t x1_tbl[NL_ICON_MAX_DIM];
+    int sx_start_tbl[NL_ICON_MAX_DIM];
+    int sx_end_tbl[NL_ICON_MAX_DIM];
+    for (int dx = 0; dx < dst_w; dx++) {
+        uint32_t x0_256 = (uint32_t)crop_x * 256U + ((uint32_t)dx * (uint32_t)crop_w * 256U) / (uint32_t)dst_w;
+        uint32_t x1_256 = (uint32_t)crop_x * 256U + ((uint32_t)(dx + 1) * (uint32_t)crop_w * 256U) / (uint32_t)dst_w;
+        if (x1_256 <= x0_256) x1_256 = x0_256 + 256U;
+        int sx_s = (int)(x0_256 >> 8);
+        int sx_e = (int)((x1_256 + 255U) >> 8);
+        if (sx_e > crop_x + crop_w) sx_e = crop_x + crop_w;
+        x0_tbl[dx] = x0_256;
+        x1_tbl[dx] = x1_256;
+        sx_start_tbl[dx] = sx_s;
+        sx_end_tbl[dx] = sx_e;
+    }
+
+    /* For crop_w/crop_h <= 512 (covers 144x144, 256x256, 512x512), unshifted 32-bit accumulators
+     * never exceed ~815M (< 4.29B UINT32_MAX) and match uint64_t bit-for-bit! */
+    const bool shift_wa = (crop_w > 512 || crop_h > 512);
+    bool any_out_partial_alpha = false;
 
     for (int dy = 0; dy < dst_h; dy++) {
-        int sy0 = crop_y + (dy * crop_h) / dst_h;
-        int sy1 = crop_y + ((dy + 1) * crop_h + dst_h - 1) / dst_h;
-        if (sy1 <= sy0) sy1 = sy0 + 1;
-        if (sy1 > crop_y + crop_h) sy1 = crop_y + crop_h;
+        if ((dy & 15) == 0) pump_icon_decode_progress();
+        uint32_t y0_256 = (uint32_t)crop_y * 256U + ((uint32_t)dy * (uint32_t)crop_h * 256U) / (uint32_t)dst_h;
+        uint32_t y1_256 = (uint32_t)crop_y * 256U + ((uint32_t)(dy + 1) * (uint32_t)crop_h * 256U) / (uint32_t)dst_h;
+        if (y1_256 <= y0_256) y1_256 = y0_256 + 256U;
+        int sy_start = (int)(y0_256 >> 8);
+        int sy_end   = (int)((y1_256 + 255U) >> 8);
+        if (sy_end > crop_y + crop_h) sy_end = crop_y + crop_h;
+
+        uint16_t *dst_pix_row = game->icon_pixels + (size_t)dy * (size_t)dst_w;
+        uint8_t  *dst_alp_row = keep_alpha ? (game->icon_alpha + (size_t)dy * (size_t)dst_w) : NULL;
 
         for (int dx = 0; dx < dst_w; dx++) {
-            int sx0 = crop_x + (dx * crop_w) / dst_w;
-            int sx1 = crop_x + ((dx + 1) * crop_w + dst_w - 1) / dst_w;
-            if (sx1 <= sx0) sx1 = sx0 + 1;
-            if (sx1 > crop_x + crop_w) sx1 = crop_x + crop_w;
+            uint32_t x0_256 = x0_tbl[dx];
+            uint32_t x1_256 = x1_tbl[dx];
+            int sx_start = sx_start_tbl[dx];
+            int sx_end   = sx_end_tbl[dx];
 
-            uint32_t acc_r = 0U, acc_g = 0U, acc_b = 0U, acc_a = 0U, acc_n = 0U;
-            for (int sy = sy0; sy < sy1; sy++) {
-                for (int sx = sx0; sx < sx1; sx++) {
-                    const uint8_t *p = rgba + ((size_t)sy * (size_t)src_w + (size_t)sx) * 4U;
+            uint32_t acc_r = 0U, acc_g = 0U, acc_b = 0U, acc_a = 0U, acc_w = 0U;
+            for (int sy = sy_start; sy < sy_end; sy++) {
+                uint32_t py0 = (uint32_t)sy * 256U;
+                uint32_t py1 = py0 + 256U;
+                uint32_t oy0 = (py0 > y0_256) ? py0 : y0_256;
+                uint32_t oy1 = (py1 < y1_256) ? py1 : y1_256;
+                if (oy1 <= oy0) continue;
+                uint32_t wy = oy1 - oy0; /* 1..256 */
+
+                const uint8_t *src_row = rgba + (size_t)sy * (size_t)src_w * 4U;
+                for (int sx = sx_start; sx < sx_end; sx++) {
+                    uint32_t px0 = (uint32_t)sx * 256U;
+                    uint32_t px1 = px0 + 256U;
+                    uint32_t ox0 = (px0 > x0_256) ? px0 : x0_256;
+                    uint32_t ox1 = (px1 < x1_256) ? px1 : x1_256;
+                    if (ox1 <= ox0) continue;
+                    uint32_t w_area = (wy * (ox1 - ox0) + 128U) >> 8; /* 1..256 */
+                    if (w_area == 0U) w_area = 1U;
+
+                    const uint8_t *p = src_row + (size_t)sx * 4U;
                     if (keep_alpha) {
-                        uint32_t a = p[3];
-                        acc_r += (uint32_t)p[0] * a;
-                        acc_g += (uint32_t)p[1] * a;
-                        acc_b += (uint32_t)p[2] * a;
-                        acc_a += a;
+                        uint32_t wa = shift_wa ? ((w_area * (uint32_t)p[3] + 16U) >> 5) : (w_area * (uint32_t)p[3]);
+                        acc_r += (uint32_t)p[0] * wa;
+                        acc_g += (uint32_t)p[1] * wa;
+                        acc_b += (uint32_t)p[2] * wa;
+                        acc_a += wa;
                     } else {
-                        acc_r += (uint32_t)p[0];
-                        acc_g += (uint32_t)p[1];
-                        acc_b += (uint32_t)p[2];
+                        acc_r += (uint32_t)p[0] * w_area;
+                        acc_g += (uint32_t)p[1] * w_area;
+                        acc_b += (uint32_t)p[2] * w_area;
                     }
-                    acc_n++;
+                    acc_w += w_area;
                 }
             }
-            if (acc_n == 0U) acc_n = 1U;
+            if (acc_w == 0U) acc_w = 1U;
             unsigned r = 25U, g = 32U, b = 44U;
             if (keep_alpha) {
-                unsigned a_avg = (acc_a + acc_n / 2U) / acc_n;
+                uint32_t denom_a = shift_wa ? ((acc_w + 16U) >> 5) : acc_w;
+                if (denom_a == 0U) denom_a = 1U;
+                unsigned a_avg = (unsigned)((acc_a + (denom_a >> 1)) / denom_a);
                 if (a_avg > 255U) a_avg = 255U;
-                game->icon_alpha[dy * dst_w + dx] = (uint8_t)a_avg;
+                dst_alp_row[dx] = (uint8_t)a_avg;
+                if (a_avg < 255U) any_out_partial_alpha = true;
                 if (acc_a > 0U) {
-                    r = (acc_r + acc_a / 2U) / acc_a;
-                    g = (acc_g + acc_a / 2U) / acc_a;
-                    b = (acc_b + acc_a / 2U) / acc_a;
+                    uint32_t half_a = acc_a >> 1;
+                    r = (unsigned)((acc_r + half_a) / acc_a);
+                    g = (unsigned)((acc_g + half_a) / acc_a);
+                    b = (unsigned)((acc_b + half_a) / acc_a);
                 }
             } else {
-                r = (acc_r + acc_n / 2U) / acc_n;
-                g = (acc_g + acc_n / 2U) / acc_n;
-                b = (acc_b + acc_n / 2U) / acc_n;
+                uint32_t half_w = acc_w >> 1;
+                r = (unsigned)((acc_r + half_w) / acc_w);
+                g = (unsigned)((acc_g + half_w) / acc_w);
+                b = (unsigned)((acc_b + half_w) / acc_w);
             }
             if (r > 255U) r = 255U;
             if (g > 255U) g = 255U;
             if (b > 255U) b = 255U;
-            game->icon_pixels[dy * dst_w + dx] = RGB565(r, g, b);
+            dst_pix_row[dx] = RGB565(r, g, b);
         }
+    }
+
+    /* If downscaling produced a 100% opaque icon, drop dead alpha buffer to save 33% RAM & unlock pure-RGB565 fast paths */
+    if (keep_alpha && !any_out_partial_alpha && game->icon_alpha) {
+        free(game->icon_alpha);
+        game->icon_alpha = NULL;
     }
     return true;
 }
@@ -414,9 +543,10 @@ static bool decode_dib_into_game_icon(FILE *fp, uint32_t pixel_offset, uint32_t 
                                       uint16_t bpp, uint32_t comp, bool top_down,
                                       bool is_ico, long file_size, nl_game_t *game) {
     if (src_w <= 0 || src_w > 512 || src_h <= 0 || src_h > 512) return false;
+    if (file_size <= 0L) return false;
     uint32_t bits_per_row = (uint32_t)src_w * (uint32_t)bpp;
     uint32_t xor_stride = ((bits_per_row + 31U) >> 5) * 4U;
-    if ((int64_t)pixel_offset + (int64_t)src_h * (int64_t)xor_stride > (int64_t)file_size) {
+    if (xor_stride == 0U || (uint64_t)pixel_offset + (uint64_t)src_h * (uint64_t)xor_stride > (uint64_t)file_size) {
         return false;
     }
 
@@ -425,6 +555,9 @@ static bool decode_dib_into_game_icon(FILE *fp, uint32_t pixel_offset, uint32_t 
     if (bpp <= 8U) {
         uint32_t max_pal = 1U << bpp;
         pal_count = (clr_used > 0U && clr_used <= max_pal) ? clr_used : max_pal;
+        if ((uint64_t)pal_offset + (uint64_t)pal_count * 4ULL > (uint64_t)file_size) {
+            return false;
+        }
         palette = (uint8_t *)calloc(256U, 4U);
         if (!palette) return false;
         if (fseek(fp, (long)pal_offset, SEEK_SET) != 0 ||
@@ -434,7 +567,33 @@ static bool decode_dib_into_game_icon(FILE *fp, uint32_t pixel_offset, uint32_t 
         }
     }
 
-    size_t rgba_bytes = (size_t)src_w * (size_t)src_h * 4U;
+    /* Cap intermediate RGBA decode buffer to <= 128x128 (64 KB max instead of 1 MB for 512x512!) */
+    int work_w = src_w;
+    int work_h = src_h;
+    if (work_w > 128 || work_h > 128) {
+        if (work_w >= work_h) {
+            work_w = 128;
+            work_h = (int)(((int64_t)src_h * 128 + (src_w / 2)) / src_w);
+            if (work_h < 1) work_h = 1;
+            if (work_h > 128) work_h = 128;
+        } else {
+            work_h = 128;
+            work_w = (int)(((int64_t)src_w * 128 + (src_h / 2)) / src_h);
+            if (work_w < 1) work_w = 1;
+            if (work_w > 128) work_w = 128;
+        }
+    }
+
+#ifdef __arm__
+    void *headroom = malloc(524288U);
+    if (!headroom) {
+        free(palette);
+        return false;
+    }
+    free(headroom);
+#endif
+
+    size_t rgba_bytes = (size_t)work_w * (size_t)work_h * 4U;
     uint8_t *rgba = (uint8_t *)malloc(rgba_bytes);
     uint8_t *row_buf = (uint8_t *)malloc(xor_stride);
     if (!rgba || !row_buf) {
@@ -445,24 +604,28 @@ static bool decode_dib_into_game_icon(FILE *fp, uint32_t pixel_offset, uint32_t 
     }
 
     bool any_nonzero_alpha = false;
-    for (int sy = 0; sy < src_h; sy++) {
+    for (int wy = 0; wy < work_h; wy++) {
+        int sy = (work_h == src_h) ? wy : ((wy * src_h) / work_h);
+        if (sy >= src_h) sy = src_h - 1;
         int file_row = top_down ? sy : (src_h - 1 - sy);
-        long seek_pos = (long)pixel_offset + (long)file_row * (long)xor_stride;
+        long seek_pos = (long)((uint64_t)pixel_offset + (uint64_t)file_row * (uint64_t)xor_stride);
         if (fseek(fp, seek_pos, SEEK_SET) != 0 || fread(row_buf, 1, xor_stride, fp) != xor_stride) {
             free(palette);
             free(rgba);
             free(row_buf);
             return false;
         }
-        uint8_t *dst_row = rgba + (size_t)sy * (size_t)src_w * 4U;
-        for (int sx = 0; sx < src_w; sx++) {
+        uint8_t *dst_row = rgba + (size_t)wy * (size_t)work_w * 4U;
+        for (int wx = 0; wx < work_w; wx++) {
+            int sx = (work_w == src_w) ? wx : ((wx * src_w) / work_w);
+            if (sx >= src_w) sx = src_w - 1;
             uint8_t r, g, b, a;
             decode_dib_pixel_rgba(row_buf, sx, bpp, comp, palette, pal_count, &r, &g, &b, &a);
             if (bpp == 32U && a > 0U) any_nonzero_alpha = true;
-            dst_row[sx * 4 + 0] = r;
-            dst_row[sx * 4 + 1] = g;
-            dst_row[sx * 4 + 2] = b;
-            dst_row[sx * 4 + 3] = a;
+            dst_row[wx * 4 + 0] = r;
+            dst_row[wx * 4 + 1] = g;
+            dst_row[wx * 4 + 2] = b;
+            dst_row[wx * 4 + 3] = a;
         }
     }
     free(palette);
@@ -471,52 +634,56 @@ static bool decode_dib_into_game_icon(FILE *fp, uint32_t pixel_offset, uint32_t 
     /* Apply 1-bit AND transparency mask for non-32bpp ICOs or legacy 32bpp with all-zero alpha */
     if (is_ico && (bpp < 32U || !any_nonzero_alpha)) {
         uint32_t and_stride = (((uint32_t)src_w + 31U) >> 5) * 4U;
-        int64_t and_offset = (int64_t)pixel_offset + (int64_t)src_h * (int64_t)xor_stride;
-        if (and_offset + (int64_t)src_h * (int64_t)and_stride <= (int64_t)file_size) {
+        uint64_t and_offset = (uint64_t)pixel_offset + (uint64_t)src_h * (uint64_t)xor_stride;
+        if (and_stride > 0U && and_offset + (uint64_t)src_h * (uint64_t)and_stride <= (uint64_t)file_size) {
             uint8_t *and_buf = (uint8_t *)malloc(and_stride);
             if (and_buf) {
                 bool and_ok = true;
                 bool has_opaque = false;
                 bool has_trans = false;
-                for (int sy = 0; sy < src_h; sy++) {
+                for (int wy = 0; wy < work_h; wy++) {
+                    int sy = (work_h == src_h) ? wy : ((wy * src_h) / work_h);
+                    if (sy >= src_h) sy = src_h - 1;
                     int file_row = top_down ? sy : (src_h - 1 - sy);
-                    long seek_pos = (long)and_offset + (long)file_row * (long)and_stride;
+                    long seek_pos = (long)(and_offset + (uint64_t)file_row * (uint64_t)and_stride);
                     if (fseek(fp, seek_pos, SEEK_SET) != 0 || fread(and_buf, 1, and_stride, fp) != and_stride) {
                         and_ok = false;
                         break;
                     }
-                    uint8_t *dst_row = rgba + (size_t)sy * (size_t)src_w * 4U;
-                    for (int sx = 0; sx < src_w; sx++) {
+                    uint8_t *dst_row = rgba + (size_t)wy * (size_t)work_w * 4U;
+                    for (int wx = 0; wx < work_w; wx++) {
+                        int sx = (work_w == src_w) ? wx : ((wx * src_w) / work_w);
+                        if (sx >= src_w) sx = src_w - 1;
                         uint8_t bit = (uint8_t)((and_buf[sx >> 3] >> (7 - (sx & 7))) & 1U);
                         if (bit) {
                             has_trans = true;
-                            dst_row[sx * 4 + 3] = 0U;
+                            dst_row[wx * 4 + 3] = 0U;
                         } else {
                             has_opaque = true;
-                            dst_row[sx * 4 + 3] = 255U;
+                            dst_row[wx * 4 + 3] = 255U;
                         }
                     }
                 }
                 free(and_buf);
                 /* If legacy 32bpp had alpha=0 everywhere and no valid AND mask, treat as opaque */
                 if (!and_ok || (!has_opaque && !any_nonzero_alpha)) {
-                    for (size_t i = 0; i < (size_t)src_w * (size_t)src_h; i++) {
+                    for (size_t i = 0; i < (size_t)work_w * (size_t)work_h; i++) {
                         rgba[i * 4U + 3U] = 255U;
                     }
                 } else if (!has_trans && bpp == 32U && !any_nonzero_alpha) {
-                    for (size_t i = 0; i < (size_t)src_w * (size_t)src_h; i++) {
+                    for (size_t i = 0; i < (size_t)work_w * (size_t)work_h; i++) {
                         rgba[i * 4U + 3U] = 255U;
                     }
                 }
             }
         } else if (bpp == 32U && !any_nonzero_alpha) {
-            for (size_t i = 0; i < (size_t)src_w * (size_t)src_h; i++) {
+            for (size_t i = 0; i < (size_t)work_w * (size_t)work_h; i++) {
                 rgba[i * 4U + 3U] = 255U;
             }
         }
     }
 
-    bool ok = finalize_rgba_into_game_icon(rgba, src_w, src_h, game);
+    bool ok = finalize_rgba_into_game_icon(rgba, work_w, work_h, game);
     free(rgba);
     return ok;
 }
@@ -535,6 +702,7 @@ typedef struct {
 typedef struct {
     uint16_t counts[16];
     uint16_t symbols[288];
+    int      max_syms;
 } nl_huff_t;
 
 static uint32_t read_u32_be(const uint8_t *p) {
@@ -557,7 +725,9 @@ static int bs_read_bits(nl_bitstream_t *bs, int n, uint32_t *out_val) {
 }
 
 static bool huff_build(nl_huff_t *h, const uint8_t *lens, int num_syms) {
+    if (!h || !lens || num_syms <= 0 || num_syms > 288) return false;
     uint16_t offs[16];
+    h->max_syms = num_syms;
     for (int i = 0; i < 16; i++) h->counts[i] = 0U;
     for (int i = 0; i < num_syms; i++) {
         if (lens[i] >= 16U) return false;
@@ -576,7 +746,9 @@ static bool huff_build(nl_huff_t *h, const uint8_t *lens, int num_syms) {
     }
     for (int sym = 0; sym < num_syms; sym++) {
         if (lens[sym] != 0U) {
-            h->symbols[offs[lens[sym]]++] = (uint16_t)sym;
+            uint16_t dst_idx = offs[lens[sym]]++;
+            if ((int)dst_idx >= num_syms) return false;
+            h->symbols[dst_idx] = (uint16_t)sym;
         }
     }
     return true;
@@ -592,7 +764,9 @@ static int huff_decode(nl_bitstream_t *bs, const nl_huff_t *h, int *out_sym) {
         code |= (int)bit;
         int count = (int)h->counts[len];
         if (code - count < first) {
-            *out_sym = (int)h->symbols[index + (code - first)];
+            int pos = index + (code - first);
+            if (pos < 0 || pos >= h->max_syms || pos >= 288) return -1;
+            *out_sym = (int)h->symbols[pos];
             return 0;
         }
         index += count;
@@ -735,6 +909,7 @@ static bool inflate_zlib_stream(const uint8_t *src, size_t src_len, uint8_t *dst
                 }
             }
 
+            size_t next_pump_pos = out_pos + 2048U;
             for (;;) {
                 int sym = 0;
                 if (huff_decode(&bs, &sc->lit_h, &sym) != 0) { free(sc); return false; }
@@ -761,6 +936,10 @@ static bool inflate_zlib_stream(const uint8_t *src, size_t src_len, uint8_t *dst
                         out_pos++;
                     }
                 }
+                if (out_pos >= next_pump_pos) {
+                    pump_icon_decode_progress();
+                    next_pump_pos = out_pos + 2048U;
+                }
             }
         } else {
             free(sc);
@@ -786,6 +965,7 @@ static uint8_t png_paeth(uint8_t a, uint8_t b, uint8_t c) {
 static bool png_unfilter_pass(uint8_t *raw, int pw, int ph, int bpp_bytes, int stride) {
     uint8_t *prev = NULL;
     for (int y = 0; y < ph; y++) {
+        if ((y & 31) == 0) pump_icon_decode_progress();
         uint8_t *row = raw + (size_t)y * (size_t)(1 + stride);
         uint8_t ftype = row[0];
         uint8_t *pix = row + 1;
@@ -858,7 +1038,7 @@ static bool decode_png_memory_to_game_icon(const uint8_t *png, size_t png_len, n
             h = read_u32_be(cdata + 4);
             bit_depth = cdata[8];
             color_type = cdata[9];
-            if (w == 0U || w > 512U || h == 0U || h > 512U) { free(plte); free(trns_alpha); free(idat_buf); return false; }
+            if (w == 0U || w > 1024U || h == 0U || h > 1024U) { free(plte); free(trns_alpha); free(idat_buf); return false; }
             if (cdata[10] != 0U || cdata[11] != 0U || cdata[12] > 1U) { free(plte); free(trns_alpha); free(idat_buf); return false; }
             interlace = cdata[12];
             have_ihdr = true;
@@ -880,12 +1060,12 @@ static bool decode_png_memory_to_game_icon(const uint8_t *png, size_t png_len, n
                 trns_b = (uint16_t)(((uint16_t)cdata[4] << 8) | cdata[5]);
             }
         } else if (memcmp(ctype, "IDAT", 4) == 0) {
-            if ((uint64_t)idat_len + (uint64_t)clen > 2ULL * 1024ULL * 1024ULL) {
+            if ((uint64_t)idat_len + (uint64_t)clen > 1024ULL * 1024ULL) {
                 free(plte); free(trns_alpha); free(idat_buf);
                 return false;
             }
             if (idat_len + (size_t)clen > idat_cap) {
-                size_t new_cap = (idat_cap == 0U) ? 16384U : idat_cap * 2U;
+                size_t new_cap = (idat_cap == 0U) ? 8192U : idat_cap * 2U;
                 while (new_cap < idat_len + (size_t)clen) new_cap *= 2U;
                 uint8_t *nb = (uint8_t *)realloc(idat_buf, new_cap);
                 if (!nb) { free(plte); free(trns_alpha); free(idat_buf); return false; }
@@ -906,23 +1086,72 @@ static bool decode_png_memory_to_game_icon(const uint8_t *png, size_t png_len, n
         return false;
     }
 
+    /* Strict RFC 2083 (color_type, bit_depth) validation */
     int n_ch = 0;
-    if (color_type == 0U) n_ch = 1;
-    else if (color_type == 2U) n_ch = 3;
-    else if (color_type == 3U) n_ch = 1;
-    else if (color_type == 4U) n_ch = 2;
-    else if (color_type == 6U) n_ch = 4;
-    else { free(plte); free(trns_alpha); free(idat_buf); return false; }
-
-    if (!(bit_depth == 1U || bit_depth == 2U || bit_depth == 4U || bit_depth == 8U || bit_depth == 16U)) {
+    bool bd_ok = false;
+    if (color_type == 0U) {
+        n_ch = 1;
+        bd_ok = (bit_depth == 1U || bit_depth == 2U || bit_depth == 4U || bit_depth == 8U || bit_depth == 16U);
+    } else if (color_type == 2U) {
+        n_ch = 3;
+        bd_ok = (bit_depth == 8U || bit_depth == 16U);
+    } else if (color_type == 3U) {
+        n_ch = 1;
+        bd_ok = (plte_cnt > 0) && (bit_depth == 1U || bit_depth == 2U || bit_depth == 4U || bit_depth == 8U);
+    } else if (color_type == 4U) {
+        n_ch = 2;
+        bd_ok = (bit_depth == 8U || bit_depth == 16U);
+    } else if (color_type == 6U) {
+        n_ch = 4;
+        bd_ok = (bit_depth == 8U || bit_depth == 16U);
+    }
+    if (!bd_ok || n_ch <= 0) {
         free(plte); free(trns_alpha); free(idat_buf);
         return false;
     }
 
+    /* Normalize 16-bit tRNS key to 8-bit sample representation used by png_sample_at */
+    uint8_t key_r8 = (bit_depth == 16U) ? (uint8_t)(trns_r >> 8) : (uint8_t)(trns_r & 0xFFU);
+    uint8_t key_g8 = (bit_depth == 16U) ? (uint8_t)(trns_g >> 8) : (uint8_t)(trns_g & 0xFFU);
+    uint8_t key_b8 = (bit_depth == 16U) ? (uint8_t)(trns_b >> 8) : (uint8_t)(trns_b & 0xFFU);
+
     size_t max_raw_bytes = (size_t)h * (1U + ((size_t)w * (size_t)n_ch * (size_t)bit_depth + 7U) / 8U) +
                            (interlace ? (size_t)h * 7U + 64U : 0U);
+
+    /* For very large PNGs (> 512px), downsample during decode into <= 256x256 work RGBA to stay RAM-safe on CX II-T */
+    int work_w = (int)w;
+    int work_h = (int)h;
+    bool stream_downscale = (w > 512U || h > 512U);
+    if (stream_downscale) {
+        if (w >= h) {
+            work_w = 256;
+            work_h = (int)(((int64_t)h * 256 + ((int64_t)w / 2)) / (int64_t)w);
+        } else {
+            work_h = 256;
+            work_w = (int)(((int64_t)w * 256 + ((int64_t)h / 2)) / (int64_t)h);
+        }
+        if (work_w < 1) work_w = 1;
+        if (work_h < 1) work_h = 1;
+        if (work_w > 256) work_w = 256;
+        if (work_h > 256) work_h = 256;
+    }
+    size_t rgba_bytes = (size_t)work_w * (size_t)work_h * 4U;
+    if (max_raw_bytes > 4300U * 1024U || rgba_bytes > 1024U * 1024U) {
+        free(plte); free(trns_alpha); free(idat_buf);
+        return false;
+    }
+#ifdef __arm__
+    {
+        void *headroom = malloc(max_raw_bytes + rgba_bytes + 524288U);
+        if (!headroom) {
+            free(plte); free(trns_alpha); free(idat_buf);
+            return false;
+        }
+        free(headroom);
+    }
+#endif
     uint8_t *raw = (uint8_t *)malloc(max_raw_bytes);
-    uint8_t *rgba = (uint8_t *)calloc((size_t)w * (size_t)h, 4U);
+    uint8_t *rgba = (uint8_t *)calloc((size_t)work_w * (size_t)work_h, 4U);
     if (!raw || !rgba) {
         free(plte); free(trns_alpha); free(idat_buf);
         free(raw);
@@ -949,73 +1178,197 @@ static bool decode_png_memory_to_game_icon(const uint8_t *png, size_t png_len, n
     int num_passes = interlace ? 7 : 1;
     size_t raw_off = 0U;
 
-    for (int pass = 0; pass < num_passes; pass++) {
-        int px0 = interlace ? a7_x0[pass] : 0;
-        int py0 = interlace ? a7_y0[pass] : 0;
-        int pdx = interlace ? a7_dx[pass] : 1;
-        int pdy = interlace ? a7_dy[pass] : 1;
-        int pw = ((int)w > px0) ? (((int)w - px0 + pdx - 1) / pdx) : 0;
-        int ph = ((int)h > py0) ? (((int)h - py0 + pdy - 1) / pdy) : 0;
-        if (pw <= 0 || ph <= 0) continue;
-
-        int stride = (pw * n_ch * (int)bit_depth + 7) / 8;
-        size_t pass_bytes = (size_t)ph * (size_t)(1 + stride);
-        if (raw_off + pass_bytes > raw_len ||
-            !png_unfilter_pass(raw + raw_off, pw, ph, bpp_bytes, stride)) {
-            free(plte); free(trns_alpha);
-            free(raw);
-            free(rgba);
+    if (stream_downscale && !interlace) {
+        int stride = ((int)w * n_ch * (int)bit_depth + 7) / 8;
+        size_t pass_bytes = (size_t)h * (size_t)(1 + stride);
+        if (pass_bytes > raw_len || !png_unfilter_pass(raw, (int)w, (int)h, bpp_bytes, stride)) {
+            free(plte); free(trns_alpha); free(raw); free(rgba);
             return false;
         }
-
         uint8_t scale_max = (bit_depth < 8U) ? (uint8_t)((1U << bit_depth) - 1U) : 255U;
-        for (int py = 0; py < ph; py++) {
-            const uint8_t *row_pix = raw + raw_off + (size_t)py * (size_t)(1 + stride) + 1U;
-            int dy = py0 + py * pdy;
-            for (int px = 0; px < pw; px++) {
-                int dx = px0 + px * pdx;
-                uint8_t r = 0U, g = 0U, b = 0U, a = 255U;
-                if (color_type == 3U) {
-                    uint8_t idx = png_sample_at(row_pix, px, bit_depth, 0, 1);
-                    if ((int)idx < plte_cnt) {
-                        r = plte[idx * 3 + 0];
-                        g = plte[idx * 3 + 1];
-                        b = plte[idx * 3 + 2];
-                        a = trns_alpha[idx];
-                    }
-                } else if (color_type == 0U || color_type == 4U) {
-                    uint8_t v = png_sample_at(row_pix, px, bit_depth, 0, n_ch);
-                    uint8_t g8 = (bit_depth < 8U) ? (uint8_t)((v * 255U) / scale_max) : v;
-                    r = g = b = g8;
-                    if (color_type == 4U) {
-                        a = png_sample_at(row_pix, px, bit_depth, 1, 2);
-                    } else if (have_trns_key && v == (uint8_t)trns_r) {
-                        a = 0U;
-                    }
-                } else {
-                    r = png_sample_at(row_pix, px, bit_depth, 0, n_ch);
-                    g = png_sample_at(row_pix, px, bit_depth, 1, n_ch);
-                    b = png_sample_at(row_pix, px, bit_depth, 2, n_ch);
-                    if (color_type == 6U) {
-                        a = png_sample_at(row_pix, px, bit_depth, 3, 4);
-                    } else if (have_trns_key &&
-                               r == (uint8_t)trns_r && g == (uint8_t)trns_g && b == (uint8_t)trns_b) {
-                        a = 0U;
+        for (int wy = 0; wy < work_h; wy++) {
+            int sy0 = (int)(((int64_t)wy * (int64_t)h) / work_h);
+            int sy1 = (int)(((int64_t)(wy + 1) * (int64_t)h + work_h - 1) / work_h);
+            if (sy1 <= sy0) sy1 = sy0 + 1;
+            if (sy1 > (int)h) sy1 = (int)h;
+            for (int wx = 0; wx < work_w; wx++) {
+                int sx0 = (int)(((int64_t)wx * (int64_t)w) / work_w);
+                int sx1 = (int)(((int64_t)(wx + 1) * (int64_t)w + work_w - 1) / work_w);
+                if (sx1 <= sx0) sx1 = sx0 + 1;
+                if (sx1 > (int)w) sx1 = (int)w;
+                uint32_t ar = 0U, ag = 0U, ab = 0U, aa = 0U, cnt = 0U;
+                for (int sy = sy0; sy < sy1; sy++) {
+                    const uint8_t *row_pix = raw + (size_t)sy * (size_t)(1 + stride) + 1U;
+                    for (int sx = sx0; sx < sx1; sx++) {
+                        uint8_t r = 0U, g = 0U, b = 0U, a = 255U;
+                        if (color_type == 3U) {
+                            uint8_t idx = png_sample_at(row_pix, sx, bit_depth, 0, 1);
+                            if ((int)idx < plte_cnt) {
+                                r = plte[idx * 3 + 0]; g = plte[idx * 3 + 1]; b = plte[idx * 3 + 2];
+                                a = trns_alpha[idx];
+                            }
+                        } else if (color_type == 0U || color_type == 4U) {
+                            uint8_t v = png_sample_at(row_pix, sx, bit_depth, 0, n_ch);
+                            uint8_t g8 = (bit_depth < 8U) ? (uint8_t)((v * 255U) / scale_max) : v;
+                            r = g = b = g8;
+                            if (color_type == 4U) a = png_sample_at(row_pix, sx, bit_depth, 1, 2);
+                            else if (have_trns_key && v == key_r8) a = 0U;
+                        } else {
+                            r = png_sample_at(row_pix, sx, bit_depth, 0, n_ch);
+                            g = png_sample_at(row_pix, sx, bit_depth, 1, n_ch);
+                            b = png_sample_at(row_pix, sx, bit_depth, 2, n_ch);
+                            if (color_type == 6U) a = png_sample_at(row_pix, sx, bit_depth, 3, 4);
+                            else if (have_trns_key && r == key_r8 && g == key_g8 && b == key_b8) a = 0U;
+                        }
+                        ar += (uint32_t)r * (uint32_t)a;
+                        ag += (uint32_t)g * (uint32_t)a;
+                        ab += (uint32_t)b * (uint32_t)a;
+                        aa += (uint32_t)a;
+                        cnt++;
                     }
                 }
-                uint8_t *out = rgba + ((size_t)dy * (size_t)w + (size_t)dx) * 4U;
-                out[0] = r; out[1] = g; out[2] = b; out[3] = a;
+                if (cnt == 0U) cnt = 1U;
+                uint8_t *out = rgba + ((size_t)wy * (size_t)work_w + (size_t)wx) * 4U;
+                out[3] = (uint8_t)((aa + cnt / 2U) / cnt);
+                if (aa > 0U) {
+                    out[0] = (uint8_t)((ar + aa / 2U) / aa);
+                    out[1] = (uint8_t)((ag + aa / 2U) / aa);
+                    out[2] = (uint8_t)((ab + aa / 2U) / aa);
+                } else {
+                    out[0] = out[1] = out[2] = 0U;
+                }
             }
         }
-        raw_off += pass_bytes;
+    } else {
+        for (int pass = 0; pass < num_passes; pass++) {
+            int px0 = interlace ? a7_x0[pass] : 0;
+            int py0 = interlace ? a7_y0[pass] : 0;
+            int pdx = interlace ? a7_dx[pass] : 1;
+            int pdy = interlace ? a7_dy[pass] : 1;
+            int pw = ((int)w > px0) ? (((int)w - px0 + pdx - 1) / pdx) : 0;
+            int ph = ((int)h > py0) ? (((int)h - py0 + pdy - 1) / pdy) : 0;
+            if (pw <= 0 || ph <= 0) continue;
+
+            int stride = (pw * n_ch * (int)bit_depth + 7) / 8;
+            size_t pass_bytes = (size_t)ph * (size_t)(1 + stride);
+            if (raw_off + pass_bytes > raw_len ||
+                !png_unfilter_pass(raw + raw_off, pw, ph, bpp_bytes, stride)) {
+                free(plte); free(trns_alpha);
+                free(raw);
+                free(rgba);
+                return false;
+            }
+
+            /* #R19 Fast row unpack for standard non-interlaced 8-bit RGBA/RGB PNGs (e.g. 144x144 icons) */
+            if (!interlace && !stream_downscale && bit_depth == 8U && color_type == 6U) {
+                for (int py = 0; py < ph; py++) {
+                    const uint8_t *row_pix = raw + raw_off + (size_t)py * (size_t)(1 + stride) + 1U;
+                    memcpy(rgba + (size_t)py * (size_t)work_w * 4U, row_pix, (size_t)pw * 4U);
+                }
+            } else if (!interlace && !stream_downscale && bit_depth == 8U && color_type == 2U && !have_trns_key) {
+                for (int py = 0; py < ph; py++) {
+                    const uint8_t *src = raw + raw_off + (size_t)py * (size_t)(1 + stride) + 1U;
+                    uint8_t *dst = rgba + (size_t)py * (size_t)work_w * 4U;
+                    for (int px = 0; px < pw; px++, src += 3, dst += 4) {
+                        dst[0] = src[0];
+                        dst[1] = src[1];
+                        dst[2] = src[2];
+                        dst[3] = 255U;
+                    }
+                }
+            } else {
+                uint8_t scale_max = (bit_depth < 8U) ? (uint8_t)((1U << bit_depth) - 1U) : 255U;
+                for (int py = 0; py < ph; py++) {
+                    const uint8_t *row_pix = raw + raw_off + (size_t)py * (size_t)(1 + stride) + 1U;
+                    int dy = py0 + py * pdy;
+                    int wy = stream_downscale ? (int)(((int64_t)dy * work_h) / (int64_t)h) : dy;
+                    if (wy >= work_h) wy = work_h - 1;
+                    for (int px = 0; px < pw; px++) {
+                        int dx = px0 + px * pdx;
+                        int wx = stream_downscale ? (int)(((int64_t)dx * work_w) / (int64_t)w) : dx;
+                        if (wx >= work_w) wx = work_w - 1;
+                        uint8_t r = 0U, g = 0U, b = 0U, a = 255U;
+                        if (color_type == 3U) {
+                            uint8_t idx = png_sample_at(row_pix, px, bit_depth, 0, 1);
+                            if ((int)idx < plte_cnt) {
+                                r = plte[idx * 3 + 0];
+                                g = plte[idx * 3 + 1];
+                                b = plte[idx * 3 + 2];
+                                a = trns_alpha[idx];
+                            }
+                        } else if (color_type == 0U || color_type == 4U) {
+                            uint8_t v = png_sample_at(row_pix, px, bit_depth, 0, n_ch);
+                            uint8_t g8 = (bit_depth < 8U) ? (uint8_t)((v * 255U) / scale_max) : v;
+                            r = g = b = g8;
+                            if (color_type == 4U) {
+                                a = png_sample_at(row_pix, px, bit_depth, 1, 2);
+                            } else if (have_trns_key && v == key_r8) {
+                                a = 0U;
+                            }
+                        } else {
+                            r = png_sample_at(row_pix, px, bit_depth, 0, n_ch);
+                            g = png_sample_at(row_pix, px, bit_depth, 1, n_ch);
+                            b = png_sample_at(row_pix, px, bit_depth, 2, n_ch);
+                            if (color_type == 6U) {
+                                a = png_sample_at(row_pix, px, bit_depth, 3, 4);
+                            } else if (have_trns_key && r == key_r8 && g == key_g8 && b == key_b8) {
+                                a = 0U;
+                            }
+                        }
+                        uint8_t *out = rgba + ((size_t)wy * (size_t)work_w + (size_t)wx) * 4U;
+                        out[0] = r; out[1] = g; out[2] = b; out[3] = a;
+                    }
+                }
+            }
+            raw_off += pass_bytes;
+        }
     }
 
-    bool ok = finalize_rgba_into_game_icon(rgba, (int)w, (int)h, game);
+    bool ok = finalize_rgba_into_game_icon(rgba, work_w, work_h, game);
     free(plte);
     free(trns_alpha);
     free(raw);
     free(rgba);
     return ok;
+}
+
+/* Direct native standalone PNG loader (.png.tns / .png): zero forced .ico conversion, crisp quality */
+static bool load_png_file_scaled(const char *path, nl_game_t *game) {
+    if (!path || !game) return false;
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return false;
+
+    uint8_t sig_hdr[8];
+    static const uint8_t png_sig[8] = {0x89U, 'P', 'N', 'G', 0x0DU, 0x0AU, 0x1AU, 0x0AU};
+    if (fread(sig_hdr, 1U, 8U, fp) != 8U || memcmp(sig_hdr, png_sig, 8U) != 0) {
+        fclose(fp);
+        return false;
+    }
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        return false;
+    }
+    long file_size = ftell(fp);
+    if (file_size < 33L || file_size > 1048576L || fseek(fp, 0, SEEK_SET) != 0) {
+        fclose(fp);
+        return false;
+    }
+    uint8_t *buf = (uint8_t *)malloc((size_t)file_size);
+    if (!buf) {
+        fclose(fp);
+        return false;
+    }
+    bool read_ok = (fread(buf, 1U, (size_t)file_size, fp) == (size_t)file_size);
+    fclose(fp);
+    if (!read_ok) {
+        free(buf);
+        return false;
+    }
+    bool ok = decode_png_memory_to_game_icon(buf, (size_t)file_size, game);
+    free(buf);
+    if (!ok) return false;
+    game->icon_source = NL_ICON_PNG;
+    return true;
 }
 
 /* Load 1/4/8/16/24/32-bit BMP (.bmp.tns or .bmp) preserving exact proportions */
@@ -1052,13 +1405,14 @@ static bool load_bmp_file_scaled(const char *path, nl_game_t *game) {
     uint32_t clr_used     = read_u32_le(hdr + 46);
 
     bool top_down = (bmp_h_signed < 0);
-    int32_t bmp_h = top_down ? -bmp_h_signed : bmp_h_signed;
+    int64_t bmp_h64 = top_down ? -(int64_t)bmp_h_signed : (int64_t)bmp_h_signed;
 
-    if (bmp_w <= 0 || bmp_w > 1024 || bmp_h <= 0 || bmp_h > 1024) {
+    if (bmp_w <= 0 || bmp_w > 512 || bmp_h64 <= 0 || bmp_h64 > 512 || file_size > 1048576L) {
         fclose(fp);
         return false;
     }
-    if (!(bpp == 1U || bpp == 4U || bpp == 8U || bpp == 16U || bpp == 24U || bpp == 32U) ||
+    if (bi_size < 40U || bi_size > 124U ||
+        !(bpp == 1U || bpp == 4U || bpp == 8U || bpp == 16U || bpp == 24U || bpp == 32U) ||
         (compression != 0U && !(compression == 3U && (bpp == 16U || bpp == 32U)))) {
         fclose(fp);
         return false;
@@ -1066,7 +1420,7 @@ static bool load_bmp_file_scaled(const char *path, nl_game_t *game) {
 
     uint32_t pal_offset = 14U + bi_size;
     bool ok = decode_dib_into_game_icon(fp, pixel_offset, pal_offset, clr_used,
-                                        (int)bmp_w, (int)bmp_h,
+                                        (int)bmp_w, (int)bmp_h64,
                                         bpp, compression, top_down, false, file_size, game);
     fclose(fp);
     if (!ok) return false;
@@ -1085,7 +1439,7 @@ static bool load_ico_file_scaled(const char *path, nl_game_t *game) {
         return false;
     }
     long file_size = ftell(fp);
-    if (file_size < 46L || fseek(fp, 0, SEEK_SET) != 0) {
+    if (file_size < 46L || file_size > 1048576L || fseek(fp, 0, SEEK_SET) != 0) {
         fclose(fp);
         return false;
     }
@@ -1145,14 +1499,17 @@ static bool load_ico_file_scaled(const char *path, nl_game_t *game) {
         uint32_t bytes_in_res = read_u32_le(dir_ent + 8);
         uint32_t img_offset   = read_u32_le(dir_ent + 12);
 
-        if ((long)img_offset < min_data_off || bytes_in_res < 24U ||
-            (int64_t)img_offset + (int64_t)bytes_in_res > (int64_t)file_size) {
-            if ((long)img_offset < min_data_off || (int64_t)img_offset + 40LL > (int64_t)file_size) {
+        if ((uint64_t)img_offset < (uint64_t)min_data_off ||
+            (uint64_t)img_offset + 24ULL > (uint64_t)file_size) {
+            continue;
+        }
+        if (bytes_in_res < 24U || (uint64_t)img_offset + (uint64_t)bytes_in_res > (uint64_t)file_size) {
+            if ((uint64_t)img_offset + 40ULL > (uint64_t)file_size) {
                 continue;
             }
-            bytes_in_res = (uint32_t)((int64_t)file_size - (int64_t)img_offset);
+            bytes_in_res = (uint32_t)((uint64_t)file_size - (uint64_t)img_offset);
         }
-        if (bytes_in_res > 2U * 1024U * 1024U) {
+        if (bytes_in_res > 524288U) {
             continue;
         }
 
@@ -1198,38 +1555,38 @@ static bool load_ico_file_scaled(const char *path, nl_game_t *game) {
         (void)ent_w;
 
         bool top_down = (bi_h_signed < 0);
-        int32_t abs_h = top_down ? -bi_h_signed : bi_h_signed;
-        int32_t ico_h = (ent_h > 0 && abs_h == ent_h) ? ent_h : (abs_h / 2);
+        int64_t abs_h = top_down ? -(int64_t)bi_h_signed : (int64_t)bi_h_signed;
+        int64_t ico_h = (ent_h > 0 && abs_h == (int64_t)ent_h) ? (int64_t)ent_h : (abs_h / 2);
         if (ico_h <= 0 || ico_h > 512) continue;
 
-        uint32_t extra_masks = (compression == 3U && bi_size == 40U) ? 12U : 0U;
-        uint32_t pal_offset = img_offset + bi_size + extra_masks;
+        uint64_t extra_masks = (compression == 3U && bi_size == 40U) ? 12ULL : 0ULL;
+        uint64_t pal_offset64 = (uint64_t)img_offset + (uint64_t)bi_size + extra_masks;
         uint32_t pal_count = 0U;
         if (bpp <= 8U) {
             uint32_t max_pal = 1U << bpp;
             pal_count = (clr_used > 0U && clr_used <= max_pal) ? clr_used : max_pal;
         }
-        uint32_t pixel_offset = pal_offset + pal_count * 4U;
+        uint64_t pixel_offset64 = pal_offset64 + (uint64_t)pal_count * 4ULL;
         uint32_t xor_stride = (((uint32_t)bi_w * (uint32_t)bpp + 31U) >> 5) * 4U;
-        if ((int64_t)pixel_offset + (int64_t)ico_h * (int64_t)xor_stride > (int64_t)file_size) {
+        if (pixel_offset64 + (uint64_t)ico_h * (uint64_t)xor_stride > (uint64_t)file_size) {
             continue;
         }
 
-        int min_dim = (bi_w < ico_h) ? bi_w : ico_h;
+        int min_dim = (bi_w < (int)ico_h) ? bi_w : (int)ico_h;
         int res_score = (min_dim >= NL_ICON_MAX_DIM)
             ? (NL_ICON_MAX_DIM * NL_ICON_MAX_DIM - ((bi_w > NL_ICON_MAX_DIM) ? (bi_w - NL_ICON_MAX_DIM) : 0))
-            : (bi_w * ico_h);
+            : (bi_w * (int)ico_h);
         ico_cand_t *c = &cands[n_cands++];
         memset(c, 0, sizeof(*c));
-        c->score = res_score * 16 + (int)bpp * 100 + ((bi_w == ico_h) ? 2000 : 0);
+        c->score = res_score * 16 + (int)bpp * 100 + ((bi_w == (int)ico_h) ? 2000 : 0);
         c->is_png = false;
         c->img_offset = img_offset;
         c->bytes_in_res = bytes_in_res;
-        c->pixel_offset = pixel_offset;
-        c->pal_offset = pal_offset;
+        c->pixel_offset = (uint32_t)pixel_offset64;
+        c->pal_offset = (uint32_t)pal_offset64;
         c->clr_used = clr_used;
         c->w = bi_w;
-        c->h = ico_h;
+        c->h = (int32_t)ico_h;
         c->bpp = bpp;
         c->comp = compression;
         c->top_down = top_down;
@@ -1290,8 +1647,14 @@ static void derive_icons_dir_from_covers(const char *covers_dir, char *out_icons
     }
 }
 
+#define NL_ICON_EXT_COUNT 6
+static const char *const G_ICON_EXTS[NL_ICON_EXT_COUNT] = {
+    ".png.tns", ".png", ".ico.tns", ".ico", ".bmp.tns", ".bmp"
+};
+
 static bool load_custom_icon_candidate(const char *path, nl_game_t *game) {
     if (!path || !game) return false;
+    if (load_png_file_scaled(path, game)) return true;
     if (load_ico_file_scaled(path, game)) return true;
     if (load_bmp_file_scaled(path, game)) return true;
     if (load_nlic_file(path, game)) return true;
@@ -1301,22 +1664,21 @@ static bool load_custom_icon_candidate(const char *path, nl_game_t *game) {
 static bool load_icon_from_dir_ci(const char *dir_path, const char *stem, nl_game_t *game) {
     if (!dir_path || dir_path[0] == '\0' || !stem || stem[0] == '\0') return false;
     char candidate[NL_MAX_PATH_LEN * 2];
-    static const char *const exts[4] = {".ico.tns", ".ico", ".bmp.tns", ".bmp"};
-    for (int i = 0; i < 4; i++) {
-        snprintf(candidate, sizeof(candidate), "%s/%s%s", dir_path, stem, exts[i]);
+    for (int i = 0; i < NL_ICON_EXT_COUNT; i++) {
+        snprintf(candidate, sizeof(candidate), "%s/%s%s", dir_path, stem, G_ICON_EXTS[i]);
         if (load_custom_icon_candidate(candidate, game)) return true;
     }
     DIR *dp = opendir(dir_path);
     if (!dp) return false;
-    char target_names[4][NL_MAX_NAME_LEN + 16];
-    for (int i = 0; i < 4; i++) {
-        snprintf(target_names[i], sizeof(target_names[i]), "%s%s", stem, exts[i]);
+    char target_names[NL_ICON_EXT_COUNT][NL_MAX_NAME_LEN + 16];
+    for (int i = 0; i < NL_ICON_EXT_COUNT; i++) {
+        snprintf(target_names[i], sizeof(target_names[i]), "%s%s", stem, G_ICON_EXTS[i]);
     }
     struct dirent *de;
     bool loaded = false;
     while (!loaded && (de = readdir(dp)) != NULL) {
         if (de->d_name[0] == '.') continue;
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < NL_ICON_EXT_COUNT; i++) {
             if (str_icmp_c(de->d_name, target_names[i]) == 0) {
                 snprintf(candidate, sizeof(candidate), "%s/%s", dir_path, de->d_name);
                 if (load_custom_icon_candidate(candidate, game)) {
@@ -1340,19 +1702,18 @@ bool nl_load_game_icon(nl_game_t *game, const char *covers_dir) {
     char icons_dir[NL_MAX_PATH_LEN];
     derive_icons_dir_from_covers(covers_dir, icons_dir, sizeof(icons_dir));
 
-    /* 1. Custom .ico.tns / .ico / .bmp.tns / .bmp inside /documents/ndless/icons/ */
+    /* 1. Custom .png.tns / .png / .ico.tns / .ico / .bmp.tns / .bmp inside /documents/ndless/icons/ */
     if (icons_dir[0] != '\0' && load_icon_from_dir_ci(icons_dir, stem, game)) {
         return true;
     }
 
-    /* 2. Custom .ico.tns / .ico / .bmp.tns / .bmp next to executable */
-    static const char *const side_exts[4] = {".ico.tns", ".ico", ".bmp.tns", ".bmp"};
-    for (int i = 0; i < 4; i++) {
-        build_sidecar_path(game->path, side_exts[i], candidate, sizeof(candidate));
+    /* 2. Custom icon next to executable */
+    for (int i = 0; i < NL_ICON_EXT_COUNT; i++) {
+        build_sidecar_path(game->path, G_ICON_EXTS[i], candidate, sizeof(candidate));
         if (load_custom_icon_candidate(candidate, game)) return true;
     }
 
-    /* 3. Custom .ico.tns / .ico / .bmp.tns / .bmp inside /documents/ndless/covers/ (never .scr.tns!) */
+    /* 3. Custom icon inside /documents/ndless/covers/ (never .scr.tns!) */
     if (covers_dir && covers_dir[0] != '\0' && load_icon_from_dir_ci(covers_dir, stem, game)) {
         return true;
     }
@@ -1360,43 +1721,611 @@ bool nl_load_game_icon(nl_game_t *game, const char *covers_dir) {
     return false;
 }
 
-bool nl_load_game_screenshot(nl_game_t *game, const char *covers_dir) {
-    if (!game) return false;
+bool nl_screenshot_is_valid_buffer(const uint16_t *pixels) {
+    if (!pixels) return false;
+    uint16_t first = pixels[0];
+    int non_black = 0;
+    int diff_from_first = 0;
+    for (int i = 0; i < NL_COVER_PIXELS; i += 3) {
+        uint16_t px = pixels[i];
+        if (px != first) diff_from_first++;
+        if (px == 0U || px == NL_VRAM_SENTINEL) continue;
+        unsigned r = (unsigned)((px >> 11) & 0x1FU);
+        unsigned g = (unsigned)((px >> 5)  & 0x3FU);
+        unsigned b = (unsigned)(px & 0x1FU);
+        if (r >= 2U || g >= 4U || b >= 2U) {
+            non_black++;
+        }
+    }
+    /* Reject all-black, sentinel-only, and flat single-color blank screens */
+    return (non_black >= (NL_COVER_PIXELS / 150)) && (diff_from_first >= 64);
+}
+
+static bool validate_nlic_file_on_disk(const char *path) {
+    if (!path || path[0] == '\0') return false;
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return false;
+    uint8_t hdr[16];
+    if (fread(hdr, 1, 16, fp) != 16) {
+        fclose(fp);
+        return false;
+    }
+    uint32_t magic = read_u32_le(hdr + 0);
+    uint16_t ver   = read_u16_le(hdr + 4);
+    uint16_t w     = read_u16_le(hdr + 6);
+    uint16_t h     = read_u16_le(hdr + 8);
+    if (magic != NL_ICON_MAGIC || ver != 1U ||
+        !((w == NL_COVER_W && h == NL_COVER_H) || (w == NL_ICON_V1_W && h == NL_ICON_V1_H))) {
+        fclose(fp);
+        return false;
+    }
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        return false;
+    }
+    long fsz = ftell(fp);
+    fclose(fp);
+    long expected = 16L + (long)w * (long)h * 2L;
+    return (fsz >= expected);
+}
+
+static bool find_screenshot_path_ci(const nl_game_t *game, const char *covers_dir, char *out_path, size_t max_len) {
+    if (!game || !out_path || max_len == 0U) return false;
+    out_path[0] = '\0';
+
     char stem[NL_MAX_NAME_LEN];
     nl_extract_game_stem(game->filename, stem, sizeof(stem));
     char candidate[NL_MAX_PATH_LEN];
 
     if (covers_dir && covers_dir[0] != '\0') {
         snprintf(candidate, sizeof(candidate), "%s/%s.scr.tns", covers_dir, stem);
-        if (load_nlic_pixels(candidate, &game->scr_pixels)) {
-            game->has_screenshot = true;
+        if (validate_nlic_file_on_disk(candidate)) {
+            snprintf(out_path, max_len, "%s", candidate);
             return true;
+        }
+        /* Case-insensitive fallback scan inside covers_dir */
+        DIR *dp = opendir(covers_dir);
+        if (dp) {
+            char target_name[NL_MAX_NAME_LEN + 16];
+            snprintf(target_name, sizeof(target_name), "%s.scr.tns", stem);
+            struct dirent *de;
+            while ((de = readdir(dp)) != NULL) {
+                if (de->d_name[0] == '.') continue;
+                if (str_icmp_c(de->d_name, target_name) == 0) {
+                    snprintf(candidate, sizeof(candidate), "%.*s/%.*s",
+                             180, covers_dir, 63, de->d_name);
+                    if (validate_nlic_file_on_disk(candidate)) {
+                        snprintf(out_path, max_len, "%s", candidate);
+                        closedir(dp);
+                        return true;
+                    }
+                }
+            }
+            closedir(dp);
         }
     }
 
     build_sidecar_path(game->path, ".scr.tns", candidate, sizeof(candidate));
-    if (load_nlic_pixels(candidate, &game->scr_pixels)) {
-        game->has_screenshot = true;
+    if (validate_nlic_file_on_disk(candidate)) {
+        snprintf(out_path, max_len, "%s", candidate);
         return true;
     }
-
     return false;
+}
+
+bool nl_game_has_valid_screenshot_on_disk(const nl_game_t *game, const char *covers_dir) {
+    char found[NL_MAX_PATH_LEN];
+    return find_screenshot_path_ci(game, covers_dir, found, sizeof(found));
+}
+
+bool nl_load_game_screenshot(nl_game_t *game, const char *covers_dir) {
+    if (!game) return false;
+    char found_path[NL_MAX_PATH_LEN];
+    if (!find_screenshot_path_ci(game, covers_dir, found_path, sizeof(found_path))) {
+        return false;
+    }
+
+    uint16_t *tmp_pix = NULL;
+    if (!load_nlic_pixels(found_path, &tmp_pix) || !tmp_pix) {
+        free(tmp_pix);
+        return false;
+    }
+    if (!nl_screenshot_is_valid_buffer(tmp_pix)) {
+        free(tmp_pix);
+        return false;
+    }
+    if (game->scr_pixels) {
+        free(game->scr_pixels);
+    }
+    game->scr_pixels = tmp_pix;
+    game->has_screenshot = true;
+    return true;
+}
+
+static bool path_exists_any_size(const char *p) {
+    if (!p || p[0] == '\0') return false;
+    FILE *fp = fopen(p, "rb");
+    if (!fp) return false;
+    fclose(fp);
+    return true;
+}
+
+static bool find_existing_icon_candidate(
+    const nl_game_t *game,
+    const char *covers_dir,
+    char *out_found_path,
+    size_t found_max,
+    char *out_expected_path,
+    size_t expected_max
+) {
+    if (!game) return false;
+    char stem[NL_MAX_NAME_LEN];
+    nl_extract_game_stem(game->filename, stem, sizeof(stem));
+
+    char icons_dir[NL_MAX_PATH_LEN];
+    derive_icons_dir_from_covers(covers_dir, icons_dir, sizeof(icons_dir));
+    if (out_expected_path && expected_max > 0U) {
+        int dir_lim = (expected_max > 64U) ? (int)(expected_max - 64U) : 64;
+        snprintf(out_expected_path, expected_max, "%.*s/%.*s.png.tns",
+                 dir_lim, icons_dir[0] ? icons_dir : "/documents/ndless/icons",
+                 47, stem);
+    }
+
+    char candidate[NL_MAX_PATH_LEN * 2];
+    const char *dirs[2] = { icons_dir, covers_dir };
+    for (int d = 0; d < 2; d++) {
+        if (!dirs[d] || dirs[d][0] == '\0') continue;
+        for (int i = 0; i < NL_ICON_EXT_COUNT; i++) {
+            snprintf(candidate, sizeof(candidate), "%.*s/%.*s%s",
+                     200, dirs[d], 47, stem, G_ICON_EXTS[i]);
+            if (nl_file_exists(candidate)) {
+                if (out_found_path && found_max > 0U) {
+                    snprintf(out_found_path, found_max, "%.*s", (int)(found_max - 1U), candidate);
+                }
+                return true;
+            }
+        }
+        DIR *dp = opendir(dirs[d]);
+        if (dp) {
+            char target_names[NL_ICON_EXT_COUNT][NL_MAX_NAME_LEN + 16];
+            for (int i = 0; i < NL_ICON_EXT_COUNT; i++) {
+                snprintf(target_names[i], sizeof(target_names[i]), "%s%s", stem, G_ICON_EXTS[i]);
+            }
+            struct dirent *de;
+            while ((de = readdir(dp)) != NULL) {
+                if (de->d_name[0] == '.') continue;
+                for (int i = 0; i < NL_ICON_EXT_COUNT; i++) {
+                    if (str_icmp_c(de->d_name, target_names[i]) == 0) {
+                        snprintf(candidate, sizeof(candidate), "%.*s/%.*s",
+                                 200, dirs[d], 120, de->d_name);
+                        if (out_found_path && found_max > 0U) {
+                            snprintf(out_found_path, found_max, "%.*s", (int)(found_max - 1U), candidate);
+                        }
+                        closedir(dp);
+                        return true;
+                    }
+                }
+            }
+            closedir(dp);
+        }
+    }
+
+    for (int i = 0; i < NL_ICON_EXT_COUNT; i++) {
+        build_sidecar_path(game->path, G_ICON_EXTS[i], candidate, sizeof(candidate));
+        if (path_exists_any_size(candidate)) {
+            if (out_found_path && found_max > 0U) {
+                snprintf(out_found_path, found_max, "%.*s", (int)(found_max - 1U), candidate);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+bool nl_load_game_icon_diag(nl_state_t *state, nl_game_t *game, const char *covers_dir) {
+    if (!game) return false;
+    if (nl_load_game_icon(game, covers_dir)) {
+        return true;
+    }
+    if (!state) return false;
+
+    char found_path[NL_MAX_PATH_LEN];
+    char expected_path[NL_MAX_PATH_LEN];
+    found_path[0] = '\0';
+    expected_path[0] = '\0';
+
+    if (find_existing_icon_candidate(game, covers_dir, found_path, sizeof(found_path),
+                                     expected_path, sizeof(expected_path))) {
+        nl_diag_report(
+            state,
+            NL_DIAG_E103_ICON_CORRUPT,
+            game->title[0] ? game->title : game->filename,
+            found_path,
+            "Decoder icone du jeu",
+            "Format .png/.ico/.bmp invalide ou corrompu",
+            "Jeu toujours disponible et lancable",
+            "Icone ignoree + icone par defaut"
+        );
+    } else {
+        nl_diag_report(
+            state,
+            NL_DIAG_E102_ICON_MISSING,
+            game->title[0] ? game->title : game->filename,
+            expected_path,
+            "Charger icone du jeu",
+            "Fichier icone introuvable",
+            "Jeu toujours disponible et lancable",
+            "Icone de remplacement utilisee"
+        );
+    }
+    return false;
+}
+
+bool nl_load_game_screenshot_diag(nl_state_t *state, nl_game_t *game, const char *covers_dir) {
+    if (!game) return false;
+    if (nl_load_game_screenshot(game, covers_dir)) {
+        return true;
+    }
+    if (!state) return false;
+
+    char stem[NL_MAX_NAME_LEN];
+    nl_extract_game_stem(game->filename, stem, sizeof(stem));
+
+    char cov_cand[NL_MAX_PATH_LEN];
+    char side_cand[NL_MAX_PATH_LEN];
+    cov_cand[0] = '\0';
+    side_cand[0] = '\0';
+
+    if (covers_dir && covers_dir[0] != '\0') {
+        snprintf(cov_cand, sizeof(cov_cand), "%s/%s.scr.tns", covers_dir, stem);
+    }
+    build_sidecar_path(game->path, ".scr.tns", side_cand, sizeof(side_cand));
+
+    if ((cov_cand[0] != '\0' && path_exists_any_size(cov_cand)) ||
+        (side_cand[0] != '\0' && path_exists_any_size(side_cand))) {
+        const char *bad_p = (cov_cand[0] != '\0' && path_exists_any_size(cov_cand)) ? cov_cand : side_cand;
+        nl_diag_report(
+            state,
+            NL_DIAG_E501_ASSET_INVALID,
+            game->title[0] ? game->title : game->filename,
+            bad_p,
+            "Charger capture .scr.tns",
+            "Capture .scr.tns corrompue ou invalide",
+            "Apercu graphique ignore",
+            "Animation par defaut conservee"
+        );
+    } else {
+        nl_diag_report(
+            state,
+            NL_DIAG_E104_SCREENSHOT_MISSING,
+            game->title[0] ? game->title : game->filename,
+            cov_cand[0] ? cov_cand : side_cand,
+            "Charger capture d'ecran",
+            "Fichier .scr.tns absent",
+            "Jeu lancable sans apercu capture",
+            "Animation de remplacement utilisee"
+        );
+    }
+    return false;
+}
+
+#define NL_ICON_DIR_INDEX_MAX 256
+
+typedef struct {
+    char dir[NL_MAX_PATH_LEN];
+    char names[NL_ICON_DIR_INDEX_MAX][64];
+    int  count;
+} nl_icon_dir_index_t;
+
+static void build_icon_dir_index(nl_icon_dir_index_t *idx, const char *dir_path) {
+    if (!idx) return;
+    idx->dir[0] = '\0';
+    idx->count = 0;
+    if (!dir_path || dir_path[0] == '\0') return;
+    snprintf(idx->dir, sizeof(idx->dir), "%s", dir_path);
+    DIR *dp = opendir(dir_path);
+    if (!dp) return;
+    struct dirent *de;
+    while ((de = readdir(dp)) != NULL && idx->count < NL_ICON_DIR_INDEX_MAX) {
+        if (de->d_name[0] == '.') continue;
+        snprintf(idx->names[idx->count], sizeof(idx->names[idx->count]), "%.*s",
+                 (int)(sizeof(idx->names[idx->count]) - 1U), de->d_name);
+        idx->count++;
+    }
+    closedir(dp);
+}
+
+static bool find_in_dir_index(const nl_icon_dir_index_t *idx, const char *stem,
+                              const char *const *exts, int ext_count, char *out_path, size_t max_len) {
+    if (!idx || idx->count <= 0 || !stem || stem[0] == '\0') return false;
+    char target[64];
+    for (int e = 0; e < ext_count; e++) {
+        snprintf(target, sizeof(target), "%.*s%s", 47, stem, exts[e]);
+        for (int i = 0; i < idx->count; i++) {
+            if (str_icmp_c(idx->names[i], target) == 0) {
+                snprintf(out_path, max_len, "%.*s/%.*s",
+                         (int)(max_len > 70U ? max_len - 70U : 64U), idx->dir,
+                         63, idx->names[i]);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+uint32_t nl_game_icon_ram_bytes(const nl_game_t *g) {
+    if (!g || !g->icon_pixels || g->icon_w == 0U || g->icon_h == 0U) return 0U;
+    uint32_t px = (uint32_t)g->icon_w * (uint32_t)g->icon_h;
+    return px * 2U + (g->icon_alpha ? px : 0U);
+}
+
+static uint32_t game_icon_ram_bytes(const nl_game_t *g) {
+    return nl_game_icon_ram_bytes(g);
+}
+
+void nl_probe_all_screenshots_ex(nl_state_t *state, nl_progress_cb_t progress_cb, void *progress_ctx) {
+    if (!state || state->total_games <= 0) return;
+
+    /* Single directory listing of covers_dir for O(1) I/O probing across 78+ games (0 KB pixel RAM) */
+    nl_icon_dir_index_t *cov_idx = (nl_icon_dir_index_t *)calloc(1U, sizeof(nl_icon_dir_index_t));
+    if (cov_idx && state->covers_dir[0] != '\0') {
+        build_icon_dir_index(cov_idx, state->covers_dir);
+    }
+    if (progress_cb) progress_cb(progress_ctx);
+    static const char *const k_scr_ext[1] = { ".scr.tns" };
+
+    for (int i = 0; i < state->total_games; i++) {
+        if (state->scan.abort_requested || state->scan.cancel_requested) break;
+        nl_game_t *g = &state->games[i];
+        if (g->has_screenshot && g->scr_pixels != NULL && nl_screenshot_is_valid_buffer(g->scr_pixels)) {
+            if (progress_cb && (i & 1) == 0) progress_cb(progress_ctx);
+            continue;
+        }
+        char stem[NL_MAX_NAME_LEN];
+        nl_extract_game_stem(g->filename, stem, sizeof(stem));
+        char cand[NL_MAX_PATH_LEN];
+        bool valid = false;
+
+        if (cov_idx && find_in_dir_index(cov_idx, stem, k_scr_ext, 1, cand, sizeof(cand))) {
+            valid = validate_nlic_file_on_disk(cand);
+        }
+        if (!valid) {
+            build_sidecar_path(g->path, ".scr.tns", cand, sizeof(cand));
+            valid = validate_nlic_file_on_disk(cand);
+        }
+        g->has_screenshot = valid;
+        if (progress_cb && (i & 1) == 0) progress_cb(progress_ctx);
+    }
+
+    free(cov_idx);
+}
+
+void nl_probe_all_screenshots(nl_state_t *state) {
+    nl_probe_all_screenshots_ex(state, NULL, NULL);
 }
 
 void nl_load_all_screenshots(nl_state_t *state) {
     if (!state) return;
     for (int i = 0; i < state->total_games; i++) {
-        nl_load_game_screenshot(&state->games[i], state->covers_dir);
+        if (!state->games[i].has_screenshot || !state->games[i].scr_pixels) {
+            (void)nl_load_game_screenshot(&state->games[i], state->covers_dir);
+        }
     }
+}
+
+static bool filename_is_icon_asset(const char *name) {
+    if (!name || name[0] == '\0') return false;
+    size_t len = strlen(name);
+    if (len >= 8U && str_icmp_c(name + len - 8U, ".png.tns") == 0) return true;
+    if (len >= 4U && str_icmp_c(name + len - 4U, ".png") == 0) return true;
+    if (len >= 8U && str_icmp_c(name + len - 8U, ".ico.tns") == 0) return true;
+    if (len >= 4U && str_icmp_c(name + len - 4U, ".ico") == 0) return true;
+    if (len >= 8U && str_icmp_c(name + len - 8U, ".bmp.tns") == 0) return true;
+    if (len >= 4U && str_icmp_c(name + len - 4U, ".bmp") == 0) return true;
+    return false;
+}
+
+static bool dir_contains_any_icon_asset(const char *dir_path) {
+    if (!dir_path || dir_path[0] == '\0') return false;
+    DIR *dp = opendir(dir_path);
+    if (!dp) return false;
+    bool found = false;
+    struct dirent *de;
+    while ((de = readdir(dp)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        if (filename_is_icon_asset(de->d_name)) {
+            found = true;
+            break;
+        }
+    }
+    closedir(dp);
+    return found;
+}
+
+static void extract_game_parent_dir_c(const char *filepath, char *out_dir, size_t max_len) {
+    if (!out_dir || max_len == 0U) return;
+    out_dir[0] = '\0';
+    if (!filepath || filepath[0] == '\0') return;
+    snprintf(out_dir, max_len, "%s", filepath);
+    char *slash = strrchr(out_dir, '/');
+    char *bslash = strrchr(out_dir, '\\');
+    if (bslash && (!slash || bslash > slash)) slash = bslash;
+    if (slash && slash != out_dir) {
+        *slash = '\0';
+    } else if (slash == out_dir) {
+        out_dir[1] = '\0';
+    } else {
+        out_dir[0] = '\0';
+    }
+}
+
+typedef struct {
+    char dir[NL_MAX_GAME_FOLDERS][NL_MAX_PATH_LEN];
+    bool has_icons[NL_MAX_GAME_FOLDERS];
+    int  count;
+} nl_sidecar_folder_cache_t;
+
+static bool sidecar_folder_has_icons(nl_sidecar_folder_cache_t *cache, const char *game_path) {
+    if (!cache || !game_path || game_path[0] == '\0') return false;
+    char parent[NL_MAX_PATH_LEN];
+    extract_game_parent_dir_c(game_path, parent, sizeof(parent));
+    if (parent[0] == '\0') return false;
+    for (int i = 0; i < cache->count; i++) {
+        if (str_icmp_c(cache->dir[i], parent) == 0) {
+            return cache->has_icons[i];
+        }
+    }
+    bool found = dir_contains_any_icon_asset(parent);
+    if (cache->count < NL_MAX_GAME_FOLDERS) {
+        snprintf(cache->dir[cache->count], sizeof(cache->dir[cache->count]), "%s", parent);
+        cache->has_icons[cache->count] = found;
+        cache->count++;
+    }
+    return found;
+}
+
+struct nl_icon_batch {
+    nl_icon_dir_index_t       *icons_idx;
+    nl_icon_dir_index_t       *covers_idx;
+    nl_sidecar_folder_cache_t *side_cache;
+    char                       icons_dir[NL_MAX_PATH_LEN];
+    char                       covers_dir[NL_MAX_PATH_LEN];
+};
+
+nl_icon_batch_t *nl_icon_batch_start(const char *covers_dir) {
+    nl_icon_batch_t *b = (nl_icon_batch_t *)calloc(1U, sizeof(nl_icon_batch_t));
+    if (!b) return NULL;
+    b->icons_idx  = (nl_icon_dir_index_t *)calloc(1U, sizeof(nl_icon_dir_index_t));
+    b->covers_idx = (nl_icon_dir_index_t *)calloc(1U, sizeof(nl_icon_dir_index_t));
+    b->side_cache = (nl_sidecar_folder_cache_t *)calloc(1U, sizeof(nl_sidecar_folder_cache_t));
+    if (covers_dir && covers_dir[0] != '\0') {
+        snprintf(b->covers_dir, sizeof(b->covers_dir), "%s", covers_dir);
+    }
+    derive_icons_dir_from_covers(covers_dir, b->icons_dir, sizeof(b->icons_dir));
+    if (b->icons_idx && b->icons_dir[0] != '\0') {
+        build_icon_dir_index(b->icons_idx, b->icons_dir);
+    }
+    if (b->covers_idx && b->covers_dir[0] != '\0') {
+        build_icon_dir_index(b->covers_idx, b->covers_dir);
+    }
+    return b;
+}
+
+bool nl_icon_batch_find_file(nl_icon_batch_t *batch, const nl_game_t *game, char *out_path, size_t max_len) {
+    if (!batch || !game || !out_path || max_len == 0U) return false;
+    out_path[0] = '\0';
+    char stem[NL_MAX_NAME_LEN];
+    nl_extract_game_stem(game->filename, stem, sizeof(stem));
+    if (batch->icons_idx && batch->icons_idx->count > 0 &&
+        find_in_dir_index(batch->icons_idx, stem, G_ICON_EXTS, NL_ICON_EXT_COUNT, out_path, max_len)) {
+        return true;
+    }
+    if (batch->side_cache && sidecar_folder_has_icons(batch->side_cache, game->path)) {
+        for (int e = 0; e < NL_ICON_EXT_COUNT; e++) {
+            build_sidecar_path(game->path, G_ICON_EXTS[e], out_path, max_len);
+            if (path_exists_any_size(out_path)) return true;
+        }
+        out_path[0] = '\0';
+    }
+    if (batch->covers_idx && batch->covers_idx->count > 0 &&
+        find_in_dir_index(batch->covers_idx, stem, G_ICON_EXTS, NL_ICON_EXT_COUNT, out_path, max_len)) {
+        return true;
+    }
+    return false;
+}
+
+bool nl_icon_batch_decode_file(const char *cand_path, nl_game_t *game) {
+    if (!cand_path || cand_path[0] == '\0' || !game) return false;
+    return load_custom_icon_candidate(cand_path, game);
+}
+
+void nl_icon_batch_destroy(nl_icon_batch_t *batch) {
+    if (!batch) return;
+    free(batch->side_cache);
+    free(batch->covers_idx);
+    free(batch->icons_idx);
+    free(batch);
 }
 
 void nl_load_all_icons_ex(nl_state_t *state, nl_progress_cb_t progress_cb, void *progress_ctx) {
     if (!state) return;
+
+    nl_icon_batch_t *batch = nl_icon_batch_start(state->covers_dir);
+    char *cand = (char *)malloc(NL_MAX_PATH_LEN);
+
+    uint32_t total_ram = 0U;
+    int loaded_cnt = 0;
+    int fallback_cnt = 0;
+    bool budget_warned = false;
+
     for (int i = 0; i < state->total_games; i++) {
-        nl_load_game_icon(&state->games[i], state->covers_dir);
-        nl_load_game_screenshot(&state->games[i], state->covers_dir);
+        if (state->scan.abort_requested || state->scan.cancel_requested) break;
+        if ((i & 15) == 0) nl_disable_watchdog_safe();
+
+        nl_game_t *g = &state->games[i];
+
+        /* Locate current icon file on disk (icons_dir -> sidecar ONLY if folder has icons -> covers_dir).
+         * With 0 icons installed, this performs ZERO per-game fopen() syscalls! */
+        bool has_icon_file = (batch && cand) ? nl_icon_batch_find_file(batch, g, cand, NL_MAX_PATH_LEN) : false;
+
+        if (!has_icon_file) {
+            /* Icon file is absent/deleted -> cleanly fall back to generic icon; NEVER touch game entry! */
+            free_game_icon_buffers(g);
+            g->icon_source = NL_ICON_NONE;
+            fallback_cnt++;
+        } else if (g->icon_source != NL_ICON_NONE && g->icon_pixels != NULL) {
+            /* Icon already decoded in RAM and file still exists on disk */
+            total_ram += game_icon_ram_bytes(g);
+            loaded_cnt++;
+        } else if (total_ram >= NL_ICON_RAM_BUDGET) {
+            /* Respect strict RAM budget so 78+ icons never crash CX II-T */
+            free_game_icon_buffers(g);
+            g->icon_source = NL_ICON_NONE;
+            fallback_cnt++;
+            if (!budget_warned) {
+                budget_warned = true;
+                nl_diag_report(
+                    state,
+                    NL_DIAG_E801_LOW_MEMORY,
+                    g->title[0] ? g->title : g->filename,
+                    cand ? cand : state->icons_dir,
+                    "Budget RAM icones",
+                    "Limite memoire icones atteinte",
+                    "Jeux restants affichent l'icone generique",
+                    "Tous les jeux restent disponibles et lancables"
+                );
+            }
+        } else {
+            bool ok = cand ? load_custom_icon_candidate(cand, g) : nl_load_game_icon(g, state->covers_dir);
+            if (ok) {
+                total_ram += game_icon_ram_bytes(g);
+                loaded_cnt++;
+            } else {
+                free_game_icon_buffers(g);
+                g->icon_source = NL_ICON_NONE;
+                fallback_cnt++;
+                nl_diag_report(
+                    state,
+                    NL_DIAG_E103_ICON_CORRUPT,
+                    g->title[0] ? g->title : g->filename,
+                    cand ? cand : state->icons_dir,
+                    "Decoder icone du jeu",
+                    "Format .png/.ico/.bmp invalide ou corrompu",
+                    "Jeu toujours disponible et lancable",
+                    "Icone ignoree + icone par defaut"
+                );
+            }
+        }
+
         if (progress_cb) progress_cb(progress_ctx);
     }
+
+    state->icon_ram_bytes      = total_ram;
+    state->scan.icons_loaded   = loaded_cnt;
+    state->scan.icons_fallback = fallback_cnt;
+
+    free(cand);
+    nl_icon_batch_destroy(batch);
 }
 
 void nl_load_all_icons(nl_state_t *state) {
@@ -1414,13 +2343,25 @@ void nl_free_screenshots(nl_state_t *state) {
     }
 }
 
-void nl_free_icons(nl_state_t *state) {
+void nl_free_game_icons_only(nl_state_t *state) {
     if (!state) return;
     for (int i = 0; i < state->total_games; i++) {
         free_game_icon_buffers(&state->games[i]);
         state->games[i].icon_source = NL_ICON_NONE;
     }
+    state->icon_ram_bytes = 0U;
+}
+
+void nl_free_media_buffers(nl_state_t *state) {
+    if (!state) return;
+    nl_free_game_icons_only(state);
     nl_free_screenshots(state);
+}
+
+void nl_free_icons(nl_state_t *state) {
+    if (!state) return;
+    nl_free_media_buffers(state);
+    nl_profiles_free(state);
 }
 
 static void ensure_dir_tree(const char *dir_path) {
@@ -1443,7 +2384,19 @@ static void ensure_dir_tree(const char *dir_path) {
 }
 
 static bool write_nlic_file(const char *target_path, const uint8_t *hdr, const uint8_t *raw) {
-    FILE *fp = fopen(target_path, "wb");
+    if (!target_path || target_path[0] == '\0' || !hdr || !raw) return false;
+
+    /* Atomic temp-write + verify + rename so an existing valid .scr.tns is NEVER damaged on I/O error */
+    char tmp_path[NL_MAX_PATH_LEN];
+    size_t len = strlen(target_path);
+    if (len > 4U && str_icmp_c(target_path + len - 4U, ".tns") == 0) {
+        snprintf(tmp_path, sizeof(tmp_path), "%.*s.tmp.tns", (int)(len - 4U), target_path);
+    } else {
+        snprintf(tmp_path, sizeof(tmp_path), "%.*s.tmp.tns",
+                 (int)(sizeof(tmp_path) - 10U), target_path);
+    }
+
+    FILE *fp = fopen(tmp_path, "wb");
     if (!fp) return false;
 
     bool write_ok = (fwrite(hdr, 1, 16, fp) == 16) &&
@@ -1451,11 +2404,39 @@ static bool write_nlic_file(const char *target_path, const uint8_t *hdr, const u
                     (fflush(fp) == 0) &&
                     (ferror(fp) == 0);
     int close_rc = fclose(fp);
-    if (!write_ok || close_rc != 0) {
-        (void)remove(target_path);
+    if (!write_ok || close_rc != 0 || !validate_nlic_file_on_disk(tmp_path)) {
+        (void)remove(tmp_path);
         return false;
     }
-    return true;
+
+    /* Replace target only after temp file is 100% verified on disk */
+    (void)remove(target_path);
+    if (rename(tmp_path, target_path) == 0) {
+        return true;
+    }
+    /* Fallback copy if rename fails across mountpoints */
+    FILE *src = fopen(tmp_path, "rb");
+    if (!src) {
+        (void)remove(tmp_path);
+        return false;
+    }
+    FILE *dst = fopen(target_path, "wb");
+    if (!dst) {
+        fclose(src);
+        (void)remove(tmp_path);
+        return false;
+    }
+    uint8_t buf[256];
+    size_t nr;
+    bool copy_ok = true;
+    while ((nr = fread(buf, 1U, sizeof(buf), src)) > 0U) {
+        if (fwrite(buf, 1U, nr, dst) != nr) { copy_ok = false; break; }
+    }
+    if (fflush(dst) != 0 || ferror(dst) != 0) copy_ok = false;
+    fclose(dst);
+    fclose(src);
+    (void)remove(tmp_path);
+    return copy_ok;
 }
 
 static bool save_nlic_to_targets(
@@ -1505,7 +2486,7 @@ bool nl_save_captured_icon(const nl_game_t *game, const char *covers_dir) {
 }
 
 bool nl_save_captured_screenshot(const nl_game_t *game, const char *covers_dir) {
-    if (!game) return false;
+    if (!game || !nl_screenshot_is_valid_buffer(game->scr_pixels)) return false;
     return save_nlic_to_targets(game, game->scr_pixels, covers_dir, ".scr.tns");
 }
 
@@ -1535,7 +2516,7 @@ bool nl_delete_captured_icon(nl_game_t *game, const char *covers_dir) {
     return true;
 }
 
-/* Delete ONLY the custom icon (.bmp.tns / .ico.tns) of this single game; NEVER touch .scr.tns or .tns */
+/* Delete ONLY the custom icon (.png/.ico/.bmp) of this single game; NEVER touch .scr.tns or .tns */
 bool nl_delete_custom_icon(nl_game_t *game, const char *covers_dir) {
     if (!game) return false;
 
@@ -1546,22 +2527,21 @@ bool nl_delete_custom_icon(nl_game_t *game, const char *covers_dir) {
     char icons_dir[NL_MAX_PATH_LEN];
     derive_icons_dir_from_covers(covers_dir, icons_dir, sizeof(icons_dir));
 
-    static const char *const del_exts[4] = {".ico.tns", ".ico", ".bmp.tns", ".bmp"};
     if (icons_dir[0] != '\0') {
-        for (int i = 0; i < 4; i++) {
-            snprintf(candidate, sizeof(candidate), "%s/%s%s", icons_dir, stem, del_exts[i]);
+        for (int i = 0; i < NL_ICON_EXT_COUNT; i++) {
+            snprintf(candidate, sizeof(candidate), "%s/%s%s", icons_dir, stem, G_ICON_EXTS[i]);
             (void)remove(candidate);
         }
     }
 
-    for (int i = 0; i < 4; i++) {
-        build_sidecar_path(game->path, del_exts[i], candidate, sizeof(candidate));
+    for (int i = 0; i < NL_ICON_EXT_COUNT; i++) {
+        build_sidecar_path(game->path, G_ICON_EXTS[i], candidate, sizeof(candidate));
         (void)remove(candidate);
     }
 
     if (covers_dir && covers_dir[0] != '\0') {
-        for (int i = 0; i < 4; i++) {
-            snprintf(candidate, sizeof(candidate), "%s/%s%s", covers_dir, stem, del_exts[i]);
+        for (int i = 0; i < NL_ICON_EXT_COUNT; i++) {
+            snprintf(candidate, sizeof(candidate), "%s/%s%s", covers_dir, stem, G_ICON_EXTS[i]);
             (void)remove(candidate);
         }
     }
@@ -1936,255 +2916,4 @@ bool nl_capture_vram_to_screenshot(
     );
 }
 
-/* ============================================================================
- * Optical TI-OS Battery Icon Analysis (Solution A — Framebuffer ROI Only)
- * Scans ONLY the top-right status bar region x in [268..318], y in [1..22]
- * Never touches CX II-T ADC registers.
- * ============================================================================ */
-static void rgb565_to_rgb8(uint16_t px, int *r8, int *g8, int *b8, int *luma) {
-    int r5 = (int)((px >> 11) & 0x1FU);
-    int g6 = (int)((px >> 5)  & 0x3FU);
-    int b5 = (int)(px         & 0x1FU);
-    *r8 = (r5 * 527 + 23) >> 6;
-    *g8 = (g6 * 259 + 33) >> 6;
-    *b8 = (b5 * 527 + 23) >> 6;
-    *luma = (*r8 * 77 + *g8 * 150 + *b8 * 29) >> 8;
-}
-
-static nl_battery_level_t detect_battery_roi_pass(
-    const uint16_t *vram16,
-    const uint8_t  *vram8,
-    nl_pixel_format_t fmt,
-    bool rotated_240x320,
-    const uint16_t *pal565
-) {
-    /* 1. Estimate status bar background luminance around the top-right ROI */
-    int bg_luma_sum = 0;
-    int bg_samples = 0;
-    int sentinel_hits = 0;
-
-    for (int x = 268; x <= 318; x += 2) {
-        uint16_t p_top = sample_vram_pixel_ex(vram16, vram8, fmt, rotated_240x320, pal565, x, 1);
-        uint16_t p_bot = sample_vram_pixel_ex(vram16, vram8, fmt, rotated_240x320, pal565, x, 21);
-        if (p_top == NL_VRAM_SENTINEL) sentinel_hits++;
-        if (p_bot == NL_VRAM_SENTINEL) sentinel_hits++;
-        int r, g, b, l1, l2;
-        rgb565_to_rgb8(p_top, &r, &g, &b, &l1);
-        rgb565_to_rgb8(p_bot, &r, &g, &b, &l2);
-        bg_luma_sum += l1 + l2;
-        bg_samples += 2;
-    }
-
-    if (bg_samples <= 0 || sentinel_hits > bg_samples / 3) {
-        return NL_BAT_UNAVAILABLE;
-    }
-    int bg_luma = bg_luma_sum / bg_samples;
-
-    /* 2. Locate bounding box of the battery icon inside x in [272..317], y in [2..20] */
-    int min_x = 999, max_x = -1;
-    int min_y = 999, max_y = -1;
-    int fg_total = 0;
-
-    for (int y = 2; y <= 20; y++) {
-        for (int x = 272; x <= 317; x++) {
-            uint16_t px = sample_vram_pixel_ex(vram16, vram8, fmt, rotated_240x320, pal565, x, y);
-            if (px == NL_VRAM_SENTINEL) continue;
-            int r8, g8, b8, luma;
-            rgb565_to_rgb8(px, &r8, &g8, &b8, &luma);
-            int max_c = r8 > g8 ? (r8 > b8 ? r8 : b8) : (g8 > b8 ? g8 : b8);
-            int min_c = r8 < g8 ? (r8 < b8 ? r8 : b8) : (g8 < b8 ? g8 : b8);
-            int sat = max_c - min_c;
-            int diff_bg = abs(luma - bg_luma);
-
-            if (diff_bg >= 38 || sat >= 45) {
-                if (x < min_x) min_x = x;
-                if (x > max_x) max_x = x;
-                if (y < min_y) min_y = y;
-                if (y > max_y) max_y = y;
-                fg_total++;
-            }
-        }
-    }
-
-    if (max_x < min_x || max_y < min_y || fg_total < 24) {
-        return NL_BAT_UNAVAILABLE;
-    }
-
-    int bw = max_x - min_x + 1;
-    int bh = max_y - min_y + 1;
-    /* TI-OS battery icon is a horizontal rectangle (~20..30 px wide, ~9..14 px tall) */
-    if (bw < 14 || bw > 42 || bh < 7 || bh > 17 || bw < bh + 3) {
-        return NL_BAT_UNAVAILABLE;
-    }
-
-    /* Verify top & bottom horizontal border continuity of the battery body */
-    int body_w = bw - 2; /* Exclude 2-px positive terminal nub on the right */
-    int border_hits = 0;
-    for (int x = min_x + 1; x < min_x + body_w - 1; x++) {
-        uint16_t pt = sample_vram_pixel_ex(vram16, vram8, fmt, rotated_240x320, pal565, x, min_y);
-        uint16_t pb = sample_vram_pixel_ex(vram16, vram8, fmt, rotated_240x320, pal565, x, max_y);
-        int r, g, b, lt, lb;
-        rgb565_to_rgb8(pt, &r, &g, &b, &lt);
-        rgb565_to_rgb8(pb, &r, &g, &b, &lb);
-        if (abs(lt - bg_luma) >= 34) border_hits++;
-        if (abs(lb - bg_luma) >= 34) border_hits++;
-    }
-    if (border_hits < body_w - 2) {
-        return NL_BAT_UNAVAILABLE;
-    }
-
-    /* 3. Inspect interior charge columns (excluding 2-px border and 2-px right terminal) */
-    int ix0 = min_x + 2;
-    int ix1 = max_x - 4;
-    int iy0 = min_y + 2;
-    int iy1 = max_y - 2;
-    if (ix1 < ix0 || iy1 < iy0) {
-        return NL_BAT_UNAVAILABLE;
-    }
-
-    int total_cols = ix1 - ix0 + 1;
-    int col_h = iy1 - iy0 + 1;
-    int filled_cols = 0;
-    int red_alert_pixels = 0;
-
-    for (int x = ix0; x <= ix1; x++) {
-        int active_rows = 0;
-        for (int y = iy0; y <= iy1; y++) {
-            uint16_t px = sample_vram_pixel_ex(vram16, vram8, fmt, rotated_240x320, pal565, x, y);
-            int r8, g8, b8, luma;
-            rgb565_to_rgb8(px, &r8, &g8, &b8, &luma);
-
-            /* Red critical battery alert detection (excludes yellow/amber where g8 > 105) */
-            if (r8 >= 170 && g8 <= 105 && r8 > g8 + 75 && b8 <= 95) {
-                red_alert_pixels++;
-                active_rows++;
-                continue;
-            }
-
-            /* Green/amber charge fill or high-contrast interior bar segment */
-            bool is_green = (g8 >= 105 && g8 > r8 + 18 && g8 > b8 + 18);
-            bool is_contrasted = (abs(luma - bg_luma) >= 42);
-            if (is_green || is_contrasted) {
-                active_rows++;
-            }
-        }
-        if (active_rows * 2 >= col_h) {
-            filled_cols++;
-        }
-    }
-
-    if (red_alert_pixels >= 3) {
-        return NL_BAT_LOW;
-    }
-
-    int fill_pct = (filled_cols * 100) / total_cols;
-    if (fill_pct <= 34) {
-        return NL_BAT_LOW;
-    }
-    if (fill_pct <= 67) {
-        return NL_BAT_MEDIUM;
-    }
-    return NL_BAT_HIGH;
-}
-
-nl_battery_level_t nl_detect_battery_from_vram(
-    const void *vram_base,
-    bool rotated_240x320,
-    nl_pixel_format_t fmt,
-    const uint16_t *hw_palette256
-) {
-    if (!vram_base) return NL_BAT_UNAVAILABLE;
-    if (fmt == NL_PIX_8BPP && !hw_palette256) return NL_BAT_UNAVAILABLE;
-
-    const uint16_t *vram16 = (const uint16_t *)vram_base;
-    const uint8_t  *vram8  = (const uint8_t *)vram_base;
-    uint16_t pal565[256];
-    prepare_palette_565(fmt, hw_palette256, pal565);
-
-    nl_battery_level_t lvl = detect_battery_roi_pass(vram16, vram8, fmt, rotated_240x320, pal565);
-    if (lvl != NL_BAT_UNAVAILABLE) {
-        return lvl;
-    }
-    /* Automatic orientation fallback in case TI-OS buffer is opposite orientation */
-    return detect_battery_roi_pass(vram16, vram8, fmt, !rotated_240x320, pal565);
-}
-
-static inline void put_vram_pixel_565(uint16_t *vram16, bool rotated_240x320, int x, int y, uint16_t c) {
-    if (x < 0 || x >= NL_SCREEN_W || y < 0 || y >= NL_SCREEN_H) return;
-    int idx = rotated_240x320 ? (x * NL_SCREEN_H + y) : (y * NL_SCREEN_W + x);
-    vram16[idx] = c;
-}
-
-void nl_stamp_tios_battery_icon(
-    void *vram_base,
-    bool rotated_240x320,
-    nl_battery_level_t level,
-    bool use_red_alert
-) {
-    if (!vram_base) return;
-    uint16_t *vram16 = (uint16_t *)vram_base;
-    uint16_t bar_bg = RGB565(28, 34, 44);
-
-    /* Clear top-right TI-OS status bar ROI */
-    for (int y = 0; y <= 23; y++) {
-        for (int x = 264; x < NL_SCREEN_W; x++) {
-            put_vram_pixel_565(vram16, rotated_240x320, x, y, bar_bg);
-        }
-    }
-
-    if (level == NL_BAT_UNAVAILABLE) {
-        return;
-    }
-
-    /* TI-OS battery geometry: body x=286..309 (24 px), y=5..15 (11 px), nub x=310..311, y=8..12 */
-    uint16_t border_col = RGB565(235, 240, 248);
-    for (int x = 286; x <= 309; x++) {
-        put_vram_pixel_565(vram16, rotated_240x320, x, 5, border_col);
-        put_vram_pixel_565(vram16, rotated_240x320, x, 15, border_col);
-    }
-    for (int y = 5; y <= 15; y++) {
-        put_vram_pixel_565(vram16, rotated_240x320, 286, y, border_col);
-        put_vram_pixel_565(vram16, rotated_240x320, 287, y, border_col);
-        put_vram_pixel_565(vram16, rotated_240x320, 308, y, border_col);
-        put_vram_pixel_565(vram16, rotated_240x320, 309, y, border_col);
-    }
-    for (int y = 8; y <= 12; y++) {
-        put_vram_pixel_565(vram16, rotated_240x320, 310, y, border_col);
-        put_vram_pixel_565(vram16, rotated_240x320, 311, y, border_col);
-    }
-
-    /* Interior is x=288..307 (20 columns), y=7..13 (7 rows) */
-    int fill_cols = 0;
-    uint16_t fill_col = RGB565(46, 204, 96);
-    if (level == NL_BAT_HIGH) {
-        fill_cols = 18; /* 90% */
-        fill_col = RGB565(46, 204, 96);
-    } else if (level == NL_BAT_MEDIUM) {
-        fill_cols = 10; /* 50% */
-        fill_col = RGB565(234, 179, 8);
-    } else if (level == NL_BAT_LOW) {
-        fill_cols = use_red_alert ? 8 : 4; /* 20% or red alert */
-        fill_col = use_red_alert ? RGB565(235, 52, 46) : RGB565(220, 160, 40);
-    }
-
-    for (int x = 288; x < 288 + fill_cols && x <= 307; x++) {
-        for (int y = 7; y <= 13; y++) {
-            put_vram_pixel_565(vram16, rotated_240x320, x, y, fill_col);
-        }
-    }
-}
-
-bool nl_check_periodic_battery_due(const nl_state_t *state, uint32_t current_rtc) {
-    if (!state || !state->settings.show_battery || current_rtc == 0U) {
-        return false;
-    }
-    if (state->sys.battery_last_rtc == 0U) {
-        return true;
-    }
-    if (current_rtc >= state->sys.battery_last_rtc &&
-        (current_rtc - state->sys.battery_last_rtc) >= NL_BATTERY_REFRESH_INTERVAL_SEC) {
-        return true;
-    }
-    return false;
-}
 

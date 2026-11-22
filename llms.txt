@@ -3,13 +3,14 @@
 > Native C11 console-style game launcher (`N-Launcher.tns`) and pixel-accurate 320x240 RGB565 React/TypeScript web simulator for Texas Instruments TI-Nspire CX II-T (and TI-Nspire CX / CX CAS) calculators running Ndless.
 
 ## Key Capabilities & Technical Topics
-- **Target Hardware**: Texas Instruments TI-Nspire CX II-T (ARM926EJ-S / ARMv5TE, 320x240 RGB565 LCD via `lcd_blit`).
+- **Target Hardware**: Texas Instruments TI-Nspire CX II-T (TI-OS 6.2.0, ARM926EJ-S / ARMv5TE, 320x240 RGB565 LCD via `lcd_blit`) and TI-Nspire CX / CX CAS (TI-OS ~4.5.0), supporting both Classic and Persistent Ndless.
 - **Ndless Executable Scanner (`native/scanner.c`)**: Inspects `.tns` file headers (`PRG\0`, `Zehn`, `bFLT`) to separate real ARM executables from TI-Nspire document ZIP archives (`PK\x03\x04`, `*TIM`, XML) and system files.
 - **Zehn Binary & `nl_exec()` Launcher (`native/main_ndless.c`)**: Launches `.tns` games cleanly with working directory switching, screen reset (`SCR_TYPE_INVALID`), and return-to-launcher restoration.
-- **Image & Icon Decoder (`native/covers.c`)**: Full Windows `.ico` decoder (1/4/8/16/24/32 bpp, PNG/zlib/Adam7, AND mask, alpha trimming), BMP support, monogram fallback tiles, and non-invasive optical TI-OS battery indicator reading.
+- **TI-OS Global Hotkey (`native/nl_hotkey.c`)**: Resident Ndless hook (`Ctrl+Menu`, `Shift+Menu`, `Ctrl+Shift+Menu`) supporting live RAM activation under Classic Ndless (`"NLHK"`) and Persistent Ndless without SWI stack recursion.
+- **Centralized Diagnostics (`native/diag.c`)**: 12-stage boot markers, structured error codes (`E102..E901`), fault isolation, and persistent log viewer (`nlauncher.diag.log.tns`).
+- **Image & Icon Decoder (`native/covers.c`)**: Full Windows `.ico` decoder (1/4/8/16/24/32 bpp, PNG/zlib/Adam7, AND mask, alpha trimming), BMP support, and monogram fallback tiles.
 - **Multi-Profile & Avatar System (`native/profiles.c`, `native/avatars_data.h`)**: Up to 8 isolated user profiles (favorites, shortcuts, play-time stats) with 43 built-in RGB565 avatars.
-- **Anti-Bootloop Autostart Guard (`native/storage.c`, `native/boot_guard_core.h`)**: Safe Ndless startup persistence (`nl_boot_guard.cfg.tns`) with automatic rollback on crash and manual recovery mode (`ESC` or `ON` at boot).
-- **UI Engine & Animations (`native/renderer.c`, `native/animation.c`, `native/ui_state.c`)**: 12 themes (Dark / Light / Gray modes × 4 accent colors), organic ink transitions, liquid-drop settings menu, 5 grid layouts (`1x1` to `4x4`), instant library search, and RTC play-time statistics.
+- **Input Modes (`native/ui_state.c`, `native/renderer.c`)**: Mode 1 (Touchpad) and Mode 2 (2D Mouse 320x240 with 3 cursors & temporary `CTRL` hold), 12 themes, 5 grid layouts (`1x1` to `4x4`), instant library search, and RTC play-time statistics.
 - **Web Simulator & Binary Inspector (`src/`)**: Interactive 320x240 Canvas simulator in React + TypeScript with Zehn header inspection and unit tests.
 
 ## Repository Map & Reports

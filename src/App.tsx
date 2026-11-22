@@ -22,6 +22,7 @@ import {
   CATEGORY_ORDER,
   CURSOR_STYLE_ORDER,
   CategoryId,
+  CursorSize,
   CursorStyle,
   DISPLAY_MODE_ORDER,
   DisplayMode,
@@ -29,6 +30,7 @@ import {
   LAYOUT_ORDER,
   LayoutMode,
   LauncherState,
+  NL_CURSOR_SPEED_DEFAULT,
   NL_ICON_MAX_DIM,
   NL_TP_SENS_DEFAULT,
   NavKey,
@@ -36,16 +38,22 @@ import {
   SORT_ORDER_LIST,
   ScanPreferences,
   SortOrder,
+  TouchpadMode,
   VirtualFileEntry,
   advanceBatchCapture,
   applyCapturedGameIcon,
   applyCapturedScreenshot,
+  clampCursorSize,
+  clampCursorSpeed,
+  clampCursorStyle,
   clampTouchpadSensitivity,
+  clickMouse,
   computeIconFitDims,
   createDefaultSimulatorFilesystem,
   createTouchpadClickTracker,
   createTouchpadTracker,
   decodeWindowsIcoBuffer,
+  feedMouseTouchpadDelta,
   formatDuration,
   formatTimestamp,
   getActiveProfile,
@@ -53,13 +61,18 @@ import {
   getLayoutMetrics,
   handleCharInput,
   handleLauncherKey,
+  isMouseModeActive,
+  moveMouseTo,
   processTouchpadClick,
   processTouchpadSample,
   rebuildFilter,
   resetTouchpadClickTracker,
   resetTouchpadTracker,
   scanVirtualFilesystem,
+  setCtrlMouseActive,
+  setHardwarePreset,
   setTouchpadControl,
+  simulateFaultInjection,
   snapshotActiveProfile,
   toggleSimulatedNdlessPersistence,
 } from './engine/nlauncherEngine';
@@ -117,29 +130,44 @@ function loadSavedPrefs(): ScanPreferences {
         autostart: false,
         globalHotkey: Boolean(parsed.settings?.globalHotkey),
         layout,
+        scrollDir: parsed.settings?.scrollDir === 'horizontal' ? 'horizontal' : 'vertical',
         showNames: Boolean(parsed.settings?.showNames),
         showShortcuts: parsed.settings?.showShortcuts ?? true,
         showBattery: false,
+        profileLockEnabled: Boolean(parsed.settings?.profileLockEnabled),
+        touchpadMode: (parsed.settings?.touchpadMode === 'mouse'
+          ? 'mouse'
+          : 'touchpad') as TouchpadMode,
         touchpadNav: Boolean(parsed.settings?.touchpadNav),
         touchpadSensitivity:
           typeof parsed.settings?.touchpadSensitivity === 'number'
             ? clampTouchpadSensitivity(parsed.settings.touchpadSensitivity)
             : NL_TP_SENS_DEFAULT,
-        touchpadCursorShow: Boolean(parsed.settings?.touchpadCursorShow),
-        touchpadCursorStyle:
-          parsed.settings?.touchpadCursorStyle &&
-          CURSOR_STYLE_ORDER.includes(parsed.settings.touchpadCursorStyle as CursorStyle)
-            ? (parsed.settings.touchpadCursorStyle as CursorStyle)
-            : 'arrow',
+        cursorSpeed:
+          typeof parsed.settings?.cursorSpeed === 'number'
+            ? clampCursorSpeed(parsed.settings.cursorSpeed)
+            : NL_CURSOR_SPEED_DEFAULT,
+        touchpadCursorShow: parsed.settings?.touchpadMode === 'mouse',
+        touchpadCursorStyle: clampCursorStyle(
+          parsed.settings?.touchpadCursorStyle as CursorStyle | 'none' | undefined
+        ),
+        cursorSize: clampCursorSize(parsed.settings?.cursorSize as CursorSize | undefined),
+        tapToClick: Boolean(parsed.settings?.tapToClick),
         sortOrder,
       },
       sys: {
         ndlessPersistent: parsed.sys?.ndlessPersistent ?? true,
+        hwIsCx2: parsed.sys?.hwIsCx2 ?? true,
+        osVersion:
+          parsed.sys?.osVersion ||
+          (parsed.sys?.hwIsCx2 === false ? '4.5.0.1180 (CX CAS)' : '6.2.0.333 (CX II-T)'),
+        ndlessRev: parsed.sys?.ndlessRev ?? (parsed.sys?.hwIsCx2 === false ? 2005 : 2026),
         bootRecoveryTriggered: false,
         bootRecoveryReason: 'none',
       },
       gamePrefs: parsed.gamePrefs ?? {},
       profiles: parsed.profiles,
+      diagEntries: Array.isArray(parsed.diagEntries) ? parsed.diagEntries : undefined,
     };
   } catch {
     return { displayMode: 'dark', accentColor: 'blue' };
@@ -165,11 +193,15 @@ function serializeStatePrefs(st: LauncherState): string {
     settings: snapped.settings,
     sys: {
       ndlessPersistent: snapped.sys.ndlessPersistent,
+      hwIsCx2: snapped.sys.hwIsCx2,
+      osVersion: snapped.sys.osVersion,
+      ndlessRev: snapped.sys.ndlessRev,
       bootRecoveryTriggered: false,
       bootRecoveryReason: 'none',
     },
     gamePrefs,
     profiles: snapped.profiles,
+    diagEntries: snapped.diag.entries,
   };
   return JSON.stringify(payload);
 }
@@ -193,6 +225,7 @@ export default function App() {
   const tpTrackerRef = useRef(createTouchpadTracker());
   const tpClickRef = useRef(createTouchpadClickTracker());
   const tpDraggingRef = useRef(false);
+  const enterConsumedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -223,6 +256,9 @@ export default function App() {
     state.playCounter,
     state.profiles,
     state.sys.ndlessPersistent,
+    state.sys.hwIsCx2,
+    state.sys.osVersion,
+    state.diag.entries,
     state.games,
   ]);
 
@@ -305,8 +341,14 @@ export default function App() {
               displayMode: prev.displayMode,
               accentColor: prev.accentColor,
               settings: prev.settings,
-              sys: { ndlessPersistent: prev.sys.ndlessPersistent },
+              sys: {
+                ndlessPersistent: prev.sys.ndlessPersistent,
+                hwIsCx2: prev.sys.hwIsCx2,
+                osVersion: prev.sys.osVersion,
+                ndlessRev: prev.sys.ndlessRev,
+              },
               profiles: snapped.profiles,
+              diagEntries: prev.diag.entries,
             }
           );
           return {
@@ -327,8 +369,16 @@ export default function App() {
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (activeSection !== 'simulator') return;
 
+      if (e.key === 'Control') {
+        if (!e.repeat) {
+          setState((prev) => setCtrlMouseActive(prev, true));
+        }
+        return;
+      }
+
       if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
+        setState((prev) => setCtrlMouseActive(prev, false));
         dispatchKey('SETTINGS');
         return;
       }
@@ -377,12 +427,12 @@ export default function App() {
         }
         if (!cur.sui.qpOpen && !cur.sui.searchActive && e.key === '0') {
           e.preventDefault();
-          dispatchKey('PROFILE_PREV');
+          dispatchKey('PAGE_PREV');
           return;
         }
         if (!cur.sui.qpOpen && !cur.sui.searchActive && e.key === '-') {
           e.preventDefault();
-          dispatchKey('PROFILE_NEXT');
+          dispatchKey('PAGE_NEXT');
           return;
         }
         if (!cur.sui.qpOpen) {
@@ -426,11 +476,18 @@ export default function App() {
         case 'Enter':
         case '5':
           e.preventDefault();
-          if (cur.sui.screen === 'LIBRARY' && cur.runningGameIndex === null) {
-            if (!cur.launchHolding) {
+          if (e.repeat) break;
+          if (
+            cur.sui.screen === 'LIBRARY' &&
+            !cur.sui.qpOpen &&
+            cur.runningGameIndex === null
+          ) {
+            if (!enterConsumedRef.current && !cur.launchHolding) {
               setState((prev) => ({ ...prev, launchHolding: true }));
             }
           } else {
+            enterConsumedRef.current = true;
+            setState((prev) => (prev.launchHolding ? { ...prev, launchHolding: false } : prev));
             dispatchKey('EXE');
           }
           break;
@@ -477,23 +534,43 @@ export default function App() {
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Control') {
+        setState((prev) => setCtrlMouseActive(prev, false));
+        return;
+      }
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (activeSection !== 'simulator') return;
       if (e.key === 'Enter' || e.key === '5') {
+        if (enterConsumedRef.current) {
+          enterConsumedRef.current = false;
+          setState((prev) => (prev.launchHolding ? { ...prev, launchHolding: false } : prev));
+          return;
+        }
         const cur = stateRef.current;
-        if (cur.sui.screen === 'LIBRARY' && cur.runningGameIndex === null && cur.launchHolding) {
+        if (
+          cur.sui.screen === 'LIBRARY' &&
+          !cur.sui.qpOpen &&
+          cur.runningGameIndex === null &&
+          cur.launchHolding
+        ) {
           e.preventDefault();
           dispatchKey('EXE');
         }
       }
     };
 
+    const onWindowBlur = () => {
+      setState((prev) => setCtrlMouseActive(prev, false));
+    };
+
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onWindowBlur);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onWindowBlur);
     };
   }, [activeSection, dispatchKey]);
 
@@ -511,8 +588,14 @@ export default function App() {
           displayMode: prev.displayMode,
           accentColor: prev.accentColor,
           settings: prev.settings,
-          sys: { ndlessPersistent: prev.sys.ndlessPersistent },
+          sys: {
+            ndlessPersistent: prev.sys.ndlessPersistent,
+            hwIsCx2: prev.sys.hwIsCx2,
+            osVersion: prev.sys.osVersion,
+            ndlessRev: prev.sys.ndlessRev,
+          },
           profiles: snapped.profiles,
+          diagEntries: prev.diag.entries,
         }
       );
     });
@@ -532,8 +615,14 @@ export default function App() {
           displayMode: prev.displayMode,
           accentColor: prev.accentColor,
           settings: prev.settings,
-          sys: { ndlessPersistent: prev.sys.ndlessPersistent },
+          sys: {
+            ndlessPersistent: prev.sys.ndlessPersistent,
+            hwIsCx2: prev.sys.hwIsCx2,
+            osVersion: prev.sys.osVersion,
+            ndlessRev: prev.sys.ndlessRev,
+          },
           profiles: snapped.profiles,
+          diagEntries: prev.diag.entries,
         }
       );
     });
@@ -587,7 +676,7 @@ export default function App() {
       reader.onload = () => {
         const img = new Image();
         img.onload = () => {
-          /* Aspect-preserving resize up to 128x128 (zero cropping, zero distortion) */
+          /* Aspect-preserving resize up to 64x64 (zero cropping, zero distortion) */
           const fit =
             img.width <= NL_ICON_MAX_DIM && img.height <= NL_ICON_MAX_DIM
               ? { width: Math.max(1, img.width), height: Math.max(1, img.height) }
@@ -698,7 +787,7 @@ export default function App() {
             className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-950 bg-sky-400 rounded-lg hover:bg-sky-300 transition-colors whitespace-nowrap shrink-0"
           >
             <Download className="h-3.5 w-3.5" />
-            Télécharger N-Launcher.tns (#R7)
+            Télécharger N-Launcher.tns (#R23)
           </button>
         </div>
       </header>
@@ -782,7 +871,7 @@ export default function App() {
                 className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400 transition-colors whitespace-nowrap shrink-0"
               >
                 <Download className="h-4 w-4" />
-                N-Launcher.tns ({EXPECTED_TNS_SIZE_BYTES.toLocaleString('fr-FR')} octets · #R7)
+                N-Launcher.tns ({EXPECTED_TNS_SIZE_BYTES.toLocaleString('fr-FR')} octets · #R23)
               </button>
               <button
                 type="button"
@@ -926,13 +1015,19 @@ export default function App() {
                   onKeyCommand={dispatchKey}
                   onSelectSlot={handleSelectSlot}
                   onCaptureDuringGame={handleCaptureDuringGame}
+                  onMoveMouse={(x, y) => setState((prev) => moveMouseTo(prev, x, y))}
+                  onClickMouse={() => setState((prev) => clickMouse(prev).state)}
                   onTouchpadControl={(
                     tpCursor,
                     sensitivity,
                     toggleNav,
-                    cursorShow,
+                    cursorSpeed,
                     cursorStyle,
-                    tpTab
+                    tpTab,
+                    toggleMode,
+                    explicitMode,
+                    toggleTapToClick,
+                    cursorSize
                   ) =>
                     setState((prev) =>
                       setTouchpadControl(
@@ -940,9 +1035,13 @@ export default function App() {
                         tpCursor,
                         sensitivity,
                         toggleNav,
-                        cursorShow,
+                        cursorSpeed,
                         cursorStyle,
-                        tpTab
+                        tpTab,
+                        toggleMode,
+                        explicitMode,
+                        toggleTapToClick,
+                        cursorSize
                       )
                     )
                   }
@@ -1013,11 +1112,11 @@ export default function App() {
                     <div className="col-span-2 grid grid-cols-3 gap-1.5">
                       <button
                         type="button"
-                        onClick={() => dispatchKey('PROFILE_PREV')}
+                        onClick={() => dispatchKey('PAGE_PREV')}
                         className="flex items-center justify-center rounded border border-slate-700 bg-slate-800/80 px-2 py-1.5 text-[11px] font-mono text-slate-200 hover:bg-slate-700 transition-colors whitespace-nowrap"
-                        title="Profil précédent (touche 0)"
+                        title="Page précédente (touche 0)"
                       >
-                        0 (Préc.)
+                        0 (Page -)
                       </button>
                       <button
                         type="button"
@@ -1029,11 +1128,11 @@ export default function App() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => dispatchKey('PROFILE_NEXT')}
+                        onClick={() => dispatchKey('PAGE_NEXT')}
                         className="flex items-center justify-center rounded border border-slate-700 bg-slate-800/80 px-2 py-1.5 text-[11px] font-mono text-slate-200 hover:bg-slate-700 transition-colors whitespace-nowrap"
-                        title="Profil suivant (touche -)"
+                        title="Page suivante (touche -)"
                       >
-                        - (Suiv.)
+                        - (Page +)
                       </button>
                     </div>
                   </div>
@@ -1060,7 +1159,7 @@ export default function App() {
                       </button>
                       <div
                         role="region"
-                        aria-label="Surface du pavé tactile TI-Nspire (clic centre pour lancer, glisser pour naviguer)"
+                        aria-label="Surface du pavé tactile TI-Nspire (Mode Pavé tactile ou Mode Souris)"
                         data-testid="nspire-touchpad-surface"
                         onPointerDown={(e) => {
                           e.currentTarget.setPointerCapture(e.pointerId);
@@ -1071,17 +1170,33 @@ export default function App() {
                           resetTouchpadTracker(tpTrackerRef.current);
                           resetTouchpadClickTracker(tpClickRef.current);
                           processTouchpadClick(tpClickRef.current, true, false, true, rx, ry, 2328, 1691);
-                          processTouchpadSample(
-                            tpTrackerRef.current,
-                            stateRef.current.settings.touchpadNav,
-                            true,
-                            rx,
-                            ry,
-                            2328,
-                            1691,
-                            true,
-                            stateRef.current.settings.touchpadSensitivity
-                          );
+                          const cur = stateRef.current;
+                          if (isMouseModeActive(cur) && cur.runningGameIndex === null) {
+                            setState((prev) =>
+                              feedMouseTouchpadDelta(
+                                prev,
+                                tpTrackerRef.current,
+                                true,
+                                rx,
+                                ry,
+                                2328,
+                                1691,
+                                false
+                              ).state
+                            );
+                          } else {
+                            processTouchpadSample(
+                              tpTrackerRef.current,
+                              cur.settings.touchpadNav,
+                              true,
+                              rx,
+                              ry,
+                              2328,
+                              1691,
+                              true,
+                              cur.settings.touchpadSensitivity
+                            );
+                          }
                         }}
                         onPointerMove={(e) => {
                           if (!tpDraggingRef.current && e.buttons === 0) return;
@@ -1090,6 +1205,21 @@ export default function App() {
                           const ry = Math.round((1 - (e.clientY - rect.top) / Math.max(1, rect.height)) * 1691);
                           processTouchpadClick(tpClickRef.current, true, false, true, rx, ry, 2328, 1691);
                           const cur = stateRef.current;
+                          if (isMouseModeActive(cur) && cur.runningGameIndex === null) {
+                            setState((prev) =>
+                              feedMouseTouchpadDelta(
+                                prev,
+                                tpTrackerRef.current,
+                                true,
+                                rx,
+                                ry,
+                                2328,
+                                1691,
+                                false
+                              ).state
+                            );
+                            return;
+                          }
                           if (!cur.settings.touchpadNav) return;
                           if (tpTrackerRef.current.cooldownTicks > 0) {
                             tpTrackerRef.current.cooldownTicks = 1;
@@ -1114,14 +1244,23 @@ export default function App() {
                           const rx = Math.round(((e.clientX - rect.left) / Math.max(1, rect.width)) * 2328);
                           const ry = Math.round((1 - (e.clientY - rect.top) / Math.max(1, rect.height)) * 1691);
                           const cur = stateRef.current;
-                          const shouldLaunch =
-                            cur.sui.screen === 'LIBRARY' &&
-                            cur.runningGameIndex === null &&
-                            processTouchpadClick(tpClickRef.current, true, true, true, rx, ry, 2328, 1691);
+                          const isCleanTap = processTouchpadClick(
+                            tpClickRef.current,
+                            true,
+                            true,
+                            true,
+                            rx,
+                            ry,
+                            2328,
+                            1691
+                          );
                           tpDraggingRef.current = false;
                           resetTouchpadTracker(tpTrackerRef.current);
                           resetTouchpadClickTracker(tpClickRef.current);
-                          if (shouldLaunch) {
+                          if (cur.runningGameIndex !== null || !isCleanTap) return;
+                          if (isMouseModeActive(cur)) {
+                            setState((prev) => clickMouse(prev).state);
+                          } else if (cur.sui.screen === 'LIBRARY') {
                             dispatchKey('EXE');
                           }
                         }}
@@ -1131,19 +1270,33 @@ export default function App() {
                           resetTouchpadClickTracker(tpClickRef.current);
                         }}
                         title={
-                          state.settings.touchpadNav
-                            ? 'Pavé tactile ACTIF : cliquez au centre pour lancer ou glissez pour naviguer'
-                            : 'Pavé tactile : cliquez au centre pour lancer (activez « Navigation tactile » pour glisser)'
+                          isMouseModeActive(state)
+                            ? 'Mode Souris ACTIF : glissez pour déplacer le pointeur, cliquez pour valider la cible survolée'
+                            : state.settings.touchpadNav
+                              ? 'Mode Pavé tactile (glissement ACTIF) : cliquez au centre pour lancer ou glissez pour naviguer (maintenez CTRL pour la souris)'
+                              : 'Mode Pavé tactile : cliquez au centre pour lancer (maintenez CTRL ou activez le mode Souris dans les paramètres)'
                         }
                         className={`w-16 h-10 select-none touch-none flex flex-col items-center justify-center rounded border text-[10px] font-mono leading-tight transition-colors cursor-pointer ${
-                          state.settings.touchpadNav
-                            ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300 active:cursor-grabbing'
-                            : 'border-sky-500/40 bg-slate-900 text-slate-300 hover:bg-slate-800'
+                          isMouseModeActive(state)
+                            ? 'border-sky-400 bg-sky-500/20 text-sky-200 active:cursor-grabbing'
+                            : state.settings.touchpadNav
+                              ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300 active:cursor-grabbing'
+                              : 'border-sky-500/40 bg-slate-900 text-slate-300 hover:bg-slate-800'
                         }`}
                       >
-                        <span className="font-bold">TACTILE</span>
+                        <span className="font-bold">
+                          {state.sui.ctrlMouseActive
+                            ? 'CTRL+SOUR.'
+                            : state.settings.touchpadMode === 'mouse'
+                              ? 'SOURIS'
+                              : 'TACTILE'}
+                        </span>
                         <span className="text-[9px] opacity-80">
-                          {state.settings.touchpadNav ? 'GLIS/CLIC' : 'CLIC OK'}
+                          {isMouseModeActive(state)
+                            ? `${Math.round(state.sui.mouseX)},${Math.round(state.sui.mouseY)}`
+                            : state.settings.touchpadNav
+                              ? 'GLIS/CLIC'
+                              : 'CLIC OK'}
                         </span>
                       </div>
                       <button
@@ -1224,6 +1377,21 @@ export default function App() {
                       <Settings className="h-3.5 w-3.5" />
                       SAVE (Param.)
                     </button>
+                    <button
+                      type="button"
+                      onPointerDown={() => setState((prev) => setCtrlMouseActive(prev, true))}
+                      onPointerUp={() => setState((prev) => setCtrlMouseActive(prev, false))}
+                      onPointerLeave={() => setState((prev) => setCtrlMouseActive(prev, false))}
+                      onPointerCancel={() => setState((prev) => setCtrlMouseActive(prev, false))}
+                      title="Maintenez CTRL (ou la touche Ctrl du clavier) pour activer temporairement la souris en mode Pavé tactile"
+                      className={`w-full flex items-center justify-center gap-1.5 rounded border px-3 py-1.5 text-[11px] font-mono font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                        state.sui.ctrlMouseActive
+                          ? 'border-emerald-400 bg-emerald-500/20 text-emerald-200'
+                          : 'border-slate-700 bg-slate-800/80 text-slate-300 hover:bg-slate-700'
+                      }`}
+                    >
+                      CTRL (Souris temp.)
+                    </button>
                   </div>
                 </div>
               </div>
@@ -1290,20 +1458,91 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="rounded border border-slate-800 bg-slate-950/80 p-2.5 flex items-center justify-between gap-2 text-[11px]">
-                      <span className="text-slate-400">
-                        Lancement manuel · Ndless{' '}
-                        <span className={state.sys.ndlessPersistent ? 'text-emerald-400' : 'text-amber-400'}>
-                          {state.sys.ndlessPersistent ? 'Persistant' : 'Classique'}
+                    <div className="rounded border border-slate-800 bg-slate-950/80 p-3 space-y-2.5 text-[11px]">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-slate-300 font-semibold">
+                          {state.sys.hwIsCx2 ? 'TI-Nspire CX II-T' : 'TI-Nspire CX CAS'} ·{' '}
+                          <span className="text-sky-400">OS {state.sys.osVersion.split(' ')[0]}</span> ·{' '}
+                          <span className={state.sys.ndlessPersistent ? 'text-emerald-400' : 'text-amber-400'}>
+                            Ndless {state.sys.ndlessPersistent ? 'Persistant' : 'Classique'}
+                          </span>
                         </span>
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setState((prev) => toggleSimulatedNdlessPersistence(prev))}
-                        className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-[10px] font-sans text-slate-200 hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0"
-                      >
-                        Simuler Ndless {state.sys.ndlessPersistent ? 'Classique' : 'Persist.'}
-                      </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setState((prev) =>
+                                setHardwarePreset(prev, prev.sys.hwIsCx2 ? 'CXCAS_450' : 'CX2T_620')
+                              )
+                            }
+                            className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-[10px] font-sans text-slate-200 hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0"
+                          >
+                            Basculer {state.sys.hwIsCx2 ? 'CX CAS 4.5' : 'CX II-T 6.2'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setState((prev) => toggleSimulatedNdlessPersistence(prev))}
+                            className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-[10px] font-sans text-slate-200 hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0"
+                          >
+                            Ndless {state.sys.ndlessPersistent ? 'Classique' : 'Persist.'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-800/80">
+                        <span className="text-[10px] text-slate-400 mr-1">
+                          Tests pannes ({state.diag.entries.length}):
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setState((prev) => simulateFaultInjection(prev, 'MISSING_ICON'))}
+                          className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300 hover:bg-amber-500/20"
+                        >
+                          E102 Icône
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setState((prev) => simulateFaultInjection(prev, 'CORRUPT_GAME'))}
+                          className="rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10px] text-rose-300 hover:bg-rose-500/20"
+                        >
+                          E201 Jeu
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setState((prev) => simulateFaultInjection(prev, 'OOM'))}
+                          className="rounded border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10px] text-rose-300 hover:bg-rose-500/20"
+                        >
+                          E801 OOM
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setState((prev) => simulateFaultInjection(prev, 'PREV_CRASH'))}
+                          className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300 hover:bg-amber-500/20"
+                        >
+                          E901 Crash
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setState((prev) => ({
+                              ...prev,
+                              runningGameIndex: null,
+                              sui: {
+                                ...prev.sui,
+                                screen: 'SETTINGS_DIAG',
+                                diagTab: 0,
+                                diagCursor: 0,
+                                diagScroll: 0,
+                                diagDetailOpen: false,
+                                diagConfirmModal: false,
+                              },
+                            }))
+                          }
+                          className="ml-auto rounded border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-sans font-semibold text-sky-300 hover:bg-sky-500/20"
+                        >
+                          Ouvrir Diagnostics
+                        </button>
+                      </div>
                     </div>
 
                     <div className="rounded border border-slate-800 bg-slate-950/80 p-3 flex items-center justify-between gap-3">

@@ -231,6 +231,21 @@ static bool export_fb_to_bmp(const char *bmp_path, const uint16_t *fb, int w, in
     return true;
 }
 
+static bool bytes_contains_sub(const uint8_t *buf, size_t len, const char *sub, size_t sub_len) {
+    if (!buf || !sub || sub_len == 0U || len < sub_len) return false;
+    for (size_t i = 0; i <= len - sub_len; i++) {
+        if (memcmp(buf + i, sub, sub_len) == 0) return true;
+    }
+    return false;
+}
+
+static void test_abort_after_5_cb(const nl_scan_stats_t *stats, void *ctx) {
+    nl_state_t *st = (nl_state_t *)ctx;
+    if (st && stats && stats->games_found >= 5) {
+        st->scan.abort_requested = true;
+    }
+}
+
 int main(int argc, char *argv[]) {
     printf("============================================================\n");
     printf(" N-LAUNCHER v3 — MODULAR C VERIFICATION & BINARY TEST SUITE\n");
@@ -329,10 +344,10 @@ int main(int argc, char *argv[]) {
     }
     assert(crafti_idx >= 0 && ndoom_idx >= 0);
     assert(state.games[crafti_idx].icon_source == NL_ICON_BMP);
-    /* Verify aspect-ratio preserving resize (zero cropping): 160x68 -> 128x54 with center artwork intact */
-    assert(state.games[crafti_idx].icon_w == 128);
-    assert(state.games[crafti_idx].icon_h == 54);
-    assert(state.games[crafti_idx].icon_pixels[(54 / 2) * 128 + 64] != RGB565(255, 0, 255));
+    /* Verify aspect-ratio preserving resize (zero cropping): 160x68 -> 128x54 -> 84x35 with center artwork intact */
+    assert(state.games[crafti_idx].icon_w == NL_ICON_MAX_DIM);
+    assert(state.games[crafti_idx].icon_h == 35);
+    assert(state.games[crafti_idx].icon_pixels[(35 / 2) * NL_ICON_MAX_DIM + (NL_ICON_MAX_DIM / 2)] != RGB565(255, 0, 255));
     assert(state.games[ndoom_idx].icon_source == NL_ICON_NONE);
 
     /* 5. Real VRAM Screenshot Capture + Strict Non-Overwrite + Black/Exit Guard */
@@ -524,7 +539,11 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < 6; i++) nl_handle_key(&state, NL_KEY_RIGHT);
     assert(state.selected_pos == 6);
     assert(state.current_page == 1);
-    assert(state.anim.target_scroll_y_fp == (NL_PAGE_STRIDE_Y << 4));
+    nl_layout_metrics_t lm_s6;
+    nl_get_layout_metrics_full(state.settings.layout, state.settings.scroll_dir,
+                               state.settings.show_names, state.settings.show_shortcuts,
+                               state.filtered_count, &lm_s6);
+    assert(state.anim.target_scroll_y_fp == (lm_s6.page_stride_y << 4));
     assert(state.anim.scroll_y_fp != state.anim.target_scroll_y_fp);
 
     /* Step partway then interrupt immediately back to Left (no lockup) */
@@ -582,10 +601,16 @@ int main(int argc, char *argv[]) {
     reloaded.anim.launch_anim_active = false;
 
     /* Verify subtle navigation luminance differs around slot 0 ONLY during navigation, zero on launch */
+    nl_layout_metrics_t lm_s8;
+    nl_get_layout_metrics_full(reloaded.settings.layout, reloaded.settings.scroll_dir,
+                               reloaded.settings.show_names, reloaded.settings.show_shortcuts,
+                               reloaded.filtered_count, &lm_s8);
     int lum_diff_px = 0;
-    for (int y = 27; y < 105; y++) {
-        for (int x = 6; x < 108; x++) {
-            if (fb[y * NL_SCREEN_W + x] != fb_no_hl[y * NL_SCREEN_W + x]) lum_diff_px++;
+    for (int y = lm_s8.top_y - 4; y < lm_s8.top_y + lm_s8.card_h + 4; y++) {
+        for (int x = lm_s8.margin_x - 4; x < lm_s8.margin_x + lm_s8.card_w + 4; x++) {
+            if (x >= 0 && x < NL_SCREEN_W && y >= NL_VIEW_TOP && y < lm_s8.view_bottom) {
+                if (fb[y * NL_SCREEN_W + x] != fb_no_hl[y * NL_SCREEN_W + x]) lum_diff_px++;
+            }
         }
     }
     assert(lum_diff_px > 40);
@@ -593,12 +618,15 @@ int main(int argc, char *argv[]) {
     nl_render_frame(&reloaded, fb);
     assert(export_fb_to_bmp("frame_preview.bmp", fb, NL_SCREEN_W, NL_SCREEN_H) == true);
 
-    /* Verify bottom row peek (Row 2 starts at y=188 < NL_VIEW_BOTTOM=205) drew non-bg pixels cleanly
-     * without overflowing past NL_VIEW_BOTTOM (y=205..209 must stay pure bg_main) */
+    /* Verify #R17 natural vertical bottom peek (Page 1 starts at y = top_y + page_stride_y = view_bottom - 12)
+     * drew non-bg pixels cleanly without overflowing past NL_VIEW_BOTTOM (y=205..209 must stay pure bg_main) */
     const nl_theme_t *th = nl_get_theme(reloaded.display_mode, reloaded.accent_color);
     int peek_pixels = 0;
-    for (int y = 190; y < 204; y++) {
-        if (fb[y * NL_SCREEN_W + 25] != th->bg_main) peek_pixels++;
+    int p1_x = 0, p1_y = 0;
+    nl_compute_grid_slot_pos(&lm_s8, reloaded.filtered_count, lm_s8.per_page, &p1_x, &p1_y);
+    int peek_probe_x = p1_x + lm_s8.card_w / 2;
+    for (int y = lm_s8.view_bottom - 12; y < lm_s8.view_bottom; y++) {
+        if (fb[y * NL_SCREEN_W + peek_probe_x] != th->bg_main) peek_pixels++;
     }
     assert(peek_pixels > 0);
     for (int y = NL_VIEW_BOTTOM; y < NL_PAGINATION_Y; y++) {
@@ -685,11 +713,17 @@ int main(int argc, char *argv[]) {
             persisted.anim.dot_pos_fp = 0;
             nl_render_frame(&persisted, fb);
             /* Pick interior pixel of a non-selected card with real cover (slot != 0) */
+            nl_layout_metrics_t lm_s9;
+            nl_get_layout_metrics_full(persisted.settings.layout, persisted.settings.scroll_dir,
+                                       persisted.settings.show_names, persisted.settings.show_shortcuts,
+                                       persisted.filtered_count, &lm_s9);
             for (int slot = 1; slot < persisted.filtered_count && slot < 6; slot++) {
                 int gi = persisted.filtered_indices[slot];
                 if (persisted.games[gi].icon_source != NL_ICON_NONE) {
-                    int px_x = NL_GRID_MARGIN_X + (slot % NL_GRID_COLS) * (NL_GRID_CARD_W + NL_GRID_GAP_X) + (NL_GRID_CARD_W / 2);
-                    int px_y = NL_GRID_TOP_Y + (slot / NL_GRID_COLS) * NL_ROW_STRIDE_Y + (NL_GRID_CARD_H / 2);
+                    int sx_c = 0, sy_c = 0;
+                    nl_compute_grid_slot_pos(&lm_s9, persisted.filtered_count, slot, &sx_c, &sy_c);
+                    int px_x = sx_c + (lm_s9.card_w / 2);
+                    int px_y = sy_c + (lm_s9.card_h / 2);
                     uint16_t sample = fb[px_y * NL_SCREEN_W + px_x];
                     if (cover_sample_dark_blue == 0) cover_sample_dark_blue = sample;
                     assert(sample == cover_sample_dark_blue);
@@ -1021,8 +1055,6 @@ int main(int argc, char *argv[]) {
 
     /* 12a. Top-bar round gear icon rendered in accent_primary, top-right battery indicator permanently removed
      *      (x = 250..290, y = 7..18 is pure bg_top_bar), & Ctrl+S opens/closes settings */
-    assert(cfg_test.settings.show_battery == false);
-    assert(cfg_test.anim.switch_battery_fp == 0);
     nl_render_frame(&cfg_test, fb);
     const nl_theme_t *gth = nl_get_theme(cfg_test.display_mode, cfg_test.accent_color);
     assert(fb[(NL_GEAR_BTN_Y + 2) * NL_SCREEN_W + (NL_GEAR_BTN_X + 7)] == gth->accent_primary);
@@ -1065,9 +1097,9 @@ int main(int argc, char *argv[]) {
                     }
                 }
                 if (sc == 0) {
-                    /* Bottom bar is completely hidden: bottom scanlines (y = 235..239) are pure bg_main, zero empty bar */
+                    /* Bottom bar is completely hidden: bottom scanlines (y = 235..239, x >= 32 right of daniel.b) are pure bg_main */
                     for (int y = 235; y < NL_SCREEN_H; y++) {
-                        for (int x = 10; x < 310; x++) {
+                        for (int x = 32; x < 310; x++) {
                             assert(fb[y * NL_SCREEN_W + x] == gth->bg_main);
                         }
                     }
@@ -1079,7 +1111,7 @@ int main(int argc, char *argv[]) {
                     assert(pag_px >= 8);
                 } else {
                     /* Bottom bar is visible at y = 221..239 */
-                    assert(fb[237 * NL_SCREEN_W + 10] == gth->bg_bottom_bar);
+                    assert(fb[237 * NL_SCREEN_W + 32] == gth->bg_bottom_bar);
                 }
             }
         }
@@ -1105,10 +1137,12 @@ int main(int argc, char *argv[]) {
     nl_handle_key(&cfg_test, NL_KEY_EXE);
     assert(cfg_test.sui.screen == NL_UI_SETTINGS_DISPLAY);
     assert(cfg_test.sui.display_cursor == 0);
-    nl_handle_key(&cfg_test, NL_KEY_DOWN);
+    nl_handle_key(&cfg_test, NL_KEY_DOWN); /* 1: Sens de defilement */
     assert(cfg_test.sui.display_cursor == 1);
-    nl_handle_key(&cfg_test, NL_KEY_DOWN);
+    nl_handle_key(&cfg_test, NL_KEY_DOWN); /* 2: Afficher les noms */
     assert(cfg_test.sui.display_cursor == 2);
+    nl_handle_key(&cfg_test, NL_KEY_DOWN); /* 3: Afficher les raccourcis */
+    assert(cfg_test.sui.display_cursor == 3);
     nl_handle_key(&cfg_test, NL_KEY_EXE);
     assert(cfg_test.settings.show_shortcuts == false);
     assert(nl_anim_step(&cfg_test) == true);
@@ -1123,12 +1157,8 @@ int main(int argc, char *argv[]) {
     nl_handle_key(&cfg_test, NL_KEY_ESC);
     assert(cfg_test.sui.screen == NL_UI_LIBRARY);
 
-    /* 12c. Autostart permanently removed: nl_autostart_set always returns false and purges any legacy startup files */
+    /* 12c. Legacy autostart files purged cleanly while keeping Ndless Persistant detection intact */
     cfg_test.sys.ndless_persistent = false;
-    char diag_buf[64];
-    assert(nl_autostart_set(&cfg_test, true, diag_buf, sizeof(diag_buf)) == false);
-    assert(cfg_test.settings.autostart == false);
-    assert(cfg_test.sys.autostart_active == false);
     assert(nl_file_exists("/tmp/nlauncher_test_fs/ndless/startup/nl_boot.tns") == false);
 
     /* Simulate legacy startup files left over from an older installation -> nl_cleanup_legacy_autostart purges them */
@@ -1150,13 +1180,6 @@ int main(int argc, char *argv[]) {
     nl_cleanup_legacy_autostart(cfg_test.sys.docs_root);
     assert(nl_file_exists("/tmp/nlauncher_test_fs/ndless/startup/nl_boot.tns") == false);
     assert(nl_file_exists("/tmp/nlauncher_test_fs/ndless/startup/nl_boot_stub.tns") == false);
-    assert(nl_autostart_verify_active(cfg_test.sys.docs_root, &cfg_test.sys) == false);
-    assert(nl_autostart_set(&cfg_test, true, diag_buf, sizeof(diag_buf)) == false);
-    assert(cfg_test.settings.autostart == false);
-    assert(cfg_test.sys.autostart_active == false);
-    nl_autostart_reconcile(&cfg_test);
-    assert(cfg_test.settings.autostart == false);
-    assert(cfg_test.sys.autostart_active == false);
     assert(nl_file_exists(cfg_test.sys.self_path) == true);
 
     /* 12d. Custom Game Launch Shortcuts (§4) + Conflict Resolution + Dynamic Key Help (§5) */
@@ -1264,8 +1287,9 @@ int main(int argc, char *argv[]) {
            cfg_test.games[cfg_test.filtered_indices[cfg_test.filtered_count - 1]].added_order);
 
     /* 12f. Direct Inline Library Search (no Settings submenu) without modifying saved sort_order (§8) */
-    assert(NL_SET_MENU_COUNT == 14);
+    assert(NL_SET_MENU_COUNT == 16);
     assert(NL_SET_MENU_DISPLAY == 0);
+    assert(NL_SET_MENU_ANIMATIONS == 1);
     cfg_test.sui.screen = NL_UI_LIBRARY;
     cfg_test.active_category = NL_CAT_ALL;
     cfg_test.settings.sort_order = NL_SORT_ALPHA_DESC;
@@ -1332,7 +1356,7 @@ int main(int argc, char *argv[]) {
     nl_rebuild_filter(&cfg_test);
 
     /* 12g. Render smoke test across ALL active settings screens */
-    for (int scr = NL_UI_SETTINGS_MAIN; scr <= NL_UI_SETTINGS_PROFILES; scr++) {
+    for (int scr = NL_UI_SETTINGS_MAIN; scr <= NL_UI_SETTINGS_DIAG; scr++) {
         cfg_test.sui.screen = (nl_ui_screen_t)scr;
         nl_render_frame(&cfg_test, fb);
         if (scr == NL_UI_SETTINGS_MAIN) {
@@ -1347,8 +1371,6 @@ int main(int argc, char *argv[]) {
     cfg_test.settings.show_names = true;
     cfg_test.settings.show_shortcuts = false;
     cfg_test.settings.sort_order = NL_SORT_PLAY_TIME;
-    assert(nl_autostart_set(&cfg_test, true, diag_buf, sizeof(diag_buf)) == false);
-    assert(cfg_test.settings.autostart == false);
     assert(nl_save_config(&cfg_test, cfg_file) == true);
 
     static nl_state_t sc_reloaded;
@@ -1379,7 +1401,6 @@ int main(int argc, char *argv[]) {
     assert(cfg_test.settings.show_shortcuts == true);
     assert(cfg_test.anim.switch_shortcuts_fp == 256);
     assert(cfg_test.settings.sort_order == NL_SORT_ALPHA_ASC);
-    assert(cfg_test.settings.autostart == false);
     assert(nl_file_exists("/tmp/nlauncher_test_fs/ndless/startup/nl_boot.tns") == false);
     assert(cfg_test.games[sc_crafti].shortcut_key == 0);
 
@@ -1399,18 +1420,18 @@ int main(int argc, char *argv[]) {
         cfg_test.anim.set_last_screen = NL_UI_LIBRARY;
         cfg_test.anim.set_open_fp = 0;
 
-        /* A. Menu Open: progressive fade-in & vertical displacement (set_open_fp: 48 -> 256) */
+        /* A. Menu Open: progressive fade-in & vertical displacement (R14: set_open_fp: 8 -> 256, ~20 frames) */
         assert(nl_handle_key(&cfg_test, NL_KEY_SETTINGS) == true);
         assert(cfg_test.sui.screen == NL_UI_SETTINGS_MAIN);
-        assert(cfg_test.anim.set_open_fp == 48);
+        assert(cfg_test.anim.set_open_fp == 8);
         nl_render_frame(&cfg_test, fb);
         int open_ticks = 0;
-        while (cfg_test.anim.set_open_fp < 256 && open_ticks < 20) {
+        while (cfg_test.anim.set_open_fp < 256 && open_ticks < 32) {
             assert(nl_anim_step(&cfg_test) == true);
             nl_render_frame(&cfg_test, fb);
             open_ticks++;
         }
-        assert(cfg_test.anim.set_open_fp == 256 && open_ticks >= 4 && open_ticks <= 10);
+        assert(cfg_test.anim.set_open_fp == 256 && open_ticks >= 16 && open_ticks <= 24);
 
         /* C. Option Selection & Smooth List Scroll (set_sel_y_fp, set_list_scroll_fp, set_sel_glow_fp) */
         assert(cfg_test.sui.menu_cursor == 0);
@@ -1490,20 +1511,20 @@ int main(int argc, char *argv[]) {
         nl_handle_key(&cfg_test, NL_KEY_ESC);
         for (int i = 0; i < 16; i++) nl_anim_step(&cfg_test);
 
-        /* G. Menu Close: progressive fade-out & downward displacement (set_open_fp: 208 -> 0) over library */
+        /* G. Menu Close: progressive fade-out & downward displacement (R14: set_open_fp: 248 -> 0, ~16 frames) over library */
         assert(cfg_test.sui.screen == NL_UI_SETTINGS_MAIN);
         assert(cfg_test.anim.set_open_fp == 256);
         assert(nl_handle_key(&cfg_test, NL_KEY_ESC) == true);
         assert(cfg_test.sui.screen == NL_UI_LIBRARY);
-        assert(cfg_test.anim.set_open_fp == 208);
+        assert(cfg_test.anim.set_open_fp == 248);
         nl_render_frame(&cfg_test, fb);
         int close_ticks = 0;
-        while (cfg_test.anim.set_open_fp > 0 && close_ticks < 20) {
+        while (cfg_test.anim.set_open_fp > 0 && close_ticks < 32) {
             assert(nl_anim_step(&cfg_test) == true);
             nl_render_frame(&cfg_test, fb);
             close_ticks++;
         }
-        assert(cfg_test.anim.set_open_fp == 0 && close_ticks >= 4 && close_ticks <= 10);
+        assert(cfg_test.anim.set_open_fp == 0 && close_ticks >= 13 && close_ticks <= 20);
     }
 
     /* 12j. Touchpad Navigation (Mouse-Like Slide) + Key '5' Launch + Persistence & Reset */
@@ -1672,63 +1693,9 @@ int main(int argc, char *argv[]) {
         assert(cfg_test.anim.tp_slider_pos_fp == NL_TP_SENS_DEFAULT * 256);
     }
 
-    /* 12k. Optical TI-OS Battery Detection (Solution A), 3 Levels + Unavailable, 60-Min Periodic RTC & Settings -> Affichage */
+    /* 12k. Settings -> Affichage (5 options: Layout, Noms, Raccourcis, Sens de defilement, Eteindre) & DEL Poweroff Shortcut */
     {
-        uint16_t *tios_vram = (uint16_t *)calloc(NL_FB_PIXELS, sizeof(uint16_t));
-        assert(tios_vram != NULL);
-
-        /* 1. Blank/uniform/sentinel VRAM must return NL_BAT_UNAVAILABLE (never fake a level) */
-        assert(nl_detect_battery_from_vram(tios_vram, true, NL_PIX_RGB565, NULL) == NL_BAT_UNAVAILABLE);
-        assert(nl_detect_battery_from_vram(tios_vram, false, NL_PIX_RGB565, NULL) == NL_BAT_UNAVAILABLE);
-        for (int i = 0; i < NL_FB_PIXELS; i++) tios_vram[i] = NL_VRAM_SENTINEL;
-        assert(nl_detect_battery_from_vram(tios_vram, true, NL_PIX_RGB565, NULL) == NL_BAT_UNAVAILABLE);
-
-        /* 2. Test all 3 battery levels + red-alert low in BOTH rotated (240x320 CX II-T) and direct (320x240) orientations */
-        for (int rot = 0; rot < 2; rot++) {
-            bool is_rot = (rot == 1);
-
-            nl_stamp_tios_battery_icon(tios_vram, is_rot, NL_BAT_HIGH, false);
-            assert(nl_detect_battery_from_vram(tios_vram, is_rot, NL_PIX_RGB565, NULL) == NL_BAT_HIGH);
-            /* Orientation fallback also succeeds if caller passes opposite orientation flag */
-            assert(nl_detect_battery_from_vram(tios_vram, !is_rot, NL_PIX_RGB565, NULL) == NL_BAT_HIGH);
-
-            nl_stamp_tios_battery_icon(tios_vram, is_rot, NL_BAT_MEDIUM, false);
-            assert(nl_detect_battery_from_vram(tios_vram, is_rot, NL_PIX_RGB565, NULL) == NL_BAT_MEDIUM);
-
-            nl_stamp_tios_battery_icon(tios_vram, is_rot, NL_BAT_LOW, false);
-            assert(nl_detect_battery_from_vram(tios_vram, is_rot, NL_PIX_RGB565, NULL) == NL_BAT_LOW);
-
-            nl_stamp_tios_battery_icon(tios_vram, is_rot, NL_BAT_LOW, true);
-            assert(nl_detect_battery_from_vram(tios_vram, is_rot, NL_PIX_RGB565, NULL) == NL_BAT_LOW);
-
-            nl_stamp_tios_battery_icon(tios_vram, is_rot, NL_BAT_UNAVAILABLE, false);
-            assert(nl_detect_battery_from_vram(tios_vram, is_rot, NL_PIX_RGB565, NULL) == NL_BAT_UNAVAILABLE);
-        }
-        free(tios_vram);
-
-        /* 3. Labels for all 4 states */
-        assert(strcmp(nl_battery_level_label(NL_BAT_HIGH), "Eleve") == 0);
-        assert(strcmp(nl_battery_level_label(NL_BAT_MEDIUM), "Moyen") == 0);
-        assert(strcmp(nl_battery_level_label(NL_BAT_LOW), "Faible") == 0);
-        assert(strcmp(nl_battery_level_label(NL_BAT_UNAVAILABLE), "Indisponible") == 0);
-
-        /* 4. Verify top bar never draws a battery indicator even if show_battery is toggled in memory */
-        cfg_test.sui.screen = NL_UI_LIBRARY;
-        cfg_test.settings.show_battery = false;
-        for (int i = 0; i < 16; i++) nl_anim_step(&cfg_test);
-        assert(cfg_test.anim.set_open_fp == 0);
-        assert(cfg_test.anim.switch_battery_fp == 0);
-        const nl_theme_t *th_cur = nl_get_theme(cfg_test.display_mode, cfg_test.accent_color);
-        cfg_test.sys.battery_level = NL_BAT_HIGH;
-        nl_render_frame(&cfg_test, fb);
-        for (int y = NL_BAT_IND_Y; y < NL_BAT_IND_Y + NL_BAT_IND_H; y++) {
-            for (int x = NL_BAT_IND_X; x < NL_BAT_IND_X + NL_BAT_IND_W; x++) {
-                assert(fb[y * NL_SCREEN_W + x] == th_cur->bg_top_bar);
-            }
-        }
-
-        /* 5. Settings -> Affichage has 4 options (0: Grille, 1: Titres, 2: Barre d'aide, 3: Eteindre la calculatrice) */
-        assert(NL_DISPLAY_OPT_COUNT == 4);
+        assert(NL_DISPLAY_OPT_COUNT == 5);
         cfg_test.sys.has_ndless = false;
         nl_handle_key(&cfg_test, NL_KEY_SETTINGS);
         cfg_test.sui.menu_cursor = NL_SET_MENU_DISPLAY;
@@ -1737,40 +1704,23 @@ int main(int argc, char *argv[]) {
         assert(cfg_test.sui.display_cursor == 0);
         nl_handle_key(&cfg_test, NL_KEY_DOWN); /* 1: Afficher les noms */
         nl_handle_key(&cfg_test, NL_KEY_DOWN); /* 2: Afficher les raccourcis */
-        nl_handle_key(&cfg_test, NL_KEY_DOWN); /* 3: Eteindre la calculatrice */
-        assert(cfg_test.sui.display_cursor == 3);
-        assert(cfg_test.sui.display_scroll == 1);
+        nl_handle_key(&cfg_test, NL_KEY_DOWN); /* 3: Sens de defilement */
+        nl_handle_key(&cfg_test, NL_KEY_DOWN); /* 4: Eteindre la calculatrice */
+        assert(cfg_test.sui.display_cursor == 4);
+        assert(cfg_test.sui.display_scroll == 2);
         nl_render_frame(&cfg_test, fb);
         assert(cfg_test.sui.poweroff_req == false);
         nl_handle_key(&cfg_test, NL_KEY_EXE);
         assert(cfg_test.sui.poweroff_req == true);
         cfg_test.sui.poweroff_req = false;
 
-        /* Save & reload: show_battery and autostart always stay false */
-        assert(nl_save_config(&cfg_test, "/tmp/nl_test_v3.cfg.tns") == true);
-        static nl_state_t bat_reloaded;
-        nl_init_state(&bat_reloaded);
-        assert(bat_reloaded.settings.show_battery == false);
-        assert(bat_reloaded.settings.autostart == false);
-        assert(nl_load_config(&bat_reloaded, "/tmp/nl_test_v3.cfg.tns") == true);
-        assert(bat_reloaded.settings.show_battery == false);
-        assert(bat_reloaded.settings.autostart == false);
-        assert(bat_reloaded.anim.switch_battery_fp == 0);
-        nl_free_icons(&bat_reloaded);
-
-        /* Pressing DEL (NL_KEY_RESCAN) in Settings triggers poweroff_req */
+        /* Pressing DEL (NL_KEY_RESCAN) in Settings Main triggers poweroff_req */
         nl_handle_key(&cfg_test, NL_KEY_ESC);
         assert(cfg_test.sui.screen == NL_UI_SETTINGS_MAIN);
         nl_handle_key(&cfg_test, NL_KEY_RESCAN);
         assert(cfg_test.sui.poweroff_req == true);
         cfg_test.sui.poweroff_req = false;
         assert(strstr(cfg_test.anim.toast_text, "EXTINCTION CALCULATRICE") != NULL);
-
-        /* Factory settings reset keeps show_battery and autostart OFF (false) */
-        nl_reset_settings_only(&cfg_test, "/tmp/nl_test_v3.cfg.tns");
-        assert(cfg_test.settings.show_battery == false);
-        assert(cfg_test.settings.autostart == false);
-        assert(cfg_test.anim.switch_battery_fp == 0);
 
         /* 7. Settings Menu Visual & Ergonomic Overhaul: Icon Badges + Two-Line Hierarchy + Sort Labels */
         assert(strcmp(nl_sort_order_label(NL_SORT_ALPHA_ASC), "Ordre alphabetique (A -> Z)") == 0);
@@ -1829,7 +1779,7 @@ int main(int argc, char *argv[]) {
     }
 
     nl_free_icons(&cfg_test);
-    printf("[PASS] Settings menu, 5 layouts, show_names, autostart pre-flight, shortcuts, 7 sorts, stats, search, safe reset, fluid animations (A-G), touchpad navigation, optical battery indicator & visual icon hierarchy verified.\n");
+    printf("[PASS] Settings menu, 5 layouts, show_names, shortcuts, 7 sorts, stats, search, safe reset, fluid animations (A-G), touchpad navigation & visual icon hierarchy verified.\n");
 
     /* 12l. Settings Shortcut (Direct Scratchpad/Save key + Ctrl+S simultaneous + Sticky Ctrl -> S + Anti-Bounce) */
     {
@@ -1909,12 +1859,12 @@ int main(int argc, char *argv[]) {
         assert(triggered == true);
         assert(nl_handle_key(&save_st, NL_KEY_SETTINGS) == true);
         assert(save_st.sui.screen == NL_UI_SETTINGS_MAIN);
-        assert(save_st.anim.set_open_fp == 48);
-        for (int i = 0; i < 16; i++) nl_anim_step(&save_st);
+        assert(save_st.anim.set_open_fp == 8);
+        for (int i = 0; i < 24; i++) nl_anim_step(&save_st);
         assert(save_st.anim.set_open_fp == 256);
         assert(nl_handle_key(&save_st, NL_KEY_ESC) == true);
         assert(save_st.sui.screen == NL_UI_LIBRARY);
-        for (int i = 0; i < 16; i++) nl_anim_step(&save_st);
+        for (int i = 0; i < 20; i++) nl_anim_step(&save_st);
         assert(save_st.anim.set_open_fp == 0);
         nl_free_icons(&save_st);
         printf("[PASS] Settings shortcut (Scratchpad/Save key + Ctrl+S), anti-bounce guard & Settings open/ESC cycle verified.\n");
@@ -2007,8 +1957,11 @@ int main(int argc, char *argv[]) {
         for (int step = 0; step < 12; step++) {
             nl_anim_step(&up_st);
             nl_render_frame(&up_st, fb);
-            /* Scan column x = NL_GRID_MARGIN_X + (NL_GRID_CARD_W / 2) (center of col 0) for red (row 0) vs green (row 1) Y bounds */
-            int x_probe = NL_GRID_MARGIN_X + (NL_GRID_CARD_W / 2);
+            nl_layout_metrics_t lm_up;
+            nl_get_layout_metrics_full(up_st.settings.layout, up_st.settings.scroll_dir,
+                                       up_st.settings.show_names, up_st.settings.show_shortcuts,
+                                       up_st.filtered_count, &lm_up);
+            int x_probe = lm_up.margin_x + (lm_up.card_w / 2);
             int red_max_y = -1;
             int green_min_y = 999;
             for (int y = NL_VIEW_TOP; y < NL_VIEW_BOTTOM; y++) {
@@ -2031,14 +1984,14 @@ int main(int argc, char *argv[]) {
             nl_render_frame(&up_st, fb);
             nl_anim_step(&up_st);
             nl_render_frame(&up_st, fb);
-            for (int i = 0; i < 16; i++) nl_anim_step(&up_st);
+            for (int i = 0; i < 24; i++) nl_anim_step(&up_st);
             assert(up_st.anim.set_open_fp == 256);
 
             nl_handle_key(&up_st, NL_KEY_ESC);
             assert(up_st.sui.screen == NL_UI_LIBRARY);
             assert(up_st.anim.set_open_fp > 0 && up_st.anim.set_open_fp < 256);
             nl_render_frame(&up_st, fb);
-            for (int i = 0; i < 16; i++) nl_anim_step(&up_st);
+            for (int i = 0; i < 20; i++) nl_anim_step(&up_st);
             assert(up_st.anim.set_open_fp == 0);
         }
 
@@ -2138,6 +2091,9 @@ int main(int argc, char *argv[]) {
          *      while non-selected icons fade smoothly toward transparency
          *    - Stage 4 (step 34/46 & 46/46): Non-selected icons are 100% transparent, custom icon
          *      crossfades smoothly into the .scr.tns screenshot and completes 320x240 expansion */
+        free(launch_st.games[c_idx].icon_pixels);
+        launch_st.games[c_idx].icon_pixels = (uint16_t *)malloc(NL_COVER_BYTES);
+        assert(launch_st.games[c_idx].icon_pixels != NULL);
         launch_st.games[c_idx].icon_w = NL_COVER_W;
         launch_st.games[c_idx].icon_h = NL_COVER_H;
         for (int p = 0; p < NL_COVER_W * NL_COVER_H; p++) {
@@ -2153,19 +2109,21 @@ int main(int argc, char *argv[]) {
         }
 
         nl_layout_metrics_t lm;
-        nl_get_layout_metrics_ex(launch_st.settings.layout, launch_st.settings.show_names, launch_st.settings.show_shortcuts, &lm);
-        int sel_col = launch_st.selected_pos % lm.cols;
-        int sel_row = launch_st.selected_pos / lm.cols;
-        int sel_cx = lm.margin_x + sel_col * (lm.card_w + lm.gap_x) + lm.card_w / 2;
-        int sel_cy = lm.top_y + sel_row * lm.row_stride_y + lm.card_h / 2;
+        nl_get_layout_metrics_full(launch_st.settings.layout, launch_st.settings.scroll_dir,
+                                   launch_st.settings.show_names, launch_st.settings.show_shortcuts,
+                                   launch_st.filtered_count, &lm);
+        int sel_x = 0, sel_y = 0;
+        nl_compute_grid_slot_pos(&lm, launch_st.filtered_count, launch_st.selected_pos, &sel_x, &sel_y);
+        int sel_cx = sel_x + lm.card_w / 2;
+        int sel_cy = sel_y + lm.card_h / 2;
 
-        /* Step 1/46 (shrink start): custom icon is Pure Green across the selected card (> 3000 px) */
+        /* Step 1/46 (shrink start): custom icon is Pure Green across the selected card (> 2000 px) */
         nl_render_launch_zoom(&launch_st, fb, 1, 46);
         int green_cnt = 0;
         for (int p = 0; p < NL_SCREEN_W * NL_SCREEN_H; p++) {
             if (fb[p] == RGB565(20, 200, 40)) green_cnt++;
         }
-        assert(green_cnt > 3000);
+        assert(green_cnt > 2000);
 
         /* Step 16/46 (ripple propagation window, t_exp ~ 61):
          * - Selected custom icon center is STILL 100% Pure Green (ripples are BEHIND the icon, and screenshot crossfade hasn't started yet!)
@@ -2177,10 +2135,10 @@ int main(int argc, char *argv[]) {
         for (int p = 0; p < NL_SCREEN_W * NL_SCREEN_H; p++) {
             if (fb[p] == RGB565(20, 200, 40)) green_mid++;
         }
-        assert(green_mid > 2400);
+        assert(green_mid > 1800);
 
-        /* Step 34/46 (Stage 4 crossfade + expansion, t_exp ~ 178): custom icon & screenshot blended */
-        nl_render_launch_zoom(&launch_st, fb, 34, 46);
+        /* Step 26/46 (#R15 early crossfade midpoint, t_exp ~ 126): custom icon & screenshot blended cleanly */
+        nl_render_launch_zoom(&launch_st, fb, 26, 46);
         int blended_cnt = 0;
         for (int p = 0; p < NL_SCREEN_W * NL_SCREEN_H; p++) {
             if (fb[p] != RGB565(20, 200, 40) && fb[p] != RGB565(220, 40, 200)) blended_cnt++;
@@ -2331,7 +2289,7 @@ int main(int argc, char *argv[]) {
                     nl_layout_metrics_t m;
                     nl_get_layout_metrics_ex((nl_layout_t)l, sn != 0, sc != 0, &m);
                     assert(m.card_w == m.card_h);
-                    assert(m.card_w >= 32);
+                    assert(m.card_w >= 24);
                     assert(m.margin_x >= 10);
                     assert(m.top_y >= NL_VIEW_TOP + 2);
                     int right_edge = 2 * m.margin_x + m.cols * m.card_w + (m.cols - 1) * m.gap_x;
@@ -2397,8 +2355,8 @@ int main(int argc, char *argv[]) {
 
             assert(nl_load_game_icon(&ico_st.games[0], ico_st.covers_dir) == true);
             assert(ico_st.games[0].icon_source == NL_ICON_ICO);
-            assert(ico_st.games[0].icon_w == 128);
-            assert(ico_st.games[0].icon_h == 72);
+            assert(ico_st.games[0].icon_w == NL_ICON_MAX_DIM);
+            assert(ico_st.games[0].icon_h == 47);
             assert(ico_st.games[0].icon_alpha != NULL);
             assert(ico_st.games[0].icon_alpha[0] == 128);
             unlink(ico_path);
@@ -2721,7 +2679,7 @@ int main(int argc, char *argv[]) {
         assert(nl_file_exists(bg_launcher) == true);
         assert(nl_file_exists(bg_game) == true);
 
-        /* Verify config with legacy autostart=1 and show_battery=1 forces both to false on load */
+        /* Verify config with legacy autostart=1 and show_battery=1 loads cleanly and ignores dead options */
         FILE *cfp = fopen(bg_cfg, "wb");
         assert(cfp != NULL);
         fprintf(cfp, "display_mode=gray\naccent_color=red\nlayout=4x4\nautostart=1\nshow_battery=1\n");
@@ -2736,10 +2694,6 @@ int main(int argc, char *argv[]) {
         assert(bg_st.display_mode == NL_DISPLAY_GRAY);
         assert(bg_st.accent_color == NL_ACCENT_RED);
         assert(bg_st.settings.layout == NL_LAYOUT_4X4);
-        assert(bg_st.settings.autostart == false);
-        assert(bg_st.settings.show_battery == false);
-        assert(bg_st.anim.switch_autostart_fp == 0);
-        assert(bg_st.anim.switch_battery_fp == 0);
 
         nl_free_icons(&bg_st);
         printf("[PASS] Legacy autostart cleanup, startup stub purge & config migration verified.\n");
@@ -2800,7 +2754,7 @@ int main(int argc, char *argv[]) {
         first_boot.games[idx_ndoom].scr_pixels = (uint16_t *)malloc(NL_COVER_BYTES);
         assert(first_boot.games[idx_ndoom].scr_pixels != NULL);
         for (int p = 0; p < NL_COVER_W * NL_COVER_H; p++) {
-            first_boot.games[idx_ndoom].scr_pixels[p] = RGB565(220, 38, 38);
+            first_boot.games[idx_ndoom].scr_pixels[p] = ((p & 64) != 0) ? RGB565(220, 38, 38) : RGB565(250, 120, 40);
         }
         first_boot.games[idx_ndoom].has_screenshot = true;
         assert(nl_save_captured_screenshot(&first_boot.games[idx_ndoom], first_boot.covers_dir) == true);
@@ -2888,13 +2842,17 @@ int main(int argc, char *argv[]) {
         create_mock_zehn_tns(c_game2, "nDoom", "Mrakoplaz", 1, true, false, 128);
         assert(nl_save_library_cache(&first_boot, c_cache) == true);
 
-        /* Test 3: Settings « Actualiser la bibliotheque » (NL_SET_MENU_REFRESH_LIB) sets rescan_req = true */
+        /* Test 3: Settings « Rescanner les jeux » (NL_SET_MENU_REFRESH_LIB) opens NL_UI_SETTINGS_RESCAN & sets rescan_req */
         cached_boot.sui.screen = NL_UI_SETTINGS_MAIN;
         cached_boot.sui.menu_cursor = NL_SET_MENU_REFRESH_LIB;
         cached_boot.sui.rescan_req = false;
         assert(nl_handle_key(&cached_boot, NL_KEY_EXE) == true);
+        assert(cached_boot.sui.screen == NL_UI_SETTINGS_RESCAN);
         assert(cached_boot.sui.rescan_req == true);
         assert(strstr(cached_boot.anim.toast_text, "BIBLIOTHEQUE ACTUALISEE") != NULL);
+        /* Return cleanly to NL_UI_SETTINGS_MAIN before Test 4 */
+        assert(nl_handle_key(&cached_boot, NL_KEY_ESC) == true);
+        assert(cached_boot.sui.screen == NL_UI_SETTINGS_MAIN);
 
         /* Test 4: Experimental Global TI-OS Hotkey (nl_hotkey.tns + nl_hotkey_set + safety guards) */
         assert(cached_boot.settings.global_hotkey == false); /* Disabled by default */
@@ -3002,18 +2960,20 @@ int main(int argc, char *argv[]) {
         /* Verify across all 4 accent themes (BLUE, RED, GREEN, YELLOW) that the 3 concentric
          * launch ripples are pure white (neutral RGB where R5 == B5 in RGB565) */
         nl_layout_metrics_t lm;
-        nl_get_layout_metrics_ex(ls.settings.layout, ls.settings.show_names, ls.settings.show_shortcuts, &lm);
+        nl_get_layout_metrics_full(ls.settings.layout, ls.settings.scroll_dir,
+                                   ls.settings.show_names, ls.settings.show_shortcuts,
+                                   ls.filtered_count, &lm);
         int slot2_cx = lm.margin_x + 2 * (lm.card_w + lm.gap_x) + lm.card_w / 2;
         int slot2_cy = lm.top_y + lm.card_h / 2;
         int ray_x = slot2_cx;
-        int ray_y0 = slot2_cy + (lm.card_h / 2) + 4;
+        int ray_y0 = slot2_cy + (lm.card_h / 2) + 8;
         int ray_y1 = ray_y0 + 22;
         if (ray_y1 > NL_VIEW_BOTTOM - 2) ray_y1 = NL_VIEW_BOTTOM - 2;
 
         for (int acc = 0; acc < 4; acc++) {
             ls.display_mode = NL_DISPLAY_DARK;
             ls.accent_color = (nl_accent_color_t)acc;
-            nl_render_launch_zoom(&ls, fb, 18, 46);
+            nl_render_launch_zoom(&ls, fb, 13, 46);
             uint16_t bg_px = fb[205 * NL_SCREEN_W + ray_x]; /* Empty area far below ripple */
             int lit_ripple_pixels = 0;
             for (int py = ray_y0; py < ray_y1; py++) {
@@ -3144,24 +3104,26 @@ int main(int argc, char *argv[]) {
         assert(ps->display_mode == NL_DISPLAY_LIGHT); /* Global shared kept! */
         assert(ps->games[1].is_favorite == false);
 
-        /* Step shortcuts '0' / '-' (strictly NO wrap-around) */
-        assert(nl_handle_char_input(ps, '-') == false); /* Already at last profile (Bob) */
+        /* #R15: '0' and '-' are reassigned to page navigation (NOT profile switching).
+         * Verify switching profiles cleanly via nl_profile_switch_to preserves per-profile favorites/shortcuts/layout. */
         assert(ps->profiles.active_index == 2);
-        assert(nl_handle_char_input(ps, '0') == true);  /* Switch left -> Alice */
+        assert(nl_handle_char_input(ps, '0') == false); /* Single page: does not switch profile */
+        assert(ps->profiles.active_index == 2);
+        assert(nl_handle_char_input(ps, '-') == false); /* Single page: does not switch profile */
+        assert(ps->profiles.active_index == 2);
+        assert(nl_profile_switch_to(ps, 1) == true);    /* Switch to Alice */
         assert(ps->profiles.active_index == 1);
         assert(ps->games[1].is_favorite == true);
         assert(ps->games[1].shortcut_key == 'C');
         assert(ps->settings.layout == NL_LAYOUT_4X4);
-        assert(nl_handle_char_input(ps, '0') == true);  /* Switch left -> Profil 1 */
+        assert(nl_profile_switch_to(ps, 0) == true);    /* Switch to Profil 1 */
         assert(ps->profiles.active_index == 0);
         assert(ps->games[0].is_favorite == true);
         assert(ps->games[0].launch_count == 7);
         assert(ps->games[0].shortcut_key == 'A');
         assert(ps->settings.layout == NL_LAYOUT_2X2);
-        assert(nl_handle_char_input(ps, '0') == false); /* Strictly NO wrap at 0 */
-        assert(ps->profiles.active_index == 0);
 
-        /* During inline search, '0' and '-' type into search query instead of switching profiles */
+        /* During inline search, '0' and '-' type into search query */
         assert(nl_handle_char_input(ps, '2') == true);
         assert(ps->sui.search_active == true);
         assert(nl_handle_char_input(ps, '0') == true);
@@ -3182,17 +3144,17 @@ int main(int argc, char *argv[]) {
         nl_render_frame(ps, fb);
         /* Top-left header avatar pixels vs active profile (0 vs 1) */
         uint16_t hdr_p0 = fb[12 * NL_SCREEN_W + 17];
-        /* Ring pixels must be independent of accent_color */
+        /* Ring pixels at minimalist QP cy=120 must be independent of accent_color */
         int ring_px_x = (ps->anim.qp_glow_x_fp >> 4) - 19;
-        uint16_t ring_blue = fb[114 * NL_SCREEN_W + ring_px_x];
+        uint16_t ring_blue = fb[120 * NL_SCREEN_W + ring_px_x];
         ps->accent_color = NL_ACCENT_RED;
         nl_render_frame(ps, fb);
-        uint16_t ring_red = fb[114 * NL_SCREEN_W + ring_px_x];
+        uint16_t ring_red = fb[120 * NL_SCREEN_W + ring_px_x];
         assert(ring_blue == ring_red);
 
         ps->display_mode = NL_DISPLAY_LIGHT;
         nl_render_frame(ps, fb);
-        uint16_t ring_light = fb[114 * NL_SCREEN_W + ring_px_x];
+        uint16_t ring_light = fb[120 * NL_SCREEN_W + ring_px_x];
         assert(ring_light != ring_blue);
 
         /* Navigate right -> Alice in Quick Selector and confirm */
@@ -3216,7 +3178,7 @@ int main(int argc, char *argv[]) {
         /* Render Settings Profils screens for verification */
         ps->sui.screen = NL_UI_SETTINGS_PROFILES;
         ps->sui.prof_mode = NL_PROF_MODE_LIST;
-        ps->sui.prof_cursor = 1;
+        ps->sui.prof_cursor = 2; /* Row 0=Padlock toggle, Row 1=Create, Row 2=First profile */
         nl_render_frame(ps, fb);
 
         ps->sui.prof_mode = NL_PROF_MODE_EDIT_AVATAR;
@@ -3260,6 +3222,8 @@ int main(int argc, char *argv[]) {
         assert(nl_avatar_first_free(pr) == -1);
         assert(nl_profile_create(pr, "Extra", 0) == -1);
 
+        nl_free_icons(pr);
+        nl_free_icons(ps);
         free(pr);
         free(ps);
         printf("[PASS] Multi-profile system, 43 exclusive avatars, Quick Selector, 0/-/., isolation & persistence verified.\n");
@@ -3482,7 +3446,7 @@ int main(int argc, char *argv[]) {
         assert(nl_handle_char_input(pa, '.') == true);
         assert(pa->sui.qp_open == true);
         assert(pa->anim.qp_open_fp < 256);
-        for (int f = 0; f < 10; f++) {
+        for (int f = 0; f < 18; f++) {
             nl_anim_step(pa);
             nl_render_frame(pa, fb);
         }
@@ -3506,30 +3470,36 @@ int main(int argc, char *argv[]) {
         }
         assert(pa->anim.qp_plus_focus_fp == 256);
 
-        /* 26b. Press EXE on '+' button: verify direct CREATE_AVATAR mode (NO name prompt) & '+' ghost zoom animation */
+        /* 26b. #R15: Press EXE on '+' button: controlled enlargement animation -> compact floating Avatar Picker modal */
         assert(nl_handle_key(pa, NL_KEY_EXE) == true);
-        assert(pa->sui.screen == NL_UI_SETTINGS_PROFILES);
-        assert(pa->sui.prof_mode == NL_PROF_MODE_CREATE_AVATAR);
-        assert(pa->sui.prof_from_quick == true);
+        assert(pa->sui.screen == NL_UI_LIBRARY);
+        assert(pa->sui.qp_pick_pending == true);
         assert(pa->anim.prof_plus_active == true);
         assert(pa->anim.prof_plus_tick == 0);
         assert(pa->anim.prof_plus_origin_x > 160);
-        assert(pa->anim.prof_plus_origin_y == 114);
+        assert(pa->anim.prof_plus_origin_y == 120);
 
-        /* Step through '+' creation transition frames and render each stage (water-drop + 4 ghost crosses + rebound) */
+        /* Step through controlled '+' creation transition frames -> seamlessly opens floating Avatar Picker modal */
         for (int f = 0; f < pa->anim.prof_plus_max; f++) {
             nl_render_frame(pa, fb);
             nl_anim_step(pa);
         }
         assert(pa->anim.prof_plus_active == false);
-        nl_render_frame(pa, fb);
+        assert(pa->sui.qp_open == false);
+        assert(pa->sui.qp_pick_open == true);
+        for (int f = 0; f < 18; f++) {
+            nl_anim_step(pa);
+            nl_render_frame(pa, fb);
+        }
+        assert(pa->anim.qp_pick_fp == 256);
 
-        /* 26c. Validate an avatar with EXE: creates "Profil 3" directly, triggers birth confirmation, returns to Quick Selector */
+        /* 26c. Validate an avatar with EXE in floating modal: creates "Profil 3" directly, triggers birth confirmation, returns to Quick Selector */
         assert(nl_handle_key(pa, NL_KEY_RIGHT) == true);
         assert(nl_handle_key(pa, NL_KEY_EXE) == true);
         assert(pa->profiles.count == 3);
         assert(strcmp(pa->profiles.items[2].name, "Profil 3") == 0);
         assert(pa->sui.screen == NL_UI_LIBRARY);
+        assert(pa->sui.qp_pick_open == false);
         assert(pa->sui.qp_open == true);
         assert(pa->sui.qp_cursor == 2);
         assert(pa->anim.prof_birth_active == true);
@@ -3539,7 +3509,7 @@ int main(int argc, char *argv[]) {
         }
         assert(pa->anim.prof_birth_active == false);
 
-        /* 26d. Select Maxime (slot 1) with LEFT + EXE: triggers 4-stage Profile Switch animation */
+        /* 26d. Select Maxime (slot 1) with LEFT + EXE: triggers clean Profile Switch animation at cy=120 */
         assert(nl_handle_key(pa, NL_KEY_LEFT) == true);
         assert(pa->sui.qp_cursor == 1);
         assert(nl_handle_key(pa, NL_KEY_EXE) == true);
@@ -3547,23 +3517,27 @@ int main(int argc, char *argv[]) {
         assert(pa->profiles.active_index == 1);
         assert(pa->anim.prof_switch_active == true);
         assert(pa->anim.prof_switch_avatar_id == pa->profiles.items[1].avatar_id);
-        assert(pa->anim.prof_switch_origin_y == 114);
+        assert(pa->anim.prof_switch_origin_y == 120);
 
-        /* Render every frame of the 4-stage switch (water-drop -> 4 ghosts zoom -> spring rebound -> fade-out) */
+        /* Render every frame of the switch transition */
         for (int f = 0; f < pa->anim.prof_switch_max; f++) {
             nl_render_frame(pa, fb);
             nl_anim_step(pa);
         }
         assert(pa->anim.prof_switch_active == false);
 
-        /* 26e. Rapid successive profile switches ('-' then '0' mid-animation) stay coherent without artifacts */
-        assert(nl_handle_char_input(pa, '-') == true);
+        /* 26e. Rapid successive profile switches via Quick Selector mid-animation stay coherent without artifacts */
+        assert(nl_handle_char_input(pa, '.') == true);
+        assert(nl_handle_key(pa, NL_KEY_RIGHT) == true);
+        assert(nl_handle_key(pa, NL_KEY_EXE) == true);
         assert(pa->profiles.active_index == 2);
         assert(pa->anim.prof_switch_active == true);
         nl_anim_step(pa);
         nl_render_frame(pa, fb);
         /* Immediately switch again before previous switch animation finishes */
-        assert(nl_handle_char_input(pa, '0') == true);
+        assert(nl_handle_char_input(pa, '.') == true);
+        assert(nl_handle_key(pa, NL_KEY_LEFT) == true);
+        assert(nl_handle_key(pa, NL_KEY_EXE) == true);
         assert(pa->profiles.active_index == 1);
         assert(pa->anim.prof_switch_active == true);
         assert(pa->anim.prof_switch_tick == 0);
@@ -3574,6 +3548,7 @@ int main(int argc, char *argv[]) {
         }
         assert(pa->anim.prof_switch_active == false);
 
+        nl_free_icons(pa);
         free(pa);
         printf("[PASS] 4-stage Profile Switch animation, '+' Ghost Creation, Direct Avatar Selection & Birth Confirmation verified.\n");
     }
@@ -3625,7 +3600,11 @@ int main(int argc, char *argv[]) {
 
         nl_handle_key(cs, NL_KEY_DOWN);
         assert(cs->sui.tp_cursor == 4);
-        nl_handle_key(cs, NL_KEY_EXE); /* Open Tab 1: Apparence du curseur */
+        nl_handle_key(cs, NL_KEY_DOWN);
+        assert(cs->sui.tp_cursor == 5);
+        nl_handle_key(cs, NL_KEY_DOWN);
+        assert(cs->sui.tp_cursor == 6);
+        nl_handle_key(cs, NL_KEY_EXE); /* Open Tab 1: Personnaliser le curseur */
         assert(cs->sui.tp_tab == 1);
         assert(cs->sui.tp_style_cursor == 0); /* Card 0 = Fleche */
 
@@ -3684,6 +3663,8 @@ int main(int argc, char *argv[]) {
         assert(reloaded_cs->settings.touchpad_cursor_style == NL_CURSOR_STYLE_POINTER);
         assert(nl_mouse_is_active(reloaded_cs) == true);
         assert(nl_cursor_is_visible(reloaded_cs) == true);
+        nl_free_icons(reloaded_cs);
+        nl_free_icons(cs);
         free(reloaded_cs);
         free(cs);
         printf("[PASS] Mode Souris settings, 3 PNG cursor styles (Fleche/Cercle/Pointeur) & config persistence verified.\n");
@@ -3836,7 +3817,7 @@ int main(int argc, char *argv[]) {
         assert(nl_mouse_click(ms) == true);
         assert(ms->sui.screen == NL_UI_SETTINGS_MAIN);
 
-        nl_mouse_move_to(ms, 120, 72); /* Row 1 = Navigation tactile */
+        nl_mouse_move_to(ms, 120, 102); /* Row 2 = Navigation tactile (Row 1 = Animations) */
         assert(ms->sui.hover_kind == NL_HOVER_SET_ROW && ms->sui.hover_index == NL_SET_MENU_TOUCHPAD);
         assert(nl_mouse_click(ms) == true);
         assert(ms->sui.screen == NL_UI_SETTINGS_TOUCHPAD);
@@ -3870,9 +3851,3565 @@ int main(int argc, char *argv[]) {
         assert(ms->sui.screen == NL_UI_LIBRARY);
         (void)gth;
 
+        nl_free_icons(ms);
         free(ms);
         printf("[PASS] Complete Mode Souris (Mode1/Mode2, CTRL hold, hardware Y-axis, non-launch hover & universal clicks) verified.\n");
     }
+
+    /* =====================================================================
+     * 29. CENTRALIZED DIAGNOSTICS, 12-STAGE BOOT FORENSICS & FAULT ISOLATION
+     *     (E102, E103, E104, E201, E301, E401, E501, E601, E801, E901)
+     * ===================================================================== */
+    {
+        assert(strcmp(nl_resolve_os_version_string(0x1042A580U), "6.2.0.333 (CX II-T)") == 0);
+        assert(strcmp(nl_resolve_os_version_string(0x103B1E60U), "4.5.0.1180 (CAS CX)") == 0);
+
+        const char *diag_root = "/tmp/nl_diag_suite_fs";
+        assert(system("rm -rf /tmp/nl_diag_suite_fs && mkdir -p /tmp/nl_diag_suite_fs/ndless/covers /tmp/nl_diag_suite_fs/ndless/icons /tmp/nl_diag_suite_fs/games") == 0);
+
+        const char *valid_game = "/tmp/nl_diag_suite_fs/games/Minecraft.tns";
+        const char *bad_game   = "/tmp/nl_diag_suite_fs/games/BrokenBin.tns";
+        const char *self_exe   = "/tmp/nl_diag_suite_fs/ndless/N-Launcher.tns";
+        create_mock_zehn_tns(valid_game, "Minecraft", "Mojang", 1, true, false, 0);
+        create_mock_zehn_tns(self_exe, "N-Launcher", "daniel.b", 3, true, true, 0);
+        {
+            FILE *bfp = fopen(bad_game, "wb");
+            assert(bfp != NULL);
+            const char junk[] = "CORRUPT_HEADER_NOT_ZEHN";
+            fwrite(junk, 1, sizeof(junk) - 1U, bfp);
+            fclose(bfp);
+        }
+
+        /* Write corrupt config & corrupt profiles to verify backup preservation + E301/E601 */
+        const char *bad_cfg  = "/tmp/nl_diag_suite_fs/ndless/nlauncher.cfg.tns";
+        const char *bad_prof = "/tmp/nl_diag_suite_fs/ndless/nlauncher.profiles.tns";
+        {
+            FILE *cfp = fopen(bad_cfg, "wb");
+            assert(cfp != NULL);
+            fprintf(cfp, "\xFF\xFE\x00CORRUPT_CFG_NO_KEYS");
+            fclose(cfp);
+
+            FILE *pfp = fopen(bad_prof, "wb");
+            assert(pfp != NULL);
+            fprintf(pfp, "garbage_not_profile_header\nprofile_count=abc\n");
+            fclose(pfp);
+        }
+
+        /* Simulate prior incomplete boot (crash at Stage 10 in Classique) */
+        {
+            FILE *sfp = fopen("/tmp/nl_diag_suite_fs/ndless/nlauncher.stage.tns", "w");
+            assert(sfp != NULL);
+            fprintf(sfp, "stage=10\nclean_exit=0\nndless_mode=Classique\nos=6.2.0.333 (CX II-T)\n");
+            fclose(sfp);
+        }
+
+        nl_state_t *ds = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(ds != NULL);
+        nl_init_state(ds);
+        snprintf(ds->sys.docs_root, sizeof(ds->sys.docs_root), "%s", diag_root);
+        snprintf(ds->sys.self_path, sizeof(ds->sys.self_path), "%s", self_exe);
+        snprintf(ds->covers_dir, sizeof(ds->covers_dir), "%s/ndless/covers", diag_root);
+        snprintf(ds->icons_dir, sizeof(ds->icons_dir), "%s/ndless/icons", diag_root);
+        snprintf(ds->profiles_path, sizeof(ds->profiles_path), "%s", bad_prof);
+        ds->sys.has_ndless = true;
+        ds->sys.hw_is_cx2 = true;
+        ds->sys.ndless_persistent = false;
+        snprintf(ds->sys.os_version, sizeof(ds->sys.os_version), "6.2.0.333 (CX II-T)");
+
+        nl_diag_init(ds, diag_root);
+        nl_diag_read_prev_stage(ds);
+        assert(ds->sys.prior_incomplete_boot == true);
+        assert(ds->sys.last_crash_stage == NL_STAGE_10_SPLASH);
+
+        /* Record all 12 stages in order */
+        for (int st = NL_STAGE_01_ENTRY; st <= NL_STAGE_12_READY; st++) {
+            nl_diag_record_stage(ds, (nl_boot_stage_t)st, st == NL_STAGE_12_READY);
+            assert(ds->diag.stage_reached[st] == true);
+        }
+
+        /* Scan games -> E201 isolates BrokenBin.tns while keeping Minecraft.tns launchable */
+        nl_scan_directory(ds, "/tmp/nl_diag_suite_fs/games", self_exe, 3);
+        assert(ds->total_games == 1);
+        assert(strcmp(ds->games[0].title, "Minecraft") == 0);
+
+        /* Missing icon & screenshot -> E102 + E104, game stays launchable */
+        assert(nl_load_game_icon_diag(ds, &ds->games[0], ds->covers_dir) == false);
+        assert(nl_load_game_screenshot_diag(ds, &ds->games[0], ds->covers_dir) == false);
+        nl_rebuild_filter(ds);
+        ds->sui.screen = NL_UI_LIBRARY;
+        ds->selected_pos = 0;
+        assert(nl_handle_key(ds, NL_KEY_EXE) == true);
+        assert(ds->launch_requested == true && ds->launch_game_idx == 0);
+        ds->launch_requested = false;
+        ds->launch_game_idx = -1;
+
+        /* Corrupt .ico.tns -> E103, NL_ICON_NONE */
+        {
+            FILE *ifp = fopen("/tmp/nl_diag_suite_fs/ndless/icons/Minecraft.ico.tns", "wb");
+            assert(ifp != NULL);
+            const char bad_ico[] = "NOT_NL_ICON";
+            fwrite(bad_ico, 1, sizeof(bad_ico) - 1U, ifp);
+            fclose(ifp);
+        }
+        assert(nl_load_game_icon_diag(ds, &ds->games[0], ds->covers_dir) == false);
+        assert(ds->games[0].icon_source == NL_ICON_NONE);
+
+        /* Corrupt .scr.tns -> E501 */
+        {
+            FILE *cfp = fopen("/tmp/nl_diag_suite_fs/ndless/covers/Minecraft.scr.tns", "wb");
+            assert(cfp != NULL);
+            const char bad_scr[] = "BAD_SCR";
+            fwrite(bad_scr, 1, sizeof(bad_scr) - 1U, cfp);
+            fclose(cfp);
+        }
+        assert(nl_load_game_screenshot_diag(ds, &ds->games[0], ds->covers_dir) == false);
+
+        /* Corrupt config & profiles -> E301 & E601 with .bak.tns preserved */
+        assert(nl_load_config(ds, bad_cfg) == false);
+        assert(nl_file_exists("/tmp/nl_diag_suite_fs/ndless/nlauncher.cfg.bak.tns") == true);
+        assert(nl_load_profiles(ds, bad_prof) == false);
+        assert(nl_file_exists("/tmp/nl_diag_suite_fs/ndless/nlauncher.profiles.bak.tns") == true);
+
+        /* Deduplication + E401 + E801 OOM recovery */
+        int cnt_before = ds->diag.count;
+        nl_diag_report(ds, NL_DIAG_E401_DIR_MISSING, "covers", ds->covers_dir, "Check", "Missing", "None", "Recreated");
+        assert(ds->diag.count == cnt_before + 1);
+        nl_diag_report(ds, NL_DIAG_E401_DIR_MISSING, "covers", ds->covers_dir, "Check", "Missing", "None", "Recreated");
+        assert(ds->diag.count == cnt_before + 1);
+        assert(ds->diag.entries[cnt_before].count == 2U);
+
+        /* E801 frees scr_pixels while preserving icon_pixels */
+        ds->games[0].scr_pixels = (uint16_t *)malloc(NL_COVER_BYTES);
+        ds->games[0].has_screenshot = true;
+        ds->games[0].icon_pixels = (uint16_t *)calloc((size_t)(NL_ICON_V1_W * NL_ICON_V1_H), sizeof(uint16_t));
+        ds->games[0].icon_w = NL_ICON_V1_W;
+        ds->games[0].icon_h = NL_ICON_V1_H;
+        ds->games[0].icon_source = NL_ICON_ICO;
+        nl_recover_memory_on_oom(ds, "Test OOM", "lib_fb");
+        assert(ds->sys.oom_recoveries == 1U);
+        assert(ds->games[0].scr_pixels == NULL);
+        assert(ds->games[0].has_screenshot == false);
+        assert(ds->games[0].icon_pixels != NULL);
+
+        /* Verify all 10 error codes recorded and persistent diag log written */
+        const nl_diag_code_t expected_codes[10] = {
+            NL_DIAG_E901_PREV_CRASH,
+            NL_DIAG_E201_GAME_MALFORMED,
+            NL_DIAG_E102_ICON_MISSING,
+            NL_DIAG_E104_SCREENSHOT_MISSING,
+            NL_DIAG_E103_ICON_CORRUPT,
+            NL_DIAG_E501_ASSET_INVALID,
+            NL_DIAG_E301_CONFIG_INVALID,
+            NL_DIAG_E601_PROFILE_CORRUPT,
+            NL_DIAG_E401_DIR_MISSING,
+            NL_DIAG_E801_LOW_MEMORY
+        };
+        for (int k = 0; k < 10; k++) {
+            bool found_code = false;
+            for (int e = 0; e < ds->diag.count; e++) {
+                if (ds->diag.entries[e].code == expected_codes[k]) {
+                    found_code = true;
+                    break;
+                }
+            }
+            assert(found_code == true);
+        }
+        assert(nl_file_exists(ds->sys.diag_log_path) == true);
+
+        /* Diagnostics & Journaux UI navigation, detail overlay, Tab 1, and safe clear confirm modal */
+        nl_handle_key(ds, NL_KEY_SETTINGS);
+        ds->sui.menu_cursor = NL_SET_MENU_DIAG;
+        nl_handle_key(ds, NL_KEY_EXE);
+        assert(ds->sui.screen == NL_UI_SETTINGS_DIAG);
+        assert(ds->sui.diag_tab == 0);
+        nl_render_frame(ds, fb);
+
+        /* Open detail modal for first entry */
+        ds->sui.diag_cursor = 0;
+        nl_handle_key(ds, NL_KEY_EXE);
+        assert(ds->sui.diag_detail_open == true);
+        nl_render_frame(ds, fb);
+        nl_handle_key(ds, NL_KEY_ESC);
+        assert(ds->sui.diag_detail_open == false);
+
+        /* Switch to Tab 1 (Etapes boot & Systeme) and render */
+        nl_handle_key(ds, NL_KEY_RIGHT);
+        assert(ds->sui.diag_tab == 1);
+        nl_render_frame(ds, fb);
+        nl_handle_key(ds, NL_KEY_LEFT);
+        assert(ds->sui.diag_tab == 0);
+
+        /* Clear button at index == diag.count opens confirm modal defaulting to Annuler */
+        ds->sui.diag_cursor = ds->diag.count;
+        nl_handle_key(ds, NL_KEY_EXE);
+        assert(ds->sui.diag_confirm_modal == true);
+        assert(ds->sui.diag_confirm_yes == false);
+        nl_render_frame(ds, fb);
+        nl_handle_key(ds, NL_KEY_RIGHT);
+        assert(ds->sui.diag_confirm_yes == true);
+        nl_handle_key(ds, NL_KEY_EXE);
+        assert(ds->sui.diag_confirm_modal == false);
+        assert(ds->diag.count == 0);
+        assert(ds->total_games == 1); /* Never deletes games or profiles! */
+
+        nl_free_icons(ds);
+        free(ds);
+        printf("[PASS] Section 29 Diagnostics, 12-stage boot forensics, OOM recovery, fault isolation & UI verified.\n");
+    }
+
+    /* =====================================================================
+     * 30. #R10 GLOBAL TI-OS HOTKEY (SWI DECODER, 3 COMBOS, SAFETY MATRIX,
+     *     LIVE RAM STATE, MOUSE/KEY UI & BINARY STAMPS)
+     * ===================================================================== */
+    {
+        /* 30a. Verify N-Launcher.tns contains Build #R10 stamp and nl_hotkey.tns is valid Zehn */
+        FILE *tfp = fopen(compiled_tns, "rb");
+        assert(tfp != NULL);
+        fseek(tfp, 0, SEEK_END);
+        long tsz = ftell(tfp);
+        assert(tsz > 10000L);
+        fseek(tfp, 0, SEEK_SET);
+        uint8_t *tbuf = (uint8_t *)malloc((size_t)tsz);
+        assert(tbuf != NULL);
+        assert(fread(tbuf, 1, (size_t)tsz, tfp) == (size_t)tsz);
+        fclose(tfp);
+        assert(bytes_contains_sub(tbuf, (size_t)tsz, "#R23", 4));
+        free(tbuf);
+
+        char hk_bin_path[512];
+        const char *slash = strrchr(compiled_tns, '/');
+        if (slash) {
+            size_t dlen = (size_t)(slash - compiled_tns);
+            snprintf(hk_bin_path, sizeof(hk_bin_path), "%.*s/nl_hotkey.tns", (int)dlen, compiled_tns);
+        } else {
+            snprintf(hk_bin_path, sizeof(hk_bin_path), "nl_hotkey.tns");
+        }
+        FILE *hkfp = fopen(hk_bin_path, "rb");
+        assert(hkfp != NULL);
+        fseek(hkfp, 0, SEEK_END);
+        long hksz = ftell(hkfp);
+        assert(hksz > 1024L && hksz < 65536L);
+        fseek(hkfp, 0, SEEK_SET);
+        uint8_t *hkbuf = (uint8_t *)malloc((size_t)hksz);
+        assert(hkbuf != NULL);
+        assert(fread(hkbuf, 1, (size_t)hksz, hkfp) == (size_t)hksz);
+        fclose(hkfp);
+        assert(memcmp(hkbuf, "PRG\0", 4) == 0);
+        assert(bytes_contains_sub(hkbuf, (size_t)hksz, "ZEHN", 4) ||
+               bytes_contains_sub(hkbuf, (size_t)hksz, "Zehn", 4));
+        assert(bytes_contains_sub(hkbuf, (size_t)hksz, "nl_hotkey", 9));
+        assert(bytes_contains_sub(hkbuf, (size_t)hksz, "#R23", 4));
+        free(hkbuf);
+
+        /* 30b. Verify N-ext SWI handler decoder (nl_hotkey_parse_swi_handler) */
+        uintptr_t mock_ext_tbl[16];
+        uintptr_t mock_os_tbl[8];
+        memset(mock_ext_tbl, 0, sizeof(mock_ext_tbl));
+        memset(mock_os_tbl, 0, sizeof(mock_os_tbl));
+
+        struct {
+            uint32_t pre[2];   /* pre[0] = "NEXT" (swi_handler - 2 words) */
+            uint32_t swi[8];   /* swi[0]..swi[5] instructions, swi[6..7] pad */
+            uintptr_t pool_ext;
+            uintptr_t pool_os;
+            uint32_t pad[64];
+        } sim;
+        memset(&sim, 0, sizeof(sim));
+        sim.pool_ext = (uintptr_t)mock_ext_tbl;
+        sim.pool_os  = (uintptr_t)mock_os_tbl;
+
+        uint32_t off_ext = (uint32_t)((uintptr_t)&sim.pool_ext - ((uintptr_t)&sim.swi[1] + 8U));
+        uint32_t off_os  = (uint32_t)((uintptr_t)&sim.pool_os  - ((uintptr_t)&sim.swi[4] + 8U));
+        assert(off_ext < 0x1000U && off_os < 0x1000U);
+
+        /* Encode exact ints_swi_handler pattern used on OS 4.5 & OS 6.2 */
+        sim.pre[0] = 0x00000000U; /* Without "NEXT" first -> must reject */
+        sim.swi[0] = 0xE3510602U; /* cmp r1, #0x200000 */
+        sim.swi[1] = 0x059F2000U | (off_ext & 0xFFFU); /* ldreq r2, [pc, #off_ext] */
+        sim.swi[2] = 0xE3510501U; /* cmp r1, #0x400000 */
+        sim.swi[3] = 0x059F2000U; /* ldreq r2, =emu */
+        sim.swi[4] = 0x159F2000U | (off_os & 0xFFFU);  /* ldrne r2, [pc, #off_os] */
+        sim.swi[5] = 0xE7920100U; /* ldr r0, [r2, r0, lsl #2] */
+
+        uintptr_t *out_ext = NULL;
+        uintptr_t *out_os  = NULL;
+        assert(nl_hotkey_parse_swi_handler(sim.swi, &out_ext, &out_os) == false);
+
+        sim.pre[0] = 0x4E455854U; /* "NEXT" at *(swi_handler - 2) */
+        assert(nl_hotkey_parse_swi_handler(sim.swi, &out_ext, &out_os) == true);
+        assert(out_ext == mock_ext_tbl);
+        assert(out_os  == mock_os_tbl);
+
+        /* Verify third-party hook rejection vs clean prologue */
+        uint32_t clean_fn[4] = { 0xE92D47F0U, 0xE24DD010U, 0xE1A04000U, 0xE12FFF1EU };
+        bool third_party = false;
+        assert(nl_hotkey_find_live_ctrl_at((uintptr_t)clean_fn, 0U, 0U, &third_party) == NULL);
+        assert(third_party == false);
+
+        uint32_t hooked_fn[4] = { 0xE51FF004U, 0x10401000U, 0xE1A04000U, 0xE12FFF1EU };
+        /* Note: don't dereference 0x10401000 when ram_min/ram_max rejects out-of-range pointer */
+        assert(nl_hotkey_find_live_ctrl_at((uintptr_t)hooked_fn,
+                                           (uintptr_t)hooked_fn,
+                                           (uintptr_t)hooked_fn + 0x1000U,
+                                           &third_party) == NULL);
+        assert(third_party == true);
+
+        /* 30c. Combo parsing, labels, strict matching & config persistence */
+        assert(strcmp(nl_hk_combo_to_str(NL_HK_COMBO_CTRL_MENU), "ctrl_menu") == 0);
+        assert(strcmp(nl_hk_combo_to_str(NL_HK_COMBO_SHIFT_MENU), "shift_menu") == 0);
+        assert(strcmp(nl_hk_combo_to_str(NL_HK_COMBO_CTRL_SHIFT_MENU), "ctrl_shift_menu") == 0);
+        assert(nl_str_to_hk_combo("shift_menu") == NL_HK_COMBO_SHIFT_MENU);
+        assert(nl_str_to_hk_combo("ctrl_shift_menu") == NL_HK_COMBO_CTRL_SHIFT_MENU);
+        assert(nl_str_to_hk_combo("anything_else") == NL_HK_COMBO_CTRL_MENU);
+
+        assert(nl_hk_combo_matches(NL_HK_COMBO_CTRL_MENU, true, false, true) == true);
+        assert(nl_hk_combo_matches(NL_HK_COMBO_CTRL_MENU, true, true, true) == false);
+        assert(nl_hk_combo_matches(NL_HK_COMBO_SHIFT_MENU, false, true, true) == true);
+        assert(nl_hk_combo_matches(NL_HK_COMBO_SHIFT_MENU, true, true, true) == false);
+        assert(nl_hk_combo_matches(NL_HK_COMBO_CTRL_SHIFT_MENU, true, true, true) == true);
+        assert(nl_hk_combo_matches(NL_HK_COMBO_CTRL_SHIFT_MENU, true, false, true) == false);
+
+        /* 30d. Full UI + storage + RAM live hook + combo persistence workflow */
+        const char *hk_root = "/tmp/nl_hotkey_r10_fs";
+        assert(system("rm -rf /tmp/nl_hotkey_r10_fs && mkdir -p /tmp/nl_hotkey_r10_fs/ndless") == 0);
+        const char *hk_launcher = "/tmp/nl_hotkey_r10_fs/ndless/N-Launcher.tns";
+        const char *hk_cfg      = "/tmp/nl_hotkey_r10_fs/ndless/nlauncher.cfg.tns";
+        create_mock_zehn_tns(hk_launcher, "N-Launcher", "daniel.b", 3, true, true, 0);
+
+        nl_state_t *hs = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(hs != NULL);
+        nl_init_state(hs);
+        snprintf(hs->sys.docs_root, sizeof(hs->sys.docs_root), "%s", hk_root);
+        snprintf(hs->sys.self_path, sizeof(hs->sys.self_path), "%s", hk_launcher);
+        hs->sys.has_ndless = true;
+        hs->sys.ndless_persistent = false; /* Simulate Ndless Classique session */
+
+        /* Navigate Settings -> Raccourci global TI-OS */
+        nl_handle_key(hs, NL_KEY_SETTINGS);
+        hs->sui.menu_cursor = NL_SET_MENU_HOTKEY;
+        nl_handle_key(hs, NL_KEY_EXE);
+        assert(hs->sui.screen == NL_UI_SETTINGS_HOTKEY);
+        assert(hs->sui.hotkey_cursor == 0);
+        assert(hs->settings.global_hotkey == false);
+        assert(hs->sys.hotkey_ram_active == false);
+
+        /* Enable Row 0 with EXE */
+        assert(nl_handle_key(hs, NL_KEY_EXE) == true);
+        assert(hs->settings.global_hotkey == true);
+        assert(hs->sys.hotkey_active == true);
+        assert(hs->sys.hotkey_ram_active == true);
+
+        /* Move DOWN to Row 1 (Combinaison) and cycle to SHIFT+MENU -> CTRL+SHIFT+MENU */
+        assert(nl_handle_key(hs, NL_KEY_DOWN) == true);
+        assert(hs->sui.hotkey_cursor == 1);
+        assert(nl_handle_key(hs, NL_KEY_RIGHT) == true);
+        assert(hs->settings.hotkey_combo == (int)NL_HK_COMBO_SHIFT_MENU);
+        assert(nl_handle_key(hs, NL_KEY_RIGHT) == true);
+        assert(hs->settings.hotkey_combo == (int)NL_HK_COMBO_CTRL_SHIFT_MENU);
+
+        /* Save, cold-reload config, and verify combo + global_hotkey preserved */
+        assert(nl_save_config(hs, hk_cfg) == true);
+        nl_render_frame(hs, fb);
+
+        static nl_state_t reloaded_hk;
+        nl_init_state(&reloaded_hk);
+        snprintf(reloaded_hk.sys.docs_root, sizeof(reloaded_hk.sys.docs_root), "%s", hk_root);
+        snprintf(reloaded_hk.sys.self_path, sizeof(reloaded_hk.sys.self_path), "%s", hk_launcher);
+        reloaded_hk.sys.has_ndless = true;
+        assert(nl_load_config(&reloaded_hk, hk_cfg) == true);
+        assert(reloaded_hk.settings.global_hotkey == true);
+        assert(reloaded_hk.settings.hotkey_combo == (int)NL_HK_COMBO_CTRL_SHIFT_MENU);
+        nl_hotkey_reconcile(&reloaded_hk);
+        assert(reloaded_hk.sys.hotkey_ram_active == true);
+
+        /* Verify nl_hotkey_should_trigger_ex respects active combo, lock & recovery */
+        char out_tgt[256];
+        assert(nl_hotkey_should_trigger_ex(NL_HK_COMBO_CTRL_SHIFT_MENU, true, false, true,
+                                           false, false, false, hk_root, mock_stub_file_ok,
+                                           out_tgt, sizeof(out_tgt)) == false);
+        assert(nl_hotkey_should_trigger_ex(NL_HK_COMBO_CTRL_SHIFT_MENU, true, true, true,
+                                           false, false, false, hk_root, mock_stub_file_ok,
+                                           out_tgt, sizeof(out_tgt)) == true);
+        assert(strcmp(out_tgt, hk_launcher) == 0);
+
+        /* Active lock blocks hotkey while N-Launcher or game is open */
+        nl_bg_set_active_lock(hk_root, true);
+        assert(nl_hotkey_should_trigger_ex(NL_HK_COMBO_CTRL_SHIFT_MENU, true, true, true,
+                                           false, false, false, hk_root, mock_stub_file_ok,
+                                           out_tgt, sizeof(out_tgt)) == false);
+        nl_bg_set_active_lock(hk_root, false);
+
+        /* Mouse interaction in NL_UI_SETTINGS_HOTKEY (Row 1 click cycles combo back to Ctrl+Menu, Row 0 click disables) */
+        hs->settings.touchpad_mode = NL_TP_MODE_MOUSE;
+        hs->settings.touchpad_cursor_show = true;
+        nl_mouse_move_to(hs, 160, 96);
+        assert(hs->sui.hover_kind == NL_HOVER_SET_ROW && hs->sui.hover_index == 1);
+        assert(nl_mouse_click(hs) == true);
+        assert(hs->settings.hotkey_combo == (int)NL_HK_COMBO_CTRL_MENU);
+
+        nl_mouse_move_to(hs, 160, 50);
+        assert(hs->sui.hover_kind == NL_HOVER_SET_ROW && hs->sui.hover_index == 0);
+        assert(nl_mouse_click(hs) == true);
+        assert(hs->settings.global_hotkey == false);
+        assert(hs->sys.hotkey_active == false);
+        assert(hs->sys.hotkey_ram_active == false);
+        assert(nl_file_exists("/tmp/nl_hotkey_r10_fs/ndless/startup/nl_hotkey.tns") == false);
+
+        /* Strictly verify zero legacy boot autostart stub created */
+        assert(nl_file_exists("/tmp/nl_hotkey_r10_fs/ndless/startup/nl_boot.tns") == false);
+
+        nl_free_icons(hs);
+        free(hs);
+        printf("[PASS] Section 30 #R10 Global TI-OS Hotkey (SWI parser, 3 combos, Classique/Persistant RAM & UI) verified.\n");
+    }
+
+    /* 31. Full A-to-Z Audit Regression Suite: .bak.tns exclusion, nl_bg_enable_hotkey_in_cfg, Profile show_shortcuts=true + touchpad_cursor_* persistence, 44-slot Quick Profile scales & Display hitbox parity */
+    {
+        /* 31a. .bak.tns backup files and icons/ folder are ignored by scanner without false E201 */
+        assert(nl_is_system_or_self("/documents/ndless/nlauncher.cfg.bak.tns", "/documents/ndless/N-Launcher.tns") == true);
+        assert(nl_is_system_or_self("/documents/ndless/nlauncher.profiles.bak.tns", "/documents/ndless/N-Launcher.tns") == true);
+
+        /* 31b. nl_bg_enable_hotkey_in_cfg updates global_hotkey=0 -> 1 while preserving other keys */
+        const char *test_cfg_path = "/tmp/nl_audit_hk_cfg.tns";
+        {
+            FILE *fp = fopen(test_cfg_path, "wb");
+            assert(fp != NULL);
+            fprintf(fp, "theme=3\nglobal_hotkey=0\nhotkey_combo=2\nlayout=2\n");
+            fclose(fp);
+        }
+        assert(nl_bg_enable_hotkey_in_cfg(test_cfg_path) == true);
+        {
+            bool hk_en = false;
+            nl_hk_combo_t hk_cb = NL_HK_COMBO_CTRL_MENU;
+            char hk_tgt[256] = "";
+            nl_bg_read_hotkey_cfg_ex(test_cfg_path, &hk_en, &hk_cb, hk_tgt, sizeof(hk_tgt));
+            assert(hk_en == true);
+            assert(hk_cb == NL_HK_COMBO_CTRL_SHIFT_MENU);
+            remove(test_cfg_path);
+        }
+
+        /* 31c. Newly created profiles default to show_shortcuts=true and persist touchpad_cursor_show + touchpad_cursor_style */
+        nl_state_t *ps = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(ps != NULL);
+        nl_init_state(ps);
+        int p1 = nl_profile_create(ps, "AuditUser", 14);
+        assert(p1 == 1);
+        assert(ps->profiles.active_index == p1);
+        assert(ps->profiles.items[p1].show_shortcuts == true);
+        assert(ps->profiles.items[p1].touchpad_cursor_show == false);
+        assert(ps->profiles.items[p1].touchpad_cursor_style == (int)NL_CURSOR_STYLE_ARROW);
+
+        assert(nl_profile_switch_to(ps, 0) == true);
+        assert(nl_profile_switch_to(ps, p1) == true);
+        ps->settings.touchpad_cursor_show = true;
+        ps->settings.touchpad_cursor_style = NL_CURSOR_STYLE_POINTER;
+        nl_profile_snapshot_active(ps);
+
+        const char *prof_audit_path = "/tmp/nl_audit_profiles.tns";
+        assert(nl_save_profiles(ps, prof_audit_path) == true);
+
+        nl_state_t *ps_load = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(ps_load != NULL);
+        nl_init_state(ps_load);
+        assert(nl_load_profiles(ps_load, prof_audit_path) == true);
+        assert(ps_load->profiles.active_index == p1);
+        assert(ps_load->settings.touchpad_cursor_show == true);
+        assert(ps_load->settings.touchpad_cursor_style == NL_CURSOR_STYLE_POINTER);
+        assert(ps_load->anim.switch_tp_cursor_fp == 256);
+        remove(prof_audit_path);
+
+        /* 31d. 43 profiles + '+' slot (44 slots total) in Quick Profile Selector animate & render cleanly */
+        for (int n = ps->profiles.count; n < NL_MAX_PROFILES; n++) {
+            int av = nl_avatar_first_free(ps);
+            assert(av >= 0);
+            char pname[16];
+            snprintf(pname, sizeof(pname), "P%d", n + 1);
+            assert(nl_profile_create(ps, pname, av) == n);
+        }
+        assert(ps->profiles.count == NL_MAX_PROFILES);
+        ps->sui.screen = NL_UI_LIBRARY;
+        ps->sui.qp_open = true;
+        ps->sui.qp_cursor = NL_MAX_PROFILES; /* Slot 43 ('+' slot) */
+        for (int step = 0; step < 8; step++) {
+            nl_anim_step(ps);
+            nl_render_frame(ps, fb);
+        }
+        assert(ps->anim.qp_slot_scale_fp[NL_MAX_PROFILES] > ps->anim.qp_slot_scale_fp[0]);
+
+        /* 31e. SETTINGS_DISPLAY 31px stride Mouse Mode hover verification */
+        ps->sui.qp_open = false;
+        ps->sui.screen = NL_UI_SETTINGS_DISPLAY;
+        ps->sui.display_scroll = 0;
+        ps->settings.touchpad_mode = NL_TP_MODE_MOUSE;
+        ps->settings.touchpad_cursor_show = true;
+        nl_mouse_move_to(ps, 160, 30 + 2 * 31 + 14);
+        assert(ps->sui.hover_valid == true);
+        assert(ps->sui.hover_kind == NL_HOVER_SET_ROW);
+        assert(ps->sui.hover_index == 2);
+
+        nl_free_icons(ps_load);
+        free(ps_load);
+        nl_free_icons(ps);
+        free(ps);
+        printf("[PASS] Section 31 A-to-Z Audit regressions (.bak.tns, hotkey cfg auto-enable, profile cursor persistence & 44-slot QP) verified.\n");
+    }
+
+    /* 32. #R11 Mouse Mode Physical Click, Independent Tap-to-Click, 3 Cursor Sizes x 3 Models & Perf/Cleanup */
+    {
+        /* 32a. Physical click works IMMEDIATELY after cursor slide without lifting finger, no double trigger */
+        nl_tp_click_guard_t cg;
+        nl_tp_click_reset(&cg);
+        const uint16_t pw = 2328, ph = 1691;
+        /* Slide finger across touchpad */
+        assert(nl_mouse_tp_poll(&cg, true, false, false, true, true, 600, 800, pw, ph) == NL_TP_ACT_NONE);
+        assert(nl_mouse_tp_poll(&cg, true, false, false, true, true, 1200, 900, pw, ph) == NL_TP_ACT_NONE);
+        assert(nl_mouse_tp_poll(&cg, true, false, false, true, true, 1700, 950, pw, ph) == NL_TP_ACT_NONE);
+        /* Physically click dome switch right at the end of the slide (even off-center!) */
+        assert(nl_mouse_tp_poll(&cg, true, true, false, true, true, 1700, 950, pw, ph) == NL_TP_ACT_PHYSICAL_CLICK);
+        /* Holding button does NOT double-fire */
+        assert(nl_mouse_tp_poll(&cg, true, true, false, true, true, 1700, 950, pw, ph) == NL_TP_ACT_NONE);
+        assert(nl_mouse_tp_poll(&cg, true, true, false, true, true, 1700, 950, pw, ph) == NL_TP_ACT_NONE);
+        /* Release button -> no spurious tap emitted after physical click */
+        assert(nl_mouse_tp_poll(&cg, true, false, false, true, true, 1700, 950, pw, ph) == NL_TP_ACT_NONE);
+        assert(nl_mouse_tp_poll(&cg, false, false, false, true, true, 1700, 950, pw, ph) == NL_TP_ACT_NONE);
+
+        /* 32b. Tap-to-Click ON: single short center tap triggers once, cooldown prevents double-tap */
+        nl_tp_click_reset(&cg);
+        assert(nl_mouse_tp_poll(&cg, true, false, false, true, true, 1164, 845, pw, ph) == NL_TP_ACT_NONE);
+        assert(nl_mouse_tp_poll(&cg, true, false, false, true, true, 1170, 850, pw, ph) == NL_TP_ACT_NONE);
+        assert(nl_mouse_tp_poll(&cg, false, false, false, true, true, 1170, 850, pw, ph) == NL_TP_ACT_TAP_CLICK);
+        /* Immediate bounce tap within cooldown (13 ticks) MUST be ignored */
+        assert(nl_mouse_tp_poll(&cg, true, false, false, true, true, 1164, 845, pw, ph) == NL_TP_ACT_NONE);
+        assert(nl_mouse_tp_poll(&cg, false, false, false, true, true, 1164, 845, pw, ph) == NL_TP_ACT_NONE);
+        /* Advance past cooldown */
+        for (int k = 0; k < 16; k++) {
+            assert(nl_mouse_tp_poll(&cg, false, false, false, true, true, 0, 0, pw, ph) == NL_TP_ACT_NONE);
+        }
+        /* Slide during contact MUST cancel tap */
+        assert(nl_mouse_tp_poll(&cg, true, false, false, true, true, 1000, 845, pw, ph) == NL_TP_ACT_NONE);
+        assert(nl_mouse_tp_poll(&cg, true, false, false, true, true, 1400, 845, pw, ph) == NL_TP_ACT_NONE);
+        assert(nl_mouse_tp_poll(&cg, false, false, false, true, true, 1400, 845, pw, ph) == NL_TP_ACT_NONE);
+
+        /* 32c. Tap-to-Click OFF: center tap is ignored, while physical click STILL works! */
+        nl_tp_click_reset(&cg);
+        assert(nl_mouse_tp_poll(&cg, true, false, false, true, false, 1164, 845, pw, ph) == NL_TP_ACT_NONE);
+        assert(nl_mouse_tp_poll(&cg, false, false, false, true, false, 1164, 845, pw, ph) == NL_TP_ACT_NONE);
+        assert(nl_mouse_tp_poll(&cg, true, true, true, true, false, 1164, 845, pw, ph) == NL_TP_ACT_PHYSICAL_CLICK);
+
+        /* 32d. All 3 cursor models x 3 proportional sizes: exact metrics, hotspots & safe rendering */
+        static const nl_cursor_style_t all_styles[3] = {
+            NL_CURSOR_STYLE_ARROW, NL_CURSOR_STYLE_CIRCLE, NL_CURSOR_STYLE_POINTER
+        };
+        static const nl_cursor_size_t all_sizes[3] = {
+            NL_CURSOR_SIZE_SMALL, NL_CURSOR_SIZE_MEDIUM, NL_CURSOR_SIZE_LARGE
+        };
+        for (int m = 0; m < 3; m++) {
+            int prev_w = 0, prev_h = 0;
+            for (int sz = 0; sz < 3; sz++) {
+                int w = 0, h = 0, hx = 0, hy = 0;
+                nl_cursor_get_size_metrics(all_styles[m], all_sizes[sz], &w, &h, &hx, &hy);
+                assert(w > prev_w && h > prev_h);
+                assert(hx >= 0 && hx < w && hy >= 0 && hy < h);
+                prev_w = w;
+                prev_h = h;
+            }
+        }
+
+        /* 32e. Touchpad Settings Tab 0 (7 scrollable rows) + Tab 1 (Model + Size cards) + Independence + Persistence */
+        nl_state_t *ms = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(ms != NULL);
+        nl_init_state(ms);
+        ms->settings.touchpad_mode = NL_TP_MODE_MOUSE;
+        ms->settings.touchpad_cursor_show = true;
+        ms->sui.screen = NL_UI_SETTINGS_TOUCHPAD;
+        ms->sui.tp_tab = 0;
+        ms->sui.tp_cursor = 0;
+        ms->sui.tp_scroll = 0;
+        ms->anim.set_open_fp = 256;
+        ms->anim.set_last_screen = NL_UI_SETTINGS_TOUCHPAD;
+
+        /* Navigate down through all 7 rows verifying scroll 0 -> 2 */
+        for (int r = 1; r <= 6; r++) {
+            assert(nl_handle_key(ms, NL_KEY_DOWN) == true);
+            assert(ms->sui.tp_cursor == r);
+        }
+        assert(ms->sui.tp_scroll == 2);
+
+        /* Row 5 = Taille du curseur (move up 1 from Row 6) */
+        assert(nl_handle_key(ms, NL_KEY_UP) == true);
+        assert(ms->sui.tp_cursor == 5);
+        assert(ms->settings.cursor_size == NL_CURSOR_SIZE_MEDIUM);
+        assert(nl_handle_key(ms, NL_KEY_RIGHT) == true);
+        assert(ms->settings.cursor_size == NL_CURSOR_SIZE_LARGE);
+        /* Verify changing size did NOT alter model, speed, sensitivity, or tap_to_click */
+        assert(ms->settings.touchpad_cursor_style == NL_CURSOR_STYLE_ARROW);
+        assert(ms->settings.cursor_speed == 2);
+        assert(ms->settings.touchpad_sensitivity == 2);
+        assert(ms->settings.tap_to_click == false);
+
+        /* Row 4 = Tapotement pour cliquer (move up 1) -> toggle ON (OUI) */
+        assert(nl_handle_key(ms, NL_KEY_UP) == true);
+        assert(ms->sui.tp_cursor == 4);
+        assert(nl_handle_key(ms, NL_KEY_EXE) == true);
+        assert(ms->settings.tap_to_click == true);
+        assert(ms->settings.cursor_size == NL_CURSOR_SIZE_LARGE);
+
+        /* Switch to Tab 1 (Personnaliser le curseur), click Pointer model (index 2) & Small size (index 0) */
+        assert(nl_handle_key(ms, NL_KEY_TAB) == true);
+        assert(ms->sui.tp_tab == 1);
+        nl_mouse_move_to(ms, 14 + 2 * 101 + 45, 90);
+        assert(ms->sui.hover_kind == NL_HOVER_SET_STYLE_CARD && ms->sui.hover_index == 2);
+        assert(nl_mouse_click(ms) == true);
+        assert(ms->settings.touchpad_cursor_style == NL_CURSOR_STYLE_POINTER);
+        assert(ms->settings.cursor_size == NL_CURSOR_SIZE_LARGE); /* Model change preserves size */
+
+        nl_mouse_move_to(ms, 14 + 0 * 101 + 45, 175);
+        assert(ms->sui.hover_kind == NL_HOVER_SET_SIZE_CARD && ms->sui.hover_index == 0);
+        assert(nl_mouse_click(ms) == true);
+        assert(ms->settings.cursor_size == NL_CURSOR_SIZE_SMALL);
+        assert(ms->settings.touchpad_cursor_style == NL_CURSOR_STYLE_POINTER); /* Size change preserves model */
+
+        /* Render all 9 model x size combinations including screen corners (0,0) and (319,239) */
+        for (int m = 0; m < 3; m++) {
+            for (int sz = 0; sz < 3; sz++) {
+                ms->settings.touchpad_cursor_style = all_styles[m];
+                ms->settings.cursor_size = all_sizes[sz];
+                nl_mouse_move_to(ms, 0, 0);
+                nl_render_frame(ms, fb);
+                nl_mouse_move_to(ms, 319, 239);
+                nl_render_frame(ms, fb);
+            }
+        }
+
+        /* Restore Pointer + Small + tap_to_click=true (all non-default) and verify full persistence across cfg + profiles */
+        ms->settings.touchpad_cursor_style = NL_CURSOR_STYLE_POINTER;
+        ms->settings.cursor_size = NL_CURSOR_SIZE_SMALL;
+        ms->settings.tap_to_click = true;
+        ms->settings.cursor_speed = 4;
+        nl_profile_snapshot_active(ms);
+
+        const char *r11_cfg = "/tmp/nl_r11_mouse_cfg.tns";
+        const char *r11_prof = "/tmp/nl_r11_mouse_prof.tns";
+        assert(nl_save_config(ms, r11_cfg) == true);
+        assert(nl_save_profiles(ms, r11_prof) == true);
+
+        nl_state_t *ms_re = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(ms_re != NULL);
+        nl_init_state(ms_re);
+        assert(nl_load_config(ms_re, r11_cfg) == true);
+        assert(ms_re->settings.touchpad_cursor_style == NL_CURSOR_STYLE_POINTER);
+        assert(ms_re->settings.cursor_size == NL_CURSOR_SIZE_SMALL);
+        assert(ms_re->settings.tap_to_click == true);
+        assert(ms_re->settings.cursor_speed == 4);
+
+        nl_init_state(ms_re);
+        assert(nl_load_profiles(ms_re, r11_prof) == true);
+        assert(ms_re->settings.touchpad_cursor_style == NL_CURSOR_STYLE_POINTER);
+        assert(ms_re->settings.cursor_size == NL_CURSOR_SIZE_SMALL);
+        assert(ms_re->settings.tap_to_click == true);
+        assert(ms_re->settings.cursor_speed == 4);
+
+        remove(r11_cfg);
+        remove(r11_prof);
+        nl_free_icons(ms_re);
+        free(ms_re);
+        nl_free_icons(ms);
+        free(ms);
+        printf("[PASS] Section 32 #R11 Mouse Mode (physical click + tap-to-click), 3 cursor sizes x 3 models & persistence verified.\n");
+    }
+
+    /* =====================================================================
+     * 33. #R12 COMPLETE TEST MATRIX A-G:
+     *     DECOUPLED ICONS (0 / 1 / 78 DIVERSE ICONS / DELETE ICONS),
+     *     ICON-INDEPENDENT LIBRARY INDEX (nlauncher.lib.tns),
+     *     TRANSACTIONAL ZERO-RECURSION RESCAN + EMPTY-SCAN GUARD,
+     *     CONSECUTIVE RESTARTS + AUTO STARTUP SCAN & ERROR RESILIENCE
+     * ===================================================================== */
+    {
+        const char *r12_root = "/tmp/nl_r12_matrix_fs";
+        assert(system("rm -rf /tmp/nl_r12_matrix_fs && mkdir -p /tmp/nl_r12_matrix_fs/ndless/icons /tmp/nl_r12_matrix_fs/ndless/covers /tmp/nl_r12_matrix_fs/games /tmp/nl_r12_matrix_fs/MesJeuxPerso") == 0);
+        const char *r12_self = "/tmp/nl_r12_matrix_fs/ndless/N-Launcher.tns";
+        const char *r12_lib  = "/tmp/nl_r12_matrix_fs/ndless/nlauncher.lib.tns";
+        const char *r12_cfg  = "/tmp/nl_r12_matrix_fs/ndless/nlauncher.cfg.tns";
+        const char *r12_prof = "/tmp/nl_r12_matrix_fs/ndless/nlauncher.profiles.tns";
+        const char *r12_cache = "/tmp/nl_r12_matrix_fs/ndless/nlauncher.cache.tns";
+        create_mock_zehn_tns(r12_self, "N-Launcher", "daniel.b", 3, true, true, 0);
+
+        /* --- TEST A: 0 icons -> games discovered, persisted, rendered & launchable --- */
+        for (int i = 0; i < 6; i++) {
+            char gp[256], title[32];
+            snprintf(gp, sizeof(gp), "%s/games/Game_%02d.tns", r12_root, i + 1);
+            snprintf(title, sizeof(title), "Game%02d", i + 1);
+            create_mock_zehn_tns(gp, title, "Dev", 1, true, false, 0);
+        }
+
+        nl_state_t *stA = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(stA != NULL);
+        nl_init_state(stA);
+        snprintf(stA->covers_dir, sizeof(stA->covers_dir), "%s/ndless/covers", r12_root);
+        snprintf(stA->icons_dir, sizeof(stA->icons_dir), "%s/ndless/icons", r12_root);
+        snprintf(stA->lib_path, sizeof(stA->lib_path), "%s", r12_lib);
+        nl_folder_seed_defaults(&stA->folders, r12_root);
+        assert(nl_transactional_scan(stA, r12_root, r12_self, true, false, NULL, NULL) == true);
+        assert(stA->total_games == 6);
+        nl_load_all_icons(stA);
+        for (int i = 0; i < 6; i++) {
+            assert(stA->games[i].icon_source == NL_ICON_NONE);
+            assert(stA->games[i].icon_pixels == NULL);
+        }
+        nl_rebuild_filter(stA);
+        nl_render_frame(stA, fb);
+        assert(nl_handle_key(stA, NL_KEY_EXE) == true);
+        assert(stA->launch_requested == true && stA->launch_game_idx >= 0);
+        stA->launch_requested = false;
+        assert(nl_save_library_index(stA, r12_lib) == true);
+        nl_free_icons(stA);
+        free(stA);
+        printf("[PASS] #R12 Test A: 0 icons -> 6 games visible, rendered & launchable.\n");
+
+        /* --- TEST B: 1 icon -> matching game shows icon, all 5 others stay visible & launchable --- */
+        {
+            char ico1[256];
+            snprintf(ico1, sizeof(ico1), "%s/ndless/icons/Game_01.ico.tns", r12_root);
+            FILE *fp = fopen(ico1, "wb");
+            assert(fp != NULL);
+            uint8_t ihdr[22] = {0,0, 1,0, 1,0, 32,32,0,0, 1,0, 32,0, 0,0,0,0, 22,0,0,0};
+            uint32_t img_sz = 40U + 32U * 32U * 4U;
+            ihdr[14] = (uint8_t)(img_sz & 0xFFU);
+            ihdr[15] = (uint8_t)((img_sz >> 8) & 0xFFU);
+            ihdr[16] = (uint8_t)((img_sz >> 16) & 0xFFU);
+            fwrite(ihdr, 1, sizeof(ihdr), fp);
+            uint8_t bih[40];
+            memset(bih, 0, sizeof(bih));
+            bih[0] = 40; bih[4] = 32; bih[8] = 64; bih[12] = 1; bih[14] = 32;
+            fwrite(bih, 1, 40, fp);
+            for (int p = 0; p < 32 * 32; p++) {
+                uint8_t bgra[4] = { 220, 140, 40, 255 };
+                fwrite(bgra, 1, 4, fp);
+            }
+            fclose(fp);
+        }
+        nl_state_t *stB = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(stB != NULL);
+        nl_init_state(stB);
+        snprintf(stB->covers_dir, sizeof(stB->covers_dir), "%s/ndless/covers", r12_root);
+        snprintf(stB->icons_dir, sizeof(stB->icons_dir), "%s/ndless/icons", r12_root);
+        assert(nl_load_library_index(stB, r12_lib) == true);
+        assert(stB->total_games == 6);
+        nl_load_all_icons(stB);
+        int ico_with = 0, ico_generic = 0;
+        for (int i = 0; i < stB->total_games; i++) {
+            if (stB->games[i].icon_source == NL_ICON_ICO && stB->games[i].icon_pixels != NULL) ico_with++;
+            else ico_generic++;
+        }
+        assert(ico_with == 1 && ico_generic == 5);
+        nl_rebuild_filter(stB);
+        nl_render_frame(stB, fb);
+        nl_free_icons(stB);
+        free(stB);
+        printf("[PASS] #R12 Test B: 1 icon -> 1 custom icon + 5 generic fallback games.\n");
+
+        /* --- TEST C: 78 realistic diverse icons (32bpp, 256x256 oversized, 24bpp, 8bpp, 4bpp, PNG-in-ICO) --- */
+        assert(system("rm -f /tmp/nl_r12_matrix_fs/games/*.tns /tmp/nl_r12_matrix_fs/ndless/icons/*") == 0);
+        for (int i = 0; i < 78; i++) {
+            char gp[256], ip[256], title[32];
+            snprintf(gp, sizeof(gp), "%s/games/Title_%02d.tns", r12_root, i + 1);
+            snprintf(title, sizeof(title), "Title%02d", i + 1);
+            create_mock_zehn_tns(gp, title, "Author", 1, true, false, 0);
+
+            snprintf(ip, sizeof(ip), "%s/ndless/icons/Title_%02d.ico.tns", r12_root, i + 1);
+            FILE *fp = fopen(ip, "wb");
+            assert(fp != NULL);
+            int variant = i % 6;
+            if (variant == 0 || variant == 1) {
+                /* 32bpp RGBA ICO: 64x64 (variant 0) or 256x256 oversized (variant 1) */
+                int dim = (variant == 0) ? 64 : 256;
+                uint32_t img_sz = 40U + (uint32_t)dim * (uint32_t)dim * 4U;
+                uint8_t ihdr[22] = {0,0, 1,0, 1,0, (uint8_t)(dim == 256 ? 0 : dim), (uint8_t)(dim == 256 ? 0 : dim), 0,0, 1,0, 32,0,
+                                    (uint8_t)(img_sz & 0xFFU), (uint8_t)((img_sz >> 8) & 0xFFU),
+                                    (uint8_t)((img_sz >> 16) & 0xFFU), (uint8_t)((img_sz >> 24) & 0xFFU),
+                                    22,0,0,0};
+                fwrite(ihdr, 1, sizeof(ihdr), fp);
+                uint8_t bih[40];
+                memset(bih, 0, sizeof(bih));
+                bih[0] = 40;
+                bih[4] = (uint8_t)(dim & 0xFF); bih[5] = (uint8_t)((dim >> 8) & 0xFF);
+                int h2 = dim * 2;
+                bih[8] = (uint8_t)(h2 & 0xFF); bih[9] = (uint8_t)((h2 >> 8) & 0xFF);
+                bih[12] = 1; bih[14] = 32;
+                fwrite(bih, 1, 40, fp);
+                uint8_t row_px[256 * 4];
+                for (int y = 0; y < dim; y++) {
+                    for (int x = 0; x < dim; x++) {
+                        row_px[x * 4 + 0] = (uint8_t)((i * 19 + x) & 0xFF);
+                        row_px[x * 4 + 1] = (uint8_t)((i * 37 + y) & 0xFF);
+                        row_px[x * 4 + 2] = (uint8_t)((i * 53 + x + y) & 0xFF);
+                        row_px[x * 4 + 3] = 255;
+                    }
+                    fwrite(row_px, 1, (size_t)dim * 4U, fp);
+                }
+            } else if (variant == 2) {
+                /* 24bpp RGB ICO + AND mask (48x48) */
+                int dim = 48;
+                uint32_t xor_row = (((uint32_t)dim * 24U + 31U) / 32U) * 4U;
+                uint32_t and_row = (((uint32_t)dim + 31U) / 32U) * 4U;
+                uint32_t img_sz = 40U + xor_row * (uint32_t)dim + and_row * (uint32_t)dim;
+                uint8_t ihdr[22] = {0,0, 1,0, 1,0, 48,48, 0,0, 1,0, 24,0,
+                                    (uint8_t)(img_sz & 0xFFU), (uint8_t)((img_sz >> 8) & 0xFFU),
+                                    (uint8_t)((img_sz >> 16) & 0xFFU), 0, 22,0,0,0};
+                fwrite(ihdr, 1, sizeof(ihdr), fp);
+                uint8_t bih[40];
+                memset(bih, 0, sizeof(bih));
+                bih[0] = 40; bih[4] = 48; bih[8] = 96; bih[12] = 1; bih[14] = 24;
+                fwrite(bih, 1, 40, fp);
+                for (int y = 0; y < dim; y++) {
+                    for (int x = 0; x < dim; x++) {
+                        uint8_t bgr[3] = {(uint8_t)(x * 4), (uint8_t)(y * 4), (uint8_t)(i * 3)};
+                        fwrite(bgr, 1, 3, fp);
+                    }
+                }
+                uint8_t and_zero[16];
+                memset(and_zero, 0, sizeof(and_zero));
+                for (int y = 0; y < dim; y++) fwrite(and_zero, 1, and_row, fp);
+            } else if (variant == 3) {
+                /* 8bpp indexed palette ICO + AND mask (32x32) */
+                int dim = 32;
+                uint32_t img_sz = 40U + 256U * 4U + 32U * 32U + 32U * 4U;
+                uint8_t ihdr[22] = {0,0, 1,0, 1,0, 32,32, 0,0, 1,0, 8,0,
+                                    (uint8_t)(img_sz & 0xFFU), (uint8_t)((img_sz >> 8) & 0xFFU), 0,0, 22,0,0,0};
+                fwrite(ihdr, 1, sizeof(ihdr), fp);
+                uint8_t bih[40];
+                memset(bih, 0, sizeof(bih));
+                bih[0] = 40; bih[4] = 32; bih[8] = 64; bih[12] = 1; bih[14] = 8;
+                fwrite(bih, 1, 40, fp);
+                for (int c = 0; c < 256; c++) {
+                    uint8_t pal[4] = {(uint8_t)c, (uint8_t)(255 - c), (uint8_t)((c * 3) & 0xFF), 0};
+                    fwrite(pal, 1, 4, fp);
+                }
+                for (int p = 0; p < dim * dim; p++) {
+                    uint8_t idx = (uint8_t)((p + i) & 0xFF);
+                    fwrite(&idx, 1, 1, fp);
+                }
+                uint8_t and_z[32 * 4];
+                memset(and_z, 0, sizeof(and_z));
+                fwrite(and_z, 1, sizeof(and_z), fp);
+            } else if (variant == 4) {
+                /* 4bpp indexed palette ICO + AND mask (32x32) */
+                int dim = 32;
+                uint32_t img_sz = 40U + 16U * 4U + 32U * 16U + 32U * 4U;
+                uint8_t ihdr[22] = {0,0, 1,0, 1,0, 32,32, 16,0, 1,0, 4,0,
+                                    (uint8_t)(img_sz & 0xFFU), (uint8_t)((img_sz >> 8) & 0xFFU), 0,0, 22,0,0,0};
+                fwrite(ihdr, 1, sizeof(ihdr), fp);
+                uint8_t bih[40];
+                memset(bih, 0, sizeof(bih));
+                bih[0] = 40; bih[4] = 32; bih[8] = 64; bih[12] = 1; bih[14] = 4; bih[32] = 16;
+                fwrite(bih, 1, 40, fp);
+                for (int c = 0; c < 16; c++) {
+                    uint8_t pal[4] = {(uint8_t)(c * 16), (uint8_t)(240 - c * 14), (uint8_t)(c * 12), 0};
+                    fwrite(pal, 1, 4, fp);
+                }
+                for (int p = 0; p < dim * 16; p++) {
+                    uint8_t b = (uint8_t)(((p & 15) << 4) | ((p + i) & 15));
+                    fwrite(&b, 1, 1, fp);
+                }
+                uint8_t and_z[32 * 4];
+                memset(and_z, 0, sizeof(and_z));
+                fwrite(and_z, 1, sizeof(and_z), fp);
+            } else {
+                /* Variant 5: Valid PNG-in-ICO (16x16 RGBA stored DEFLATE block inside zlib) */
+                const uint32_t w = 16, h = 16;
+                uint8_t raw[16 * (1 + 16 * 4)];
+                for (uint32_t y = 0; y < h; y++) {
+                    raw[y * 65] = 0; /* filter None */
+                    for (uint32_t x = 0; x < w; x++) {
+                        uint8_t *px = raw + y * 65 + 1 + x * 4;
+                        px[0] = (uint8_t)(40 + x * 12);
+                        px[1] = (uint8_t)(60 + y * 10);
+                        px[2] = (uint8_t)((i * 7) & 0xFF);
+                        px[3] = 255;
+                    }
+                }
+                uint32_t raw_len = (uint32_t)sizeof(raw);
+                uint32_t s1 = 1U, s2 = 0U;
+                for (uint32_t k = 0; k < raw_len; k++) {
+                    s1 = (s1 + raw[k]) % 65521U;
+                    s2 = (s2 + s1) % 65521U;
+                }
+                uint32_t adler = (s2 << 16) | s1;
+                uint32_t z_len = 2U + 5U + raw_len + 4U;
+                uint32_t png_len = 8U + (12U + 13U) + (12U + z_len) + 12U;
+
+                uint8_t ihdr[22] = {0,0, 1,0, 1,0, 16,16, 0,0, 1,0, 32,0,
+                                    (uint8_t)(png_len & 0xFFU), (uint8_t)((png_len >> 8) & 0xFFU), 0,0, 22,0,0,0};
+                fwrite(ihdr, 1, sizeof(ihdr), fp);
+                static const uint8_t png_sig[8] = {0x89,'P','N','G',0x0D,0x0A,0x1A,0x0A};
+                fwrite(png_sig, 1, 8, fp);
+                /* IHDR chunk */
+                uint8_t ihdr_c[25] = {0,0,0,13, 'I','H','D','R', 0,0,0,16, 0,0,0,16, 8, 6, 0, 0, 0, 0,0,0,0};
+                fwrite(ihdr_c, 1, 25, fp);
+                /* IDAT chunk */
+                uint8_t idat_hdr[8] = {
+                    (uint8_t)((z_len >> 24) & 0xFFU), (uint8_t)((z_len >> 16) & 0xFFU),
+                    (uint8_t)((z_len >> 8) & 0xFFU), (uint8_t)(z_len & 0xFFU),
+                    'I','D','A','T'
+                };
+                fwrite(idat_hdr, 1, 8, fp);
+                uint8_t zhdr[7] = {0x78, 0x01, 0x01,
+                                   (uint8_t)(raw_len & 0xFFU), (uint8_t)((raw_len >> 8) & 0xFFU),
+                                   (uint8_t)((~raw_len) & 0xFFU), (uint8_t)(((~raw_len) >> 8) & 0xFFU)};
+                fwrite(zhdr, 1, 7, fp);
+                fwrite(raw, 1, raw_len, fp);
+                uint8_t adler_be[4] = {(uint8_t)(adler >> 24), (uint8_t)(adler >> 16), (uint8_t)(adler >> 8), (uint8_t)adler};
+                fwrite(adler_be, 1, 4, fp);
+                uint8_t dummy_crc[4] = {0,0,0,0};
+                fwrite(dummy_crc, 1, 4, fp);
+                /* IEND chunk */
+                uint8_t iend_c[12] = {0,0,0,0, 'I','E','N','D', 0,0,0,0};
+                fwrite(iend_c, 1, 12, fp);
+            }
+            fclose(fp);
+        }
+
+        nl_state_t *stC = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(stC != NULL);
+        nl_init_state(stC);
+        snprintf(stC->covers_dir, sizeof(stC->covers_dir), "%s/ndless/covers", r12_root);
+        snprintf(stC->icons_dir, sizeof(stC->icons_dir), "%s/ndless/icons", r12_root);
+        snprintf(stC->lib_path, sizeof(stC->lib_path), "%s", r12_lib);
+        snprintf(stC->profiles_path, sizeof(stC->profiles_path), "%s", r12_prof);
+        nl_profiles_init_default(stC);
+        nl_folder_seed_defaults(&stC->folders, r12_root);
+        assert(nl_transactional_scan(stC, r12_root, r12_self, true, false, NULL, NULL) == true);
+        assert(stC->total_games == 78);
+        nl_load_all_icons(stC);
+        int loaded_78 = 0;
+        for (int i = 0; i < 78; i++) {
+            assert(stC->games[i].icon_source == NL_ICON_ICO);
+            assert(stC->games[i].icon_pixels != NULL);
+            assert(stC->games[i].icon_w <= NL_ICON_MAX_DIM && stC->games[i].icon_h <= NL_ICON_MAX_DIM);
+            loaded_78++;
+        }
+        assert(loaded_78 == 78);
+        assert(stC->icon_ram_bytes > 0U && stC->icon_ram_bytes <= NL_ICON_RAM_BUDGET);
+        /* Mark 3 favorites & create a second profile to verify preservation */
+        stC->games[0].is_favorite = true;
+        stC->games[10].is_favorite = true;
+        stC->games[77].is_favorite = true;
+        nl_profile_snapshot_active(stC);
+        assert(nl_save_library_index(stC, r12_lib) == true);
+        assert(nl_save_config(stC, r12_cfg) == true);
+        assert(nl_save_profiles(stC, r12_prof) == true);
+        nl_rebuild_filter(stC);
+        /* Render multiple pages of the 78-game grid */
+        for (int pg = 0; pg < 3; pg++) {
+            nl_render_frame(stC, fb);
+            nl_handle_key(stC, NL_KEY_PAGE_NEXT);
+        }
+        nl_free_icons(stC);
+        free(stC);
+        printf("[PASS] #R12 Test C: 78 diverse icons (32bpp/256px/24bpp/8bpp/4bpp/PNG-in-ICO) loaded safely within RAM budget.\n");
+
+        /* --- TEST D: Delete ALL 78 icons & icons directory -> restart -> ALL 78 games remain visible & launchable --- */
+        assert(system("rm -rf /tmp/nl_r12_matrix_fs/ndless/icons") == 0);
+        nl_state_t *stD = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(stD != NULL);
+        nl_init_state(stD);
+        snprintf(stD->covers_dir, sizeof(stD->covers_dir), "%s/ndless/covers", r12_root);
+        snprintf(stD->icons_dir, sizeof(stD->icons_dir), "%s/ndless/icons", r12_root);
+        snprintf(stD->lib_path, sizeof(stD->lib_path), "%s", r12_lib);
+        snprintf(stD->profiles_path, sizeof(stD->profiles_path), "%s", r12_prof);
+        assert(nl_load_config(stD, r12_cfg) == true);
+        assert(nl_load_profiles(stD, r12_prof) == true);
+        assert(nl_load_library_index(stD, r12_lib) == true);
+        assert(stD->total_games == 78);
+        assert(nl_transactional_scan(stD, r12_root, r12_self, true, false, NULL, NULL) == true);
+        nl_profile_apply_active(stD);
+        nl_load_all_icons(stD);
+        assert(stD->total_games == 78);
+        int fav_after_del = 0;
+        for (int i = 0; i < 78; i++) {
+            assert(stD->games[i].icon_source == NL_ICON_NONE);
+            assert(stD->games[i].icon_pixels == NULL);
+            assert(nl_file_exists(stD->games[i].path) == true);
+            if (stD->games[i].is_favorite) fav_after_del++;
+        }
+        assert(fav_after_del == 3);
+        nl_rebuild_filter(stD);
+        nl_render_frame(stD, fb);
+        assert(nl_handle_key(stD, NL_KEY_EXE) == true);
+        assert(stD->launch_requested == true && stD->launch_game_idx >= 0);
+        stD->launch_requested = false;
+        printf("[PASS] #R12 Test D: Deleting all 78 icons & icons dir preserves all 78 games, favorites & launchability.\n");
+
+        /* --- TEST E: « Rescanner les jeux » repeatable 5x + progress UI + empty-scan confirmation guard --- */
+        stD->sui.screen = NL_UI_SETTINGS_MAIN;
+        stD->sui.menu_cursor = NL_SET_MENU_REFRESH_LIB;
+        assert(nl_handle_key(stD, NL_KEY_EXE) == true);
+        assert(stD->sui.screen == NL_UI_SETTINGS_RESCAN);
+        assert(stD->sui.rescan_req == true);
+        for (int rep = 0; rep < 5; rep++) {
+            stD->sui.rescan_req = false;
+            assert(nl_transactional_scan(stD, r12_root, r12_self, false, false, NULL, NULL) == true);
+            nl_profile_apply_active(stD);
+            nl_load_all_icons(stD);
+            assert(stD->total_games == 78);
+            assert(stD->scan.finished == true);
+            assert(stD->scan.empty_confirm_pending == false);
+            assert(stD->profiles.initialized == true && stD->profiles.count >= 1);
+            nl_render_frame(stD, fb);
+            /* Pressing DEL inside NL_UI_SETTINGS_RESCAN triggers another repeatable rescan */
+            assert(nl_handle_key(stD, NL_KEY_RESCAN) == true);
+            assert(stD->sui.rescan_req == true);
+        }
+        /* Now delete all games -> manual rescan MUST trigger empty_confirm_pending & preserve existing 78 games! */
+        assert(system("rm -f /tmp/nl_r12_matrix_fs/games/*.tns") == 0);
+        assert(nl_transactional_scan(stD, r12_root, r12_self, false, false, NULL, NULL) == true);
+        assert(stD->scan.empty_confirm_pending == true);
+        assert(stD->scan.empty_confirm_replace == false); /* Safe default = Conserver */
+        assert(stD->total_games == 78); /* Library untouched! */
+        nl_render_frame(stD, fb);
+        /* Press EXE on default "Conserver" -> keeps all 78 games */
+        assert(nl_handle_key(stD, NL_KEY_EXE) == true);
+        assert(stD->scan.empty_confirm_pending == false);
+        assert(stD->total_games == 78);
+        /* Run rescan again & explicitly choose "Remplacer" -> empties library cleanly */
+        assert(nl_transactional_scan(stD, r12_root, r12_self, false, false, NULL, NULL) == true);
+        assert(stD->scan.empty_confirm_pending == true);
+        assert(nl_handle_key(stD, NL_KEY_RIGHT) == true);
+        assert(stD->scan.empty_confirm_replace == true);
+        assert(nl_handle_key(stD, NL_KEY_EXE) == true);
+        assert(stD->scan.commit_empty_req == true);
+        assert(stD->total_games == 0);
+        nl_free_icons(stD);
+        free(stD);
+        printf("[PASS] #R12 Test E: Rescanner les jeux repeatable 5x + progress/summary UI + empty-scan guard verified.\n");
+
+        /* --- TEST F: 4 consecutive restarts + custom memorized folder + startup auto-scan add/remove --- */
+        {
+            char g1[256], g2[256], g3[256];
+            snprintf(g1, sizeof(g1), "%s/MesJeuxPerso/Alpha.tns", r12_root);
+            snprintf(g2, sizeof(g2), "%s/MesJeuxPerso/Beta.tns", r12_root);
+            snprintf(g3, sizeof(g3), "%s/MesJeuxPerso/Gamma.tns", r12_root);
+            create_mock_zehn_tns(g1, "Alpha", "Dev", 1, true, false, 0);
+            create_mock_zehn_tns(g2, "Beta", "Dev", 1, true, false, 0);
+
+            nl_state_t *stF = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+            assert(stF != NULL);
+            nl_init_state(stF);
+            snprintf(stF->lib_path, sizeof(stF->lib_path), "%s", r12_lib);
+            snprintf(stF->profiles_path, sizeof(stF->profiles_path), "%s", r12_prof);
+            nl_profiles_init_default(stF);
+            int p_custom = nl_profile_create(stF, "Daniel", 5);
+            assert(p_custom == 1);
+            nl_folder_seed_defaults(&stF->folders, r12_root);
+            assert(nl_transactional_scan(stF, r12_root, r12_self, true, false, NULL, NULL) == true);
+            assert(stF->total_games == 2);
+            /* Custom folder /tmp/nl_r12_matrix_fs/MesJeuxPerso must be automatically memorized */
+            bool has_custom_dir = false;
+            for (int f = 0; f < stF->folders.count; f++) {
+                if (strstr(stF->folders.paths[f], "MesJeuxPerso") != NULL) has_custom_dir = true;
+            }
+            assert(has_custom_dir == true);
+            stF->games[0].is_favorite = true;
+            nl_profile_snapshot_active(stF);
+            assert(nl_save_library_index(stF, r12_lib) == true);
+            assert(nl_save_config(stF, r12_cfg) == true);
+            assert(nl_save_profiles(stF, r12_prof) == true);
+            nl_free_icons(stF);
+            free(stF);
+
+            /* 4 consecutive cold restarts:
+             * Boot 1: unchanged (2 games, 1 fav, custom profile)
+             * Boot 2: add Gamma.tns -> startup scan detects +1 (3 games)
+             * Boot 3: remove Beta.tns -> startup scan detects -1 (2 games)
+             * Boot 4: delete cache (binary reinstall) -> library & custom folder preserved */
+            for (int boot = 1; boot <= 4; boot++) {
+                if (boot == 2) create_mock_zehn_tns(g3, "Gamma", "Dev", 1, true, false, 0);
+                if (boot == 3) unlink(g2);
+                if (boot == 4) unlink(r12_cache);
+
+                nl_state_t *sb = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+                assert(sb != NULL);
+                nl_init_state(sb);
+                snprintf(sb->lib_path, sizeof(sb->lib_path), "%s", r12_lib);
+                snprintf(sb->profiles_path, sizeof(sb->profiles_path), "%s", r12_prof);
+                assert(nl_load_config(sb, r12_cfg) == true);
+                assert(nl_load_profiles(sb, r12_prof) == true);
+                assert(nl_load_library_index(sb, r12_lib) == true);
+                assert(nl_transactional_scan(sb, r12_root, r12_self, true, false, NULL, NULL) == true);
+                nl_profile_apply_active(sb);
+                assert(sb->profiles.active_index == 1);
+                assert(strcmp(sb->profiles.items[1].name, "Daniel") == 0);
+                if (boot == 1) assert(sb->total_games == 2);
+                if (boot == 2) assert(sb->total_games == 3 && sb->scan.games_added == 1);
+                if (boot == 3) assert(sb->total_games == 2 && sb->scan.games_removed == 1);
+                if (boot == 4) assert(sb->total_games == 2);
+                assert(nl_save_library_index(sb, r12_lib) == true);
+                nl_free_icons(sb);
+                free(sb);
+            }
+        }
+        printf("[PASS] #R12 Test F: 4 consecutive restarts + memorized folders + startup auto-scan add/remove verified.\n");
+
+        /* --- TEST G: Error resilience (corrupt/malicious ICOs, INT32_MIN, overflow, corrupt lib/cache/cfg, missing dir) --- */
+        {
+            assert(system("mkdir -p /tmp/nl_r12_matrix_fs/ndless/icons") == 0);
+            nl_state_t *stG = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+            assert(stG != NULL);
+            nl_init_state(stG);
+            snprintf(stG->covers_dir, sizeof(stG->covers_dir), "%s/ndless/covers", r12_root);
+            snprintf(stG->icons_dir, sizeof(stG->icons_dir), "%s/ndless/icons", r12_root);
+            nl_diag_init(stG, r12_root);
+
+            /* G1. Missing saved folder -> logged cleanly, zero crash */
+            nl_folder_add(&stG->folders, "/tmp/nl_r12_matrix_fs/DossierSupprimeInexistant");
+            assert(nl_transactional_scan(stG, r12_root, r12_self, false, false, NULL, NULL) == true);
+            assert(stG->total_games == 2);
+
+            /* G2. Malicious ICO files (INT32_MIN height, uint32 offset overflow, invalid PNG bit depth, truncated) */
+            const char *mal_ico = "/tmp/nl_r12_matrix_fs/ndless/icons/Alpha.ico.tns";
+            /* Case 1: INT32_MIN height */
+            {
+                FILE *fp = fopen(mal_ico, "wb");
+                assert(fp != NULL);
+                uint8_t ihdr[22] = {0,0, 1,0, 1,0, 32,32, 0,0, 1,0, 32,0, 64,0,0,0, 22,0,0,0};
+                fwrite(ihdr, 1, 22, fp);
+                uint8_t bih[64];
+                memset(bih, 0, sizeof(bih));
+                bih[0] = 40; bih[4] = 32;
+                bih[11] = 0x80; /* bi_h_signed = INT32_MIN (0x80000000) */
+                bih[12] = 1; bih[14] = 32;
+                fwrite(bih, 1, sizeof(bih), fp);
+                fclose(fp);
+                assert(nl_load_game_icon_diag(stG, &stG->games[0], stG->covers_dir) == false);
+                assert(stG->games[0].icon_source == NL_ICON_NONE);
+            }
+            /* Case 2: uint32 img_offset + img_size overflow */
+            {
+                FILE *fp = fopen(mal_ico, "wb");
+                assert(fp != NULL);
+                uint8_t ihdr[22] = {0,0, 1,0, 1,0, 32,32, 0,0, 1,0, 32,0, 0x00,0x01,0x00,0x00, 0xF0,0xFF,0xFF,0xFF};
+                fwrite(ihdr, 1, 22, fp);
+                fclose(fp);
+                assert(nl_load_game_icon_diag(stG, &stG->games[0], stG->covers_dir) == false);
+            }
+            /* Case 3: Invalid PNG-in-ICO (color_type=3 palette with bit_depth=16, illegal per RFC 2083) */
+            {
+                FILE *fp = fopen(mal_ico, "wb");
+                assert(fp != NULL);
+                uint8_t ihdr[22] = {0,0, 1,0, 1,0, 16,16, 0,0, 1,0, 32,0, 45,0,0,0, 22,0,0,0};
+                fwrite(ihdr, 1, 22, fp);
+                static const uint8_t bad_png[45] = {
+                    0x89,'P','N','G',0x0D,0x0A,0x1A,0x0A,
+                    0,0,0,13,'I','H','D','R', 0,0,0,16, 0,0,0,16, 16, 3, 0, 0, 0, 0,0,0,0,
+                    0,0,0,0,'I','E','N','D', 0,0,0,0
+                };
+                fwrite(bad_png, 1, sizeof(bad_png), fp);
+                fclose(fp);
+                assert(nl_load_game_icon_diag(stG, &stG->games[0], stG->covers_dir) == false);
+            }
+            /* Case 4: Truncated 5-byte ICO */
+            {
+                FILE *fp = fopen(mal_ico, "wb");
+                assert(fp != NULL);
+                fwrite("BAD!!", 1, 5, fp);
+                fclose(fp);
+                assert(nl_load_game_icon_diag(stG, &stG->games[0], stG->covers_dir) == false);
+            }
+
+            /* G3. Corrupt nlauncher.lib.tns -> rejected + .bak.tns created, zero crash */
+            {
+                FILE *fp = fopen(r12_lib, "wb");
+                assert(fp != NULL);
+                fprintf(fp, "CORRUPT_NLLB_DATA_12345\n");
+                fclose(fp);
+                assert(nl_load_library_index(stG, r12_lib) == false);
+                assert(nl_file_exists("/tmp/nl_r12_matrix_fs/ndless/nlauncher.lib.bak.tns") == true);
+            }
+
+            /* G4. Zero-game nlauncher.cache.tns -> strictly rejected (never hides games on boot!) */
+            {
+                nl_cache_header_t zero_hdr;
+                memset(&zero_hdr, 0, sizeof(zero_hdr));
+                zero_hdr.magic = NL_CACHE_MAGIC;
+                zero_hdr.version = NL_CACHE_VERSION;
+                zero_hdr.total_games = 0U;
+                zero_hdr.payload_bytes = 0U;
+                zero_hdr.payload_crc32 = 0U;
+                FILE *fp = fopen(r12_cache, "wb");
+                assert(fp != NULL);
+                fwrite(&zero_hdr, 1, sizeof(zero_hdr), fp);
+                fclose(fp);
+                assert(nl_load_library_cache(stG, r12_cache) == false);
+            }
+
+            nl_free_icons(stG);
+            free(stG);
+        }
+        printf("[PASS] #R12 Test G: Full error resilience (malicious ICOs, INT32_MIN, overflow, corrupt lib & 0-game cache) verified.\n");
+    }
+
+    /* 34. #R13 Real Hardware Stability & Feature Matrix:
+     *     - 78-game / 0-icon two-phase Nucleus-safe scan + instant warm boot from nlauncher.lib.tns
+     *     - Non-game ROM/data .tns fast-skip before stat()/fopen()
+     *     - Early ESC abort during scan & icon loading (zero leaks, existing library untouched)
+     *     - Mode Souris physical click (anywhere, no hover/center gate) & tap-to-click (anywhere on pad)
+     *     - Global TI-OS Hotkey get_event+0 ARM PC-rel LDR relocation + sticky Shift/Ctrl + Menu */
+    {
+        const char *r13_root = "/tmp/nl_r13_78games_fs";
+        const char *r13_self = "/tmp/nl_r13_78games_fs/ndless/N-Launcher.tns";
+        const char *r13_lib  = "/tmp/nl_r13_78games_fs/ndless/nlauncher.lib.tns";
+        int mk_r13 = system("rm -rf /tmp/nl_r13_78games_fs && mkdir -p /tmp/nl_r13_78games_fs/ndless/icons /tmp/nl_r13_78games_fs/ndless/covers /tmp/nl_r13_78games_fs/games/arcade /tmp/nl_r13_78games_fs/games/rpg /tmp/nl_r13_78games_fs/games/puzzle /tmp/nl_r13_78games_fs/roms /tmp/nl_r13_78games_fs/homebrew");
+        assert(mk_r13 == 0);
+        create_mock_zehn_tns(r13_self, "N-Launcher", "daniel.b", 3, true, true, 128);
+
+        /* Populate 78 genuine games across 5 folders + 0 custom icons + 0 covers */
+        static const char *r13_dirs[5] = {
+            "/tmp/nl_r13_78games_fs/games/arcade",
+            "/tmp/nl_r13_78games_fs/games/rpg",
+            "/tmp/nl_r13_78games_fs/games/puzzle",
+            "/tmp/nl_r13_78games_fs/roms",
+            "/tmp/nl_r13_78games_fs/homebrew"
+        };
+        for (int g = 0; g < 78; g++) {
+            char gp[256], gt[48];
+            snprintf(gp, sizeof(gp), "%s/Game_%02d.tns", r13_dirs[g % 5], g + 1);
+            snprintf(gt, sizeof(gt), "Game %02d", g + 1);
+            create_mock_zehn_tns(gp, gt, "Author", 1, true, false, 128);
+        }
+        /* Add 12 non-game emulator ROM / save / text .tns files that must be fast-skipped */
+        static const char *rom_names[12] = {
+            "mario.gba.tns", "zelda.gbc.tns", "tetris.gb.tns", "metroid.nes.tns",
+            "chrono.smc.tns", "dkc.sfc.tns", "oot.z64.tns", "nintendogs.nds.tns",
+            "zelda.srm.tns", "save1.sav.tns", "slot0.state.tns", "readme.txt.tns"
+        };
+        for (int r = 0; r < 12; r++) {
+            char rp[256];
+            snprintf(rp, sizeof(rp), "/tmp/nl_r13_78games_fs/roms/%s", rom_names[r]);
+            create_mock_ti_doc_tns(rp);
+        }
+
+        /* 34a. Cold two-phase transactional scan of 78 games with 0 icons */
+        nl_state_t *st78 = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(st78 != NULL);
+        nl_init_state(st78);
+        snprintf(st78->sys.docs_root, sizeof(st78->sys.docs_root), "%s", r13_root);
+        snprintf(st78->sys.self_path, sizeof(st78->sys.self_path), "%s", r13_self);
+        snprintf(st78->covers_dir, sizeof(st78->covers_dir), "%s/ndless/covers", r13_root);
+        snprintf(st78->icons_dir, sizeof(st78->icons_dir), "%s/ndless/icons", r13_root);
+        snprintf(st78->lib_path, sizeof(st78->lib_path), "%s", r13_lib);
+        nl_folder_seed_defaults(&st78->folders, r13_root);
+
+        assert(nl_transactional_scan(st78, r13_root, r13_self, true, false, NULL, NULL) == true);
+        assert(st78->total_games == 78);
+        assert(st78->scan.finished == true);
+        assert(st78->scan.abort_requested == false);
+
+        /* Load icons (0 custom icons -> 0 icon RAM, 78 monograms, zero fopen crashes) */
+        nl_load_all_icons_ex(st78, NULL, NULL);
+        for (int i = 0; i < 78; i++) {
+            assert(st78->games[i].icon_source == NL_ICON_NONE);
+            assert(st78->games[i].icon_pixels == NULL);
+            assert(st78->games[i].scr_pixels == NULL);
+        }
+        assert(nl_save_library_index(st78, r13_lib) == true);
+
+        /* 34b. Instant warm boot from nlauncher.lib.tns (zero disk rescan!) */
+        nl_state_t *warm78 = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(warm78 != NULL);
+        nl_init_state(warm78);
+        snprintf(warm78->sys.docs_root, sizeof(warm78->sys.docs_root), "%s", r13_root);
+        snprintf(warm78->sys.self_path, sizeof(warm78->sys.self_path), "%s", r13_self);
+        snprintf(warm78->covers_dir, sizeof(warm78->covers_dir), "%s/ndless/covers", r13_root);
+        snprintf(warm78->icons_dir, sizeof(warm78->icons_dir), "%s/ndless/icons", r13_root);
+        snprintf(warm78->lib_path, sizeof(warm78->lib_path), "%s", r13_lib);
+
+        assert(nl_load_library_index(warm78, r13_lib) == true);
+        assert(warm78->total_games == 78);
+        assert(warm78->folders.count >= 5);
+        nl_load_all_icons_ex(warm78, NULL, NULL);
+        nl_rebuild_filter(warm78);
+        assert(warm78->filtered_count == 78);
+        nl_render_frame(warm78, fb);
+
+        /* 34c. Early ESC abort mid-scan & during icon loading leaves existing 78 games intact & zero leaks */
+        assert(nl_transactional_scan(warm78, r13_root, r13_self, true, false, test_abort_after_5_cb, warm78) == false);
+        assert(warm78->scan.abort_requested == true);
+        assert(warm78->total_games == 78);
+        nl_load_all_icons_ex(warm78, NULL, NULL);
+        assert(warm78->total_games == 78);
+        warm78->scan.abort_requested = false;
+
+        /* 34d. Mode Souris #R13: physical click works everywhere & tap-to-click works anywhere on pad */
+        {
+            nl_tp_click_guard_t mg;
+            nl_tp_click_reset(&mg);
+            /* Physical click at corner (0,0) with hover_active=false MUST fire immediately */
+            assert(nl_mouse_tp_poll(&mg, false, true, false, false, false, 0, 0, 2328, 1691) == NL_TP_ACT_PHYSICAL_CLICK);
+            /* Holding button down does not double-fire */
+            assert(nl_mouse_tp_poll(&mg, false, true, false, false, false, 0, 0, 2328, 1691) == NL_TP_ACT_NONE);
+            /* Release button after physical click does NOT fire a spurious tap */
+            assert(nl_mouse_tp_poll(&mg, false, false, false, false, true, 0, 0, 2328, 1691) == NL_TP_ACT_NONE);
+
+            /* Wait out cooldown */
+            for (int c = 0; c < NL_TP_CLICK_COOLDOWN_TICKS + 2; c++) {
+                assert(nl_mouse_tp_poll(&mg, false, false, false, false, true, 0, 0, 2328, 1691) == NL_TP_ACT_NONE);
+            }
+
+            /* Capacitive tap at touchpad corner (120, 120) with gentle 60-unit wobble -> MUST fire TAP_CLICK */
+            assert(nl_mouse_tp_poll(&mg, true, false, false, false, true, 120, 120, 2328, 1691) == NL_TP_ACT_NONE);
+            assert(nl_mouse_tp_poll(&mg, true, false, false, false, true, 180, 150, 2328, 1691) == NL_TP_ACT_NONE);
+            assert(nl_mouse_tp_poll(&mg, false, false, false, false, true, 180, 150, 2328, 1691) == NL_TP_ACT_TAP_CLICK);
+
+            /* Cooldown elapsed -> slide > NL_TP_TAP_SLIDE_CANCEL (150) cancels tap */
+            for (int c = 0; c < NL_TP_TAP_COOLDOWN_TICKS + 2; c++) {
+                assert(nl_mouse_tp_poll(&mg, false, false, false, false, true, 0, 0, 2328, 1691) == NL_TP_ACT_NONE);
+            }
+            assert(nl_mouse_tp_poll(&mg, true, false, false, false, true, 500, 500, 2328, 1691) == NL_TP_ACT_NONE);
+            assert(nl_mouse_tp_poll(&mg, true, false, false, false, true, 1200, 500, 2328, 1691) == NL_TP_ACT_NONE);
+            assert(nl_mouse_tp_poll(&mg, false, false, false, false, true, 1200, 500, 2328, 1691) == NL_TP_ACT_NONE);
+
+            /* Long hold > NL_TP_TAP_MAX_TICKS (26) cancels tap */
+            for (int t = 0; t < NL_TP_TAP_MAX_TICKS + 2; t++) {
+                assert(nl_mouse_tp_poll(&mg, true, false, false, false, true, 900, 900, 2328, 1691) == NL_TP_ACT_NONE);
+            }
+            assert(nl_mouse_tp_poll(&mg, false, false, false, false, true, 900, 900, 2328, 1691) == NL_TP_ACT_NONE);
+
+            /* 2px forgiving margin on game card hit testing */
+            warm78->settings.touchpad_mode = NL_TP_MODE_MOUSE;
+            warm78->sui.screen = NL_UI_LIBRARY;
+            nl_layout_metrics_t lm13;
+            nl_get_layout_metrics_for_count(warm78->settings.layout, warm78->settings.show_names,
+                                            warm78->settings.show_shortcuts, warm78->filtered_count, &lm13);
+            int sx0 = 0, sy0 = 0;
+            nl_compute_grid_slot_pos(&lm13, warm78->filtered_count, 0, &sx0, &sy0);
+            nl_mouse_move_to(warm78, sx0 - 1, sy0);
+            assert(warm78->sui.hover_valid == true);
+            assert(warm78->sui.hover_kind == NL_HOVER_GAME_CARD);
+            assert(warm78->sui.hover_index == 0);
+        }
+
+        /* 34e. Global TI-OS Hotkey #R13: ARM get_event+0 PC-rel LDR relocation + sticky Shift/Ctrl + Menu */
+        {
+            /* Mock get_event prologue with PC-relative LDR at word 1:
+             *   word 0: PUSH {r4-r7, lr}     = 0xE92D40F0
+             *   word 1: LDR r4, [pc, #0x10]  = 0xE59F4010 -> literal sits at word (1 + 2 + 4) = word 7
+             *   word 7: 0x11223344 */
+            uint32_t mock_fn[8] = {
+                0xE92D40F0U,
+                0xE59F4010U,
+                0xE1A05000U,
+                0xE12FFF1EU,
+                0U, 0U, 0U,
+                0x11223344U
+            };
+            assert(nl_arm_is_pc_rel_ldr(mock_fn[0]) == false);
+            assert(nl_arm_is_pc_rel_ldr(mock_fn[1]) == true);
+            assert(nl_arm_instr_is_relocatable(mock_fn[0]) == true);
+            assert(nl_arm_instr_is_relocatable(mock_fn[1]) == true);
+
+            uint32_t tramp[6];
+            memset(tramp, 0, sizeof(tramp));
+            assert(nl_arm_relocate_prologue((uintptr_t)mock_fn, mock_fn[0], mock_fn[1], NULL, NULL, tramp) == true);
+            assert(tramp[0] == mock_fn[0]);
+            /* tramp[1] rewritten to LDR r4, [pc, #8] -> pc=(&tramp[1]+8)=&tramp[3], +8=&tramp[5]! */
+            assert(tramp[1] == ((0xE59F4010U & 0xFF7FF000U) | 0x00800008U));
+            assert(tramp[2] == 0xE51FF004U); /* ldr pc, [pc, #-4] */
+            assert(tramp[3] == (uint32_t)(uintptr_t)&mock_fn[2]);
+            assert(tramp[5] == 0x11223344U);
+
+            /* Sticky & simultaneous Shift/Ctrl + Menu state machine */
+            nl_hk_sticky_state_t sk;
+            nl_hk_sticky_reset(&sk);
+            /* Simultaneous Shift + Menu triggers immediately */
+            assert(nl_hk_sticky_eval(&sk, NL_HK_COMBO_SHIFT_MENU, false, true, true, false) == true);
+            /* Sticky Shift press -> release -> Menu within window triggers */
+            nl_hk_sticky_reset(&sk);
+            assert(nl_hk_sticky_eval(&sk, NL_HK_COMBO_SHIFT_MENU, false, true, false, false) == false);
+            assert(nl_hk_sticky_eval(&sk, NL_HK_COMBO_SHIFT_MENU, false, false, false, false) == false);
+            assert(nl_hk_sticky_eval(&sk, NL_HK_COMBO_SHIFT_MENU, false, false, true, false) == true);
+            /* Sticky Shift cancelled by another key does NOT trigger Menu */
+            nl_hk_sticky_reset(&sk);
+            assert(nl_hk_sticky_eval(&sk, NL_HK_COMBO_SHIFT_MENU, false, true, false, false) == false);
+            assert(nl_hk_sticky_eval(&sk, NL_HK_COMBO_SHIFT_MENU, false, false, false, true) == false);
+            assert(nl_hk_sticky_eval(&sk, NL_HK_COMBO_SHIFT_MENU, false, false, true, false) == false);
+            /* Sticky Ctrl + Menu works for NL_HK_COMBO_CTRL_MENU */
+            nl_hk_sticky_reset(&sk);
+            assert(nl_hk_sticky_eval(&sk, NL_HK_COMBO_CTRL_MENU, true, false, false, false) == false);
+            assert(nl_hk_sticky_eval(&sk, NL_HK_COMBO_CTRL_MENU, false, false, true, false) == true);
+        }
+
+        nl_free_icons(st78);
+        nl_free_icons(warm78);
+        free(st78);
+        free(warm78);
+        printf("[PASS] Section 34 #R13 (78-game/0-icon warm boot & two-phase scan, early ESC abort, Mode Souris physical/tap clicks & get_event+0 ARM relocation/sticky hotkey) verified.\n");
+    }
+
+    /* =====================================================================
+     * 35. #R14 POST-R13 REFINEMENT SUITE:
+     *     - Priority 1: Non-blocking incremental nl_scan_job_t + ESC & Annuler button cancel
+     *     - Priority 2: Smooth 78-game page transitions (no 31% jump, no v_settled snap, wrap clamp)
+     *     - Priority 3: Perceptible Settings open (~333ms) & close (~267ms) durations
+     *     - Priority 4: Optimized 4-stage launch zoom + 3 pure-white ripples + .scr crossfade
+     *     - Priority 5: Direct native .png.tns / .png icon decoding, 84x84 downscale & no-upscale guard
+     * ===================================================================== */
+    {
+        /* Helper lambda-style PNG writer (valid uncompressed zlib-stored PNG: RGB color_type=2 or RGBA color_type=6) */
+        const char *r14_root = "/tmp/nl_test_r14";
+        const char *r14_docs = "/tmp/nl_test_r14/documents";
+        const char *r14_games = "/tmp/nl_test_r14/documents/games";
+        const char *r14_ndless = "/tmp/nl_test_r14/documents/ndless";
+        const char *r14_icons = "/tmp/nl_test_r14/documents/ndless/icons";
+        const char *r14_covers = "/tmp/nl_test_r14/documents/ndless/covers";
+        (void)mkdir(r14_root, 0777);
+        (void)mkdir(r14_docs, 0777);
+        (void)mkdir(r14_games, 0777);
+        (void)mkdir(r14_ndless, 0777);
+        (void)mkdir(r14_icons, 0777);
+        (void)mkdir(r14_covers, 0777);
+
+        /* Write 78 valid Zehn .tns executables */
+        for (int g = 0; g < 78; g++) {
+            char gp[256], gt[48];
+            snprintf(gp, sizeof(gp), "%s/r14_game_%02d.tns", r14_games, g + 1);
+            snprintf(gt, sizeof(gt), "R14 Game %02d", g + 1);
+            create_mock_zehn_tns(gp, gt, "Author", 1, true, false, 128);
+        }
+
+        /* Write 3 direct native PNG icons:
+         *  1) r14_game_01.png.tns -> 128x128 RGBA (downscales cleanly to 84x84, icon_low_res == false)
+         *  2) r14_game_02.png     -> 160x80  RGB  (aspect preserved -> 84x42, icon_low_res == false)
+         *  3) r14_game_03.png.tns -> 16x16   RGBA (low-res -> stays 16x16, NO upscaling, icon_low_res == true) */
+        struct {
+            const char *path;
+            int w;
+            int h;
+            int ctype; /* 2=RGB, 6=RGBA */
+            uint8_t r, g, b;
+        } png_specs[3] = {
+            { "/tmp/nl_test_r14/documents/ndless/icons/r14_game_01.png.tns", 128, 128, 6,  30, 144, 255 },
+            { "/tmp/nl_test_r14/documents/ndless/icons/r14_game_02.png",     160,  80, 2,  40, 210, 110 },
+            { "/tmp/nl_test_r14/documents/ndless/icons/r14_game_03.png.tns",  16,  16, 6, 240,  70,  60 }
+        };
+        for (int pi = 0; pi < 3; pi++) {
+            int pw = png_specs[pi].w;
+            int ph = png_specs[pi].h;
+            int bpp = (png_specs[pi].ctype == 6) ? 4 : 3;
+            size_t row_sz = (size_t)(1 + pw * bpp);
+            size_t raw_sz = row_sz * (size_t)ph;
+            uint8_t *raw = (uint8_t *)malloc(raw_sz);
+            assert(raw != NULL);
+            for (int y = 0; y < ph; y++) {
+                uint8_t *rptr = raw + (size_t)y * row_sz;
+                rptr[0] = 0; /* filter None */
+                for (int x = 0; x < pw; x++) {
+                    uint8_t *p = rptr + 1 + x * bpp;
+                    p[0] = png_specs[pi].r;
+                    p[1] = png_specs[pi].g;
+                    p[2] = png_specs[pi].b;
+                    if (bpp == 4) p[3] = 255;
+                }
+            }
+            /* Build zlib stream using stored deflate blocks (max 65535 bytes/block) */
+            size_t n_blocks = (raw_sz + 65534U) / 65535U;
+            size_t z_sz = 2U + raw_sz + n_blocks * 5U + 4U;
+            uint8_t *zbuf = (uint8_t *)malloc(z_sz);
+            assert(zbuf != NULL);
+            size_t zp = 0;
+            zbuf[zp++] = 0x78;
+            zbuf[zp++] = 0x01;
+            uint32_t s1 = 1U, s2 = 0U;
+            for (size_t i = 0; i < raw_sz; i++) {
+                s1 = (s1 + raw[i]) % 65521U;
+                s2 = (s2 + s1) % 65521U;
+            }
+            size_t off = 0;
+            while (off < raw_sz) {
+                size_t chunk = raw_sz - off;
+                if (chunk > 65535U) chunk = 65535U;
+                bool final_blk = (off + chunk >= raw_sz);
+                zbuf[zp++] = final_blk ? 0x01 : 0x00;
+                zbuf[zp++] = (uint8_t)(chunk & 0xFFU);
+                zbuf[zp++] = (uint8_t)((chunk >> 8) & 0xFFU);
+                uint16_t nlen = (uint16_t)(~chunk);
+                zbuf[zp++] = (uint8_t)(nlen & 0xFFU);
+                zbuf[zp++] = (uint8_t)((nlen >> 8) & 0xFFU);
+                memcpy(zbuf + zp, raw + off, chunk);
+                zp += chunk;
+                off += chunk;
+            }
+            uint32_t adler = (s2 << 16) | s1;
+            zbuf[zp++] = (uint8_t)((adler >> 24) & 0xFFU);
+            zbuf[zp++] = (uint8_t)((adler >> 16) & 0xFFU);
+            zbuf[zp++] = (uint8_t)((adler >> 8) & 0xFFU);
+            zbuf[zp++] = (uint8_t)(adler & 0xFFU);
+
+            FILE *pfp = fopen(png_specs[pi].path, "wb");
+            assert(pfp != NULL);
+            static const uint8_t png_sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+            fwrite(png_sig, 1, 8, pfp);
+            /* IHDR chunk */
+            uint8_t ihdr[13] = {
+                (uint8_t)(pw >> 24), (uint8_t)(pw >> 16), (uint8_t)(pw >> 8), (uint8_t)pw,
+                (uint8_t)(ph >> 24), (uint8_t)(ph >> 16), (uint8_t)(ph >> 8), (uint8_t)ph,
+                8, (uint8_t)png_specs[pi].ctype, 0, 0, 0
+            };
+            uint8_t len4[4] = {0, 0, 0, 13};
+            uint8_t zero4[4] = {0, 0, 0, 0};
+            fwrite(len4, 1, 4, pfp); fwrite("IHDR", 1, 4, pfp); fwrite(ihdr, 1, 13, pfp); fwrite(zero4, 1, 4, pfp);
+            /* IDAT chunk */
+            uint8_t zlen4[4] = {
+                (uint8_t)(zp >> 24), (uint8_t)(zp >> 16), (uint8_t)(zp >> 8), (uint8_t)zp
+            };
+            fwrite(zlen4, 1, 4, pfp); fwrite("IDAT", 1, 4, pfp); fwrite(zbuf, 1, zp, pfp); fwrite(zero4, 1, 4, pfp);
+            /* IEND chunk */
+            fwrite(zero4, 1, 4, pfp); fwrite("IEND", 1, 4, pfp); fwrite(zero4, 1, 4, pfp);
+            fclose(pfp);
+            free(zbuf);
+            free(raw);
+        }
+
+        nl_state_t *st14 = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(st14 != NULL);
+        nl_init_state(st14);
+        snprintf(st14->icons_dir, sizeof(st14->icons_dir), "%s", r14_icons);
+        snprintf(st14->covers_dir, sizeof(st14->covers_dir), "%s", r14_covers);
+
+        /* 35a. Run full incremental non-blocking scan job to completion */
+        nl_scan_job_t *job1 = nl_scan_job_start(st14, r14_docs, "/documents/ndless/N-Launcher.tns");
+        assert(job1 != NULL);
+        assert(st14->scan.active == true);
+        assert(st14->scan.finished == false);
+        int steps_taken = 0;
+        int prev_pct = -1;
+        while (nl_scan_job_step(job1, st14, 3)) {
+            steps_taken++;
+            assert(st14->scan.progress_pct >= prev_pct);
+            prev_pct = st14->scan.progress_pct;
+            assert(steps_taken < 500);
+        }
+        assert(steps_taken >= 15); /* Truly incremental across many small frames */
+        assert(nl_scan_job_is_done(job1) == true);
+        assert(nl_scan_job_was_cancelled(job1) == false);
+        nl_scan_job_destroy(job1);
+        assert(st14->total_games == 78);
+        assert(st14->scan.active == false);
+        assert(st14->scan.finished == true);
+        assert(st14->scan.progress_pct == 100);
+
+        /* Verify Priority 5: direct native PNG icons decoded cleanly */
+        int found_png1 = -1, found_png2 = -1, found_png3 = -1;
+        for (int i = 0; i < st14->total_games; i++) {
+            if (strcmp(st14->games[i].filename, "r14_game_01.tns") == 0) found_png1 = i;
+            if (strcmp(st14->games[i].filename, "r14_game_02.tns") == 0) found_png2 = i;
+            if (strcmp(st14->games[i].filename, "r14_game_03.tns") == 0) found_png3 = i;
+        }
+        assert(found_png1 >= 0 && found_png2 >= 0 && found_png3 >= 0);
+        assert(st14->games[found_png1].icon_source == NL_ICON_PNG);
+        assert(st14->games[found_png1].icon_w == NL_ICON_MAX_DIM && st14->games[found_png1].icon_h == NL_ICON_MAX_DIM);
+        assert(st14->games[found_png1].icon_low_res == false);
+        assert(st14->games[found_png2].icon_source == NL_ICON_PNG);
+        assert(st14->games[found_png2].icon_w == NL_ICON_MAX_DIM && st14->games[found_png2].icon_h == 42);
+        assert(st14->games[found_png2].icon_low_res == false);
+        assert(st14->games[found_png3].icon_source == NL_ICON_PNG);
+        assert(st14->games[found_png3].icon_w == 16 && st14->games[found_png3].icon_h == 16); /* NO upscaling! */
+        assert(st14->games[found_png3].icon_low_res == true);
+        /* Verify 78 native 84x84 RGBA icons fit safely within 2 MB NL_ICON_RAM_BUDGET */
+        assert((size_t)78U * (size_t)NL_ICON_MAX_DIM * (size_t)NL_ICON_MAX_DIM * 3U < (size_t)NL_ICON_RAM_BUDGET);
+
+        /* 35a-ii. Mid-scan Cancel via Mouse « Annuler » click AND ESC preserves old library intact */
+        st14->games[found_png1].is_favorite = true;
+        st14->games[found_png1].launch_count = 42;
+        st14->sui.screen = NL_UI_SETTINGS_RESCAN;
+        st14->settings.touchpad_mode = NL_TP_MODE_MOUSE;
+        nl_scan_job_t *job2 = nl_scan_job_start(st14, r14_docs, "/documents/ndless/N-Launcher.tns");
+        assert(job2 != NULL);
+        for (int s = 0; s < 5; s++) {
+            assert(nl_scan_job_step(job2, st14, 3) == true);
+        }
+        assert(st14->scan.active == true);
+        /* Render active rescan screen with Annuler button */
+        nl_render_frame(st14, fb);
+        /* Mouse hover + click on visible "Annuler (ESC)" button (96..224, 189..211) */
+        nl_mouse_move_to(st14, 160, 198);
+        assert(st14->sui.hover_valid == true);
+        assert(st14->sui.hover_kind == NL_HOVER_MODAL_BTN);
+        assert(st14->sui.hover_index == 0);
+        assert(nl_mouse_click(st14) == true);
+        assert(st14->scan.cancel_requested == true);
+        /* Also verify ESC key triggers cancel_requested */
+        st14->scan.cancel_requested = false;
+        assert(nl_handle_key(st14, NL_KEY_ESC) == true);
+        assert(st14->scan.cancel_requested == true);
+        /* Execute safe cancel & verify old 78-game library + metadata are 100% preserved */
+        nl_scan_job_cancel(job2, st14);
+        assert(nl_scan_job_was_cancelled(job2) == true);
+        nl_scan_job_destroy(job2);
+        assert(st14->scan.active == false);
+        assert(st14->total_games == 78);
+        assert(st14->games[found_png1].is_favorite == true);
+        assert(st14->games[found_png1].launch_count == 42);
+        assert(st14->games[found_png1].icon_source == NL_ICON_PNG && st14->games[found_png1].icon_pixels != NULL);
+
+        /* 35b. Priority 2: Smooth 78-game page transitions (no frame-1 31% jump, monotonic, wrap clamp) */
+        st14->sui.screen = NL_UI_LIBRARY;
+        st14->anim.set_open_fp = 0;
+        st14->selected_pos = 0;
+        nl_rebuild_filter(st14);
+        assert(st14->filtered_count == 78);
+        assert(st14->total_pages == 13);
+        int start_scroll = st14->anim.scroll_y_fp;
+        assert(nl_handle_key(st14, NL_KEY_PAGE_NEXT) == true);
+        assert(st14->current_page == 1);
+        int target_scroll = st14->anim.target_scroll_y_fp;
+        int full_stride = target_scroll - start_scroll;
+        assert(full_stride > 0);
+        nl_anim_step(st14);
+        int step1_delta = st14->anim.scroll_y_fp - start_scroll;
+        /* Frame-1 step must be smooth (~10.7%), strictly < 16% (never the old 31% teleport!) */
+        assert(step1_delta > 0 && step1_delta * 100 < full_stride * 16);
+        int prev_scroll = st14->anim.scroll_y_fp;
+        int scroll_frames = 1;
+        while (st14->anim.scroll_y_fp != target_scroll && scroll_frames < 30) {
+            nl_anim_step(st14);
+            assert(st14->anim.scroll_y_fp >= prev_scroll);
+            prev_scroll = st14->anim.scroll_y_fp;
+            scroll_frames++;
+        }
+        assert(st14->anim.scroll_y_fp == target_scroll);
+        assert(scroll_frames >= 12 && scroll_frames <= 16);
+
+        /* Rapid consecutive page switch + wrap-around (page 0 -> page 12 on 78 games) */
+        assert(nl_handle_key(st14, NL_KEY_PAGE_PREV) == true); /* back to page 0 */
+        for (int k = 0; k < 20; k++) nl_anim_step(st14);
+        assert(st14->current_page == 0);
+        assert(nl_handle_key(st14, NL_KEY_LEFT) == true); /* wrap to last game (page 12) */
+        assert(st14->current_page == 12);
+        nl_anim_step(st14);
+        /* Visual entry distance must be clamped to <= 1.6 pages instead of 12 full pages */
+        int wrap_dist = st14->anim.target_scroll_y_fp - st14->anim.scroll_start_y_fp;
+        assert(wrap_dist > 0 && wrap_dist <= (full_stride * 16) / 10);
+        for (int k = 0; k < 20; k++) {
+            nl_anim_step(st14);
+            nl_render_frame(st14, fb);
+        }
+        assert(st14->anim.scroll_y_fp == st14->anim.target_scroll_y_fp);
+
+        /* 35c. Priority 3: Perceptible Settings open (~333 ms = 20 frames) & close (~267 ms = 16 frames) */
+        st14->anim.set_open_fp = 0;
+        assert(nl_handle_key(st14, NL_KEY_SETTINGS) == true);
+        assert(st14->sui.screen == NL_UI_SETTINGS_MAIN);
+        assert(st14->anim.set_open_fp == 8);
+        int open_frames = 0;
+        while (st14->anim.set_open_fp < 256 && open_frames < 40) {
+            nl_anim_step(st14);
+            open_frames++;
+        }
+        assert(st14->anim.set_open_fp == 256);
+        assert(open_frames >= 18 && open_frames <= 22); /* ~300..367 ms at 60 FPS */
+
+        assert(nl_handle_key(st14, NL_KEY_ESC) == true);
+        assert(st14->sui.screen == NL_UI_LIBRARY);
+        assert(st14->anim.set_open_fp == 248);
+        int close_frames = 0;
+        while (st14->anim.set_open_fp > 0 && close_frames < 40) {
+            nl_anim_step(st14);
+            close_frames++;
+        }
+        assert(st14->anim.set_open_fp == 0);
+        assert(close_frames >= 14 && close_frames <= 18); /* ~233..300 ms at 60 FPS */
+
+        /* 35d. Priority 4: Optimized 4-Stage Launch Animation with 3 Pure-White Ripples + .scr Crossfade */
+        st14->selected_pos = 0;
+        nl_rebuild_filter(st14);
+        int lidx = st14->filtered_indices[0];
+        st14->launch_game_idx = lidx;
+        st14->anim.launch_anim_active = true;
+        st14->games[lidx].scr_pixels = (uint16_t *)malloc(NL_COVER_W * NL_COVER_H * sizeof(uint16_t));
+        assert(st14->games[lidx].scr_pixels != NULL);
+        for (int p = 0; p < NL_COVER_W * NL_COVER_H; p++) {
+            st14->games[lidx].scr_pixels[p] = RGB565(24, 210, 120);
+        }
+        st14->games[lidx].has_screenshot = true;
+
+        for (int z = 1; z <= 46; z++) {
+            nl_render_launch_zoom(st14, fb, z, 46);
+        }
+        /* Final frame (step 46/46) must have expanded screenshot cleanly across fullscreen center */
+        uint16_t center_px = fb[(NL_SCREEN_H / 2) * NL_SCREEN_W + (NL_SCREEN_W / 2)];
+        assert(center_px == RGB565(24, 210, 120));
+        st14->anim.launch_anim_active = false;
+        nl_renderer_cleanup();
+
+        nl_free_icons(st14);
+        free(st14);
+        printf("[PASS] Section 35 #R14 (non-blocking cancellable rescan, smooth 78-game page transitions, Settings ~333ms/267ms open/close, optimized 4-stage launch zoom & direct PNG icons) verified.\n");
+    }
+
+    /* =====================================================================
+     * 36. #R15 OVERHAUL SUITE:
+     *     (1) Bulletproof .scr.tns preservation, non-blank validation & 3-case launch crossfade
+     *     (2) Minimalist Quick Profile Selector (zero ACT./counter/names/footer)
+     *     (3) Controlled '+' animation & compact floating Avatar Picker modal
+     *     (4) Padlock profile protection system (global toggle + per-profile lock)
+     *     (5) Reassigned '0' & '-' keys for previous/next game page
+     *     (6) Vertical vs Horizontal page scroll direction + 12px adjacent peek
+     *     (7) High-FPS launch zoom across Dark/Light/Gray themes
+     * ===================================================================== */
+    {
+        assert(strstr(NL_BUILD_STAMP_STR, "#R23") != NULL);
+
+        const char *r15_root = "/tmp/nl_r15_suite_fs";
+        assert(system("rm -rf /tmp/nl_r15_suite_fs && mkdir -p /tmp/nl_r15_suite_fs/ndless/covers /tmp/nl_r15_suite_fs/ndless/icons /tmp/nl_r15_suite_fs/games") == 0);
+
+        nl_state_t *s15 = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(s15 != NULL);
+        nl_init_state(s15);
+        snprintf(s15->sys.docs_root, sizeof(s15->sys.docs_root), "%s", r15_root);
+        snprintf(s15->covers_dir, sizeof(s15->covers_dir), "%s/ndless/covers", r15_root);
+        snprintf(s15->icons_dir, sizeof(s15->icons_dir), "%s/ndless/icons", r15_root);
+        snprintf(s15->profiles_path, sizeof(s15->profiles_path), "%s/ndless/nlauncher.profiles.tns", r15_root);
+
+        /* Populate 18 games (3 pages in 3x2) */
+        for (int g = 0; g < 18; g++) {
+            char gp[256], gt[64];
+            snprintf(gp, sizeof(gp), "%s/games/Game%02d.tns", r15_root, g + 1);
+            snprintf(gt, sizeof(gt), "Game %02d", g + 1);
+            create_mock_zehn_tns(gp, gt, "Author", 1, true, false, 0);
+        }
+        assert(nl_scan_directory(s15, "/tmp/nl_r15_suite_fs/games", "/tmp/nl_r15_suite_fs/ndless/N-Launcher.tns", 3) == 18);
+        nl_rebuild_filter(s15);
+        assert(s15->total_games == 18);
+        assert(s15->total_pages == 3);
+
+        /* 36a. Screenshot validation & bulletproof preservation */
+        uint16_t *blank_buf = (uint16_t *)calloc(NL_COVER_PIXELS, sizeof(uint16_t));
+        uint16_t *solid_buf = (uint16_t *)malloc(NL_COVER_BYTES);
+        uint16_t *scene_buf = (uint16_t *)malloc(NL_COVER_BYTES);
+        assert(blank_buf && solid_buf && scene_buf);
+        for (int p = 0; p < NL_COVER_PIXELS; p++) {
+            solid_buf[p] = RGB565(40, 40, 40);
+            int x = p % NL_COVER_W;
+            int y = p / NL_COVER_W;
+            scene_buf[p] = RGB565((x * 255) / NL_COVER_W, (y * 255) / NL_COVER_H, 160);
+        }
+        assert(nl_screenshot_is_valid_buffer(blank_buf) == false);
+        assert(nl_screenshot_is_valid_buffer(solid_buf) == false);
+        assert(nl_screenshot_is_valid_buffer(scene_buf) == true);
+
+        /* Attempting to save a blank capture must fail cleanly */
+        s15->games[0].scr_pixels = blank_buf;
+        s15->games[0].has_screenshot = true;
+        assert(nl_save_captured_screenshot(&s15->games[0], s15->covers_dir) == false);
+        assert(nl_game_has_valid_screenshot_on_disk(&s15->games[0], s15->covers_dir) == false);
+
+        /* Save genuine scene screenshot via atomic .tmp.tns -> rename */
+        s15->games[0].scr_pixels = scene_buf;
+        s15->games[0].has_screenshot = true;
+        assert(nl_save_captured_screenshot(&s15->games[0], s15->covers_dir) == true);
+        assert(nl_game_has_valid_screenshot_on_disk(&s15->games[0], s15->covers_dir) == true);
+
+        /* Overwrite attempt with blank/corrupt capture MUST preserve existing valid screenshot on disk! */
+        s15->games[0].scr_pixels = blank_buf;
+        s15->games[0].has_screenshot = true;
+        assert(nl_save_captured_screenshot(&s15->games[0], s15->covers_dir) == false);
+        assert(nl_game_has_valid_screenshot_on_disk(&s15->games[0], s15->covers_dir) == true);
+        s15->games[0].scr_pixels = NULL;
+
+        /* O(1) probe marks game 0 has_screenshot=true, game 1 has_screenshot=false, without loading RAM */
+        nl_free_icons(s15);
+        s15->games[0].has_screenshot = false;
+        nl_probe_all_screenshots(s15);
+        assert(s15->games[0].has_screenshot == true);
+        assert(s15->games[0].scr_pixels == NULL);
+        assert(s15->games[1].has_screenshot == false);
+
+        /* On-demand load succeeds and matches saved pixels */
+        assert(nl_load_game_screenshot(&s15->games[0], s15->covers_dir) == true);
+        assert(s15->games[0].scr_pixels != NULL);
+        assert(s15->games[0].scr_pixels[0] == scene_buf[0]);
+        assert(s15->games[0].scr_pixels[NL_COVER_PIXELS / 2] == scene_buf[NL_COVER_PIXELS / 2]);
+
+        /* 36b. Unified 3-Case Launch Crossfade across Dark, Light, Gray themes */
+        /* Case 1: WITH screenshot -> final frame shows real screenshot */
+        s15->launch_game_idx = 0;
+        s15->anim.launch_anim_active = true;
+        for (int f = 1; f <= 30; f++) {
+            nl_render_launch_zoom(s15, fb, f, 30);
+        }
+        /* Exact top-left + bilinear-upscaled center & bottom-right match real screenshot (not theme backdrop) */
+        assert(fb[0] == scene_buf[0]);
+        {
+            const uint16_t pairs[2][2] = {
+                { fb[(NL_SCREEN_H / 2) * NL_SCREEN_W + (NL_SCREEN_W / 2)], scene_buf[(NL_COVER_H / 2) * NL_COVER_W + (NL_COVER_W / 2)] },
+                { fb[NL_FB_PIXELS - 1], scene_buf[NL_COVER_PIXELS - 1] }
+            };
+            for (int k = 0; k < 2; k++) {
+                uint16_t got_c = pairs[k][0];
+                uint16_t exp_c = pairs[k][1];
+                int dr = (int)((got_c >> 11) & 0x1F) - (int)((exp_c >> 11) & 0x1F);
+                int dg = (int)((got_c >> 5) & 0x3F) - (int)((exp_c >> 5) & 0x3F);
+                int db = (int)(got_c & 0x1F) - (int)(exp_c & 0x1F);
+                assert(dr >= -2 && dr <= 2 && dg >= -2 && dg <= 2 && db >= -2 && db <= 2);
+                assert(got_c != nl_get_theme(s15->display_mode, s15->accent_color)->bg_main);
+            }
+        }
+        s15->anim.launch_anim_active = false;
+        nl_renderer_cleanup();
+
+        /* Case 2: Custom icon WITHOUT screenshot -> NEVER stretched; fades into clean theme backdrop bg_main */
+        s15->games[1].icon_pixels = (uint16_t *)malloc((size_t)(NL_ICON_V1_W * NL_ICON_V1_H) * sizeof(uint16_t));
+        assert(s15->games[1].icon_pixels != NULL);
+        for (int p = 0; p < NL_ICON_V1_W * NL_ICON_V1_H; p++) {
+            s15->games[1].icon_pixels[p] = RGB565(250, 30, 30); /* Bright red custom icon */
+        }
+        s15->games[1].icon_w = NL_ICON_V1_W;
+        s15->games[1].icon_h = NL_ICON_V1_H;
+        s15->games[1].icon_source = NL_ICON_ICO;
+        s15->games[1].has_screenshot = false;
+        s15->games[1].scr_pixels = NULL;
+
+        for (int dm = 0; dm < 3; dm++) {
+            s15->display_mode = (nl_display_mode_t)dm;
+            const nl_theme_t *th = nl_get_theme(s15->display_mode, s15->accent_color);
+            s15->launch_game_idx = 1;
+            s15->anim.launch_anim_active = true;
+            for (int f = 1; f <= 30; f++) {
+                nl_render_launch_zoom(s15, fb, f, 30);
+            }
+            /* At final frame (30/30), corners AND center must cleanly equal th->bg_main (NOT stretched red icon!) */
+            assert(fb[0] == th->bg_main);
+            assert(fb[(NL_SCREEN_H / 2) * NL_SCREEN_W + (NL_SCREEN_W / 2)] == th->bg_main);
+            assert(fb[NL_FB_PIXELS - 1] == th->bg_main);
+            s15->anim.launch_anim_active = false;
+            nl_renderer_cleanup();
+        }
+
+        /* Case 3: Monogram (no custom icon, no screenshot) -> clean theme backdrop bg_main */
+        s15->display_mode = NL_DISPLAY_DARK;
+        s15->launch_game_idx = 2;
+        s15->games[2].has_screenshot = false;
+        s15->games[2].icon_pixels = NULL;
+        s15->anim.launch_anim_active = true;
+        for (int f = 1; f <= 30; f++) {
+            nl_render_launch_zoom(s15, fb, f, 30);
+        }
+        assert(fb[(NL_SCREEN_H / 2) * NL_SCREEN_W + (NL_SCREEN_W / 2)] == nl_get_theme(NL_DISPLAY_DARK, s15->accent_color)->bg_main);
+        s15->anim.launch_anim_active = false;
+        nl_renderer_cleanup();
+
+        free(blank_buf);
+        free(solid_buf);
+        free(scene_buf);
+
+        /* 36c. Reassigned '0' and '-' keys navigate Previous / Next Game Page (never profile switching) */
+        s15->sui.screen = NL_UI_LIBRARY;
+        s15->current_page = 0;
+        s15->selected_pos = 0;
+        int prof_before_0_minus = s15->profiles.active_index;
+        assert(nl_handle_char_input(s15, '-') == true);  /* Page 0 -> Page 1 */
+        assert(s15->current_page == 1);
+        assert(nl_handle_char_input(s15, '-') == true);  /* Page 1 -> Page 2 */
+        assert(s15->current_page == 2);
+        assert(nl_handle_char_input(s15, '-') == true);  /* Page 2 -> wraps to Page 0 */
+        assert(s15->current_page == 0);
+        assert(nl_handle_char_input(s15, '0') == true);  /* Page 0 -> wraps to Page 2 */
+        assert(s15->current_page == 2);
+        assert(nl_handle_char_input(s15, '0') == true);  /* Page 2 -> Page 1 */
+        assert(s15->current_page == 1);
+        assert(nl_handle_char_input(s15, '0') == true);  /* Page 1 -> Page 0 */
+        assert(s15->current_page == 0);
+        assert(s15->profiles.active_index == prof_before_0_minus);
+        /* Also test dedicated NL_KEY_PAGE_NEXT / NL_KEY_PAGE_PREV events */
+        assert(nl_handle_key(s15, NL_KEY_PAGE_NEXT) == true);
+        assert(s15->current_page == 1);
+        assert(nl_handle_key(s15, NL_KEY_PAGE_PREV) == true);
+        assert(s15->current_page == 0);
+
+        /* 36d. Vertical vs Horizontal Scroll Direction setting, adjacent peek metrics & persistence */
+        assert(s15->settings.scroll_dir == NL_SCROLL_VERTICAL);
+        nl_handle_key(s15, NL_KEY_SETTINGS);
+        s15->sui.menu_cursor = NL_SET_MENU_DISPLAY;
+        nl_handle_key(s15, NL_KEY_EXE);
+        assert(s15->sui.screen == NL_UI_SETTINGS_DISPLAY);
+        s15->sui.display_cursor = 1; /* Sens de defilement */
+        assert(nl_handle_key(s15, NL_KEY_RIGHT) == true);
+        assert(s15->settings.scroll_dir == NL_SCROLL_HORIZONTAL);
+        nl_render_frame(s15, fb);
+        nl_handle_key(s15, NL_KEY_ESC);
+        nl_handle_key(s15, NL_KEY_ESC);
+        assert(s15->sui.screen == NL_UI_LIBRARY);
+
+        /* Verify horizontal metrics: page_stride_x == 280 -> peek ~12px on left & right, gap >= 16px */
+        nl_layout_metrics_t hlm;
+        nl_get_layout_metrics_full(NL_LAYOUT_3X2, NL_SCROLL_HORIZONTAL, true, true, 18, &hlm);
+        assert(hlm.is_horizontal == true);
+        assert(hlm.page_stride_x == 280);
+        int right_peek_x = hlm.margin_x + hlm.page_stride_x;
+        assert(right_peek_x == 308); /* 320 - 308 = 12px peek! */
+        int inter_page_gap = hlm.page_stride_x - (hlm.cols * hlm.card_w + (hlm.cols - 1) * hlm.gap_x);
+        assert(inter_page_gap >= 16);
+
+        /* Navigate horizontally across pages using RIGHT arrow and verify smooth scroll_x_fp */
+        s15->current_page = 0;
+        s15->selected_pos = 0;
+        nl_handle_key(s15, NL_KEY_RIGHT); /* col 1 */
+        nl_handle_key(s15, NL_KEY_RIGHT); /* col 2 */
+        nl_handle_key(s15, NL_KEY_RIGHT); /* wraps to next page (page 1, col 0)! */
+        assert(s15->current_page == 1);
+        for (int f = 0; f < 24; f++) {
+            nl_anim_step(s15);
+            nl_render_frame(s15, fb);
+        }
+        assert(s15->anim.scroll_x_fp == s15->anim.target_scroll_x_fp);
+        assert(s15->anim.scroll_x_fp == hlm.page_stride_x * 16);
+
+        /* Clicking right peeking card in Mouse Mode scrolls to Page 2 without launching */
+        s15->settings.touchpad_mode = NL_TP_MODE_MOUSE;
+        s15->settings.touchpad_cursor_show = true;
+        s15->launch_requested = false;
+        nl_mouse_move_to(s15, 314, hlm.top_y + 20);
+        assert(s15->sui.hover_kind == NL_HOVER_PAGE_NEXT);
+        assert(nl_mouse_click(s15) == true);
+        assert(s15->current_page == 2);
+        assert(s15->launch_requested == false);
+
+        /* Clicking left peeking card scrolls back to Page 1 */
+        nl_mouse_move_to(s15, 6, hlm.top_y + 20);
+        assert(s15->sui.hover_kind == NL_HOVER_PAGE_PREV);
+        assert(nl_mouse_click(s15) == true);
+        assert(s15->current_page == 1);
+        s15->settings.touchpad_mode = NL_TP_MODE_TOUCHPAD;
+
+        /* 36e. Padlock Profile Protection System (global toggle + per-profile lock) */
+        assert(s15->settings.profile_lock_enabled == false);
+        int p_locked = nl_profile_create(s15, "SafeUser", 12);
+        assert(p_locked == 1);
+        assert(s15->profiles.items[p_locked].is_locked == false);
+        assert(nl_profile_is_protected(s15, p_locked) == false);
+
+        /* Enable global protection & lock SafeUser */
+        s15->settings.profile_lock_enabled = true;
+        assert(nl_profile_toggle_lock(s15, p_locked) == true);
+        assert(s15->profiles.items[p_locked].is_locked == true);
+        assert(nl_profile_is_protected(s15, p_locked) == true);
+
+        /* Locked profile blocks rename, avatar change, deletion, favorite toggle, shortcut assign */
+        assert(nl_profile_rename(s15, p_locked, "Hacked") == false);
+        assert(strcmp(s15->profiles.items[p_locked].name, "SafeUser") == 0);
+        assert(nl_profile_set_avatar(s15, p_locked, 15) == false);
+        assert(s15->profiles.items[p_locked].avatar_id == 12);
+        assert(nl_profile_delete(s15, p_locked) == false);
+        assert(s15->profiles.count == 2);
+
+        /* Favorite toggle & shortcut assign blocked on active locked profile */
+        s15->sui.screen = NL_UI_LIBRARY;
+        s15->selected_pos = 0;
+        int g0 = s15->filtered_indices[0];
+        bool fav_before = s15->games[g0].is_favorite;
+        nl_handle_key(s15, NL_KEY_FAV);
+        assert(s15->games[g0].is_favorite == fav_before);
+        s15->sui.screen = NL_UI_SETTINGS_SHORTCUTS;
+        s15->sui.sc_game_cursor = 0;
+        s15->sui.sc_picking_key = false;
+        nl_handle_key(s15, NL_KEY_EXE);
+        assert(s15->sui.sc_picking_key == false);
+
+        /* Render Quick Selector & Settings Profiles with padlock visible */
+        s15->sui.qp_open = true;
+        for (int f = 0; f < 10; f++) nl_anim_step(s15);
+        nl_render_frame(s15, fb);
+        s15->sui.qp_open = false;
+
+        s15->sui.screen = NL_UI_SETTINGS_PROFILES;
+        s15->sui.prof_mode = NL_PROF_MODE_LIST;
+        s15->sui.prof_cursor = 0; /* Row 0 = Padlock global toggle */
+        nl_render_frame(s15, fb);
+        s15->sui.prof_mode = NL_PROF_MODE_DETAIL;
+        s15->sui.prof_detail_idx = p_locked;
+        s15->sui.prof_detail_cursor = 3; /* Deverrouiller le profil */
+        nl_render_frame(s15, fb);
+
+        /* Persist config + profiles & verify scroll_dir + profile_lock_enabled + is_locked survive reload */
+        const char *r15_cfg = "/tmp/nl_r15_suite_fs/ndless/nlauncher.cfg.tns";
+        assert(nl_save_config(s15, r15_cfg) == true);
+        assert(nl_save_profiles(s15, s15->profiles_path) == true);
+
+        nl_state_t *s15_rel = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(s15_rel != NULL);
+        nl_init_state(s15_rel);
+        assert(nl_load_config(s15_rel, r15_cfg) == true);
+        assert(s15_rel->settings.scroll_dir == NL_SCROLL_HORIZONTAL);
+        assert(s15_rel->settings.profile_lock_enabled == true);
+        assert(nl_load_profiles(s15_rel, s15->profiles_path) == true);
+        assert(s15_rel->profiles.count == 2);
+        assert(s15_rel->profiles.items[1].is_locked == true);
+        assert(nl_profile_is_protected(s15_rel, 1) == true);
+
+        /* Disabling global profile_lock_enabled immediately hides all padlock restrictions */
+        s15_rel->settings.profile_lock_enabled = false;
+        assert(nl_profile_is_protected(s15_rel, 1) == false);
+        assert(nl_profile_rename(s15_rel, 1, "UnlockedName") == true);
+        assert(strcmp(s15_rel->profiles.items[1].name, "UnlockedName") == 0);
+
+        nl_free_icons(s15_rel);
+        free(s15_rel);
+        nl_free_icons(s15);
+        free(s15);
+        printf("[PASS] Section 36 #R15 (bulletproof screenshots, 3-case launch crossfade, minimalist QP, floating avatar picker, padlock protection, 0/- page nav & horizontal peek) verified.\n");
+    }
+
+    /* =====================================================================
+     * 37. #R17 CORRECTION & VERIFICATION SUITE:
+     *     (1) Exact R15 Horizontal Mode restored (12px natural left/right icon peeks,
+     *         zero independent top/bottom miniature carousel strips, full vertical grid)
+     *     (2) Exact Vertical Mirror of R15 Horizontal Mode (12px natural top & bottom
+     *         real icon peeks across all 5 layouts in multi-page vertical mode, smooth
+     *         vertical scroll, interactive click-to-page without launching, single-page
+     *         vertical remains full-size)
+     *     (3) Preserved Modal ENTER / Click Non-Propagation Fix (consume_exe_release)
+     *     (4) Preserved Creative "Orbital Prism" Profile Animations
+     * ===================================================================== */
+    {
+        assert(strstr(NL_BUILD_STAMP_STR, "#R23") != NULL);
+
+        nl_state_t *s16 = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(s16 != NULL);
+        nl_init_state(s16);
+
+        /* Populate 18 games (3 pages in 3x2) with real custom 48x48 covers */
+        s16->total_games = 18;
+        uint16_t page_colors[3] = {
+            RGB565(220, 60, 60),   /* Page 0: warm red */
+            RGB565(50, 200, 90),   /* Page 1: emerald green */
+            RGB565(70, 130, 240)   /* Page 2: cobalt blue */
+        };
+        for (int i = 0; i < 18; i++) {
+            nl_game_t *g = &s16->games[i];
+            memset(g, 0, sizeof(*g));
+            snprintf(g->title, sizeof(g->title), "Game %02d", i + 1);
+            snprintf(g->filename, sizeof(g->filename), "r17_%02d.tns", i);
+            snprintf(g->path, sizeof(g->path), "/documents/games/r17_%02d.tns", i);
+            g->bin_format = NL_BIN_ZEHN;
+            g->icon_w = 48;
+            g->icon_h = 48;
+            g->icon_pixels = (uint16_t *)malloc(48 * 48 * sizeof(uint16_t));
+            assert(g->icon_pixels != NULL);
+            uint16_t col = page_colors[i / 6];
+            for (int p = 0; p < 48 * 48; p++) g->icon_pixels[p] = col;
+        }
+        nl_rebuild_filter(s16);
+
+        /* 37a. Verify Horizontal (R15 exact) & Vertical (R17 mirrored peek) Metrics across ALL 5 layouts */
+        const nl_layout_t layouts[5] = {
+            NL_LAYOUT_1X1, NL_LAYOUT_2X2, NL_LAYOUT_3X2, NL_LAYOUT_3X3, NL_LAYOUT_4X4
+        };
+        for (int li = 0; li < 5; li++) {
+            nl_layout_metrics_t lm_h_multi, lm_h_single, lm_v_multi, lm_v_single;
+            nl_get_layout_metrics_full(layouts[li], NL_SCROLL_HORIZONTAL, true, true, 32, &lm_h_multi);
+            nl_get_layout_metrics_full(layouts[li], NL_SCROLL_HORIZONTAL, true, true, 1,  &lm_h_single);
+            nl_get_layout_metrics_full(layouts[li], NL_SCROLL_VERTICAL,   true, true, 32, &lm_v_multi);
+            nl_get_layout_metrics_full(layouts[li], NL_SCROLL_VERTICAL,   true, true, 1,  &lm_v_single);
+
+            /* Horizontal Mode = exact R15 (no top/bottom carousel shrinkage; 12px left/right side peeks) */
+            assert(lm_h_multi.is_horizontal == true);
+            assert(lm_h_multi.margin_x >= 28);
+            int h_right_peek_x = lm_h_multi.margin_x + lm_h_multi.page_stride_x;
+            assert(h_right_peek_x <= NL_SCREEN_W - 10 && h_right_peek_x < NL_SCREEN_W);
+            int h_content_w = lm_h_multi.cols * lm_h_multi.card_w + (lm_h_multi.cols - 1) * lm_h_multi.gap_x;
+            assert(lm_h_multi.page_stride_x >= h_content_w + 16);
+            if (layouts[li] == NL_LAYOUT_3X2) {
+                assert(lm_h_multi.top_y < 44); /* R15 full-height 3x2 grid restored! */
+            }
+
+            /* Vertical Multi-Page Mode = exact vertical mirror (natural 12px top & bottom real icon peeks) */
+            assert(lm_v_multi.is_horizontal == false);
+            assert(lm_v_multi.top_y >= NL_VIEW_TOP + 20);
+            int v_content_h = lm_v_multi.rows * (lm_v_multi.card_h + lm_v_multi.label_h) +
+                              (lm_v_multi.rows - 1) * lm_v_multi.gap_y;
+            int v_bot_peek_y = lm_v_multi.top_y + lm_v_multi.page_stride_y;
+            int v_top_peek_end_y = lm_v_multi.top_y + v_content_h - lm_v_multi.page_stride_y;
+            /* Next page peeks ~12px from view_bottom (205); Prev page peeks ~11-12px from NL_VIEW_TOP (26) */
+            assert(v_bot_peek_y == lm_v_multi.view_bottom - 12);
+            assert(v_top_peek_end_y >= NL_VIEW_TOP + 10 && v_top_peek_end_y <= NL_VIEW_TOP + 13);
+            assert(lm_v_multi.page_stride_y >= v_content_h + 8);
+
+            /* Single-page vertical stays full-size (strictly larger cards than multi-page vertical peek) */
+            assert(lm_v_single.card_h > lm_v_multi.card_h);
+            assert(lm_v_single.page_stride_y == lm_v_single.row_stride_y * lm_v_single.rows);
+        }
+
+        /* 37b. Render Vertical Multi-Page Mode (Page 1 of 3) & Verify Real Covers Peek at TOP & BOTTOM */
+        s16->settings.scroll_dir = NL_SCROLL_VERTICAL;
+        s16->settings.layout = NL_LAYOUT_3X2;
+        s16->display_mode = NL_DISPLAY_DARK;
+        s16->current_page = 1; /* Middle page: Prev = Page 0 (red), Current = Page 1 (green), Next = Page 2 (blue) */
+        nl_layout_metrics_t vlm;
+        nl_get_layout_metrics_full(NL_LAYOUT_3X2, NL_SCROLL_VERTICAL, true, true, 18, &vlm);
+        s16->anim.scroll_y_fp = vlm.page_stride_y * 16;
+        s16->anim.target_scroll_y_fp = vlm.page_stride_y * 16;
+        s16->anim.scroll_x_fp = 0;
+        s16->anim.target_scroll_x_fp = 0;
+        nl_render_frame(s16, fb);
+
+        const nl_theme_t *th_dark = nl_get_theme(NL_DISPLAY_DARK, s16->accent_color);
+        /* Top peek band (y = NL_VIEW_TOP..NL_VIEW_TOP+11) across col 0..2 must show real Page 0 cover pixels */
+        int top_peek_px = 0;
+        for (int y = NL_VIEW_TOP; y < NL_VIEW_TOP + 11; y++) {
+            for (int x = vlm.margin_x + 4; x < vlm.margin_x + vlm.card_w - 4; x++) {
+                if (fb[y * NL_SCREEN_W + x] != th_dark->bg_main) top_peek_px++;
+            }
+        }
+        assert(top_peek_px > 120);
+
+        /* Bottom peek band (y = view_bottom-12..view_bottom-1) across col 0..2 must show real Page 2 cover pixels */
+        int bot_peek_px = 0;
+        for (int y = vlm.view_bottom - 12; y < vlm.view_bottom; y++) {
+            for (int x = vlm.margin_x + 4; x < vlm.margin_x + vlm.card_w - 4; x++) {
+                if (fb[y * NL_SCREEN_W + x] != th_dark->bg_main) bot_peek_px++;
+            }
+        }
+        assert(bot_peek_px > 120);
+
+        /* 37c. Interactive Hover & Click on Vertical Top & Bottom Peeking Icons jumps page WITHOUT launching */
+        s16->settings.touchpad_mode = NL_TP_MODE_MOUSE;
+        s16->settings.touchpad_cursor_show = true;
+        s16->launch_requested = false;
+        int col1_cx = vlm.margin_x + vlm.card_w + vlm.gap_x + vlm.card_w / 2;
+
+        /* Hover & click top peeking icon (Page 0) -> jumps to Page 0 without launching */
+        nl_mouse_move_to(s16, col1_cx, NL_VIEW_TOP + 5);
+        assert(s16->sui.hover_kind == NL_HOVER_PAGE_PREV);
+        assert(nl_mouse_click(s16) == true);
+        assert(s16->current_page == 0);
+        assert(s16->launch_requested == false);
+
+        /* Settle onto Page 0, then hover & click bottom peeking icon (Page 1) -> jumps to Page 1 without launching */
+        for (int f = 0; f < 24; f++) nl_anim_step(s16);
+        assert(s16->anim.scroll_y_fp == 0);
+        nl_mouse_move_to(s16, col1_cx, vlm.view_bottom - 6);
+        assert(s16->sui.hover_kind == NL_HOVER_PAGE_NEXT);
+        assert(nl_mouse_click(s16) == true);
+        assert(s16->current_page == 1);
+        assert(s16->launch_requested == false);
+
+        /* Also verify Horizontal Mode (R15 exact): left/right side peeks click cleanly & NO top/bottom carousel bands exist */
+        s16->settings.scroll_dir = NL_SCROLL_HORIZONTAL;
+        nl_layout_metrics_t hlm;
+        nl_get_layout_metrics_full(NL_LAYOUT_3X2, NL_SCROLL_HORIZONTAL, true, true, 18, &hlm);
+        s16->current_page = 1;
+        s16->anim.scroll_x_fp = hlm.page_stride_x * 16;
+        s16->anim.target_scroll_x_fp = hlm.page_stride_x * 16;
+        s16->anim.scroll_y_fp = 0;
+        s16->anim.target_scroll_y_fp = 0;
+        nl_render_frame(s16, fb);
+
+        /* Clicking right peeking icon -> Page 2; left peeking icon -> Page 1 (no game launch) */
+        nl_mouse_move_to(s16, NL_SCREEN_W - 6, hlm.top_y + 20);
+        assert(s16->sui.hover_kind == NL_HOVER_PAGE_NEXT);
+        assert(nl_mouse_click(s16) == true);
+        assert(s16->current_page == 2);
+        assert(s16->launch_requested == false);
+        for (int f = 0; f < 24; f++) nl_anim_step(s16);
+        nl_mouse_move_to(s16, 6, hlm.top_y + 20);
+        assert(s16->sui.hover_kind == NL_HOVER_PAGE_PREV);
+        assert(nl_mouse_click(s16) == true);
+        assert(s16->current_page == 1);
+        assert(s16->launch_requested == false);
+        s16->settings.touchpad_mode = NL_TP_MODE_TOUCHPAD;
+
+        /* 37d. Modal ENTER / Click Non-Propagation Fix + Transition Launch Block */
+        int p2 = nl_profile_create(s16, "", 19);
+        assert(p2 == 1);
+        s16->profiles.active_index = 0;
+        s16->sui.screen = NL_UI_LIBRARY;
+        s16->launch_requested = false;
+        s16->sui.consume_exe_release = false;
+
+        /* Open Quick Profile with '.' -> qp_opening == true */
+        assert(nl_handle_char_input(s16, '.') == true);
+        assert(s16->sui.qp_open == true);
+        assert(s16->anim.qp_opening == true);
+        for (int f = 0; f < 16; f++) {
+            nl_anim_step(s16);
+            nl_render_frame(s16, fb);
+        }
+        assert(s16->anim.qp_open_fp == 256);
+
+        /* Move to Profile 1 -> damped spring halo velocity kicks in & settles */
+        assert(nl_handle_key(s16, NL_KEY_RIGHT) == true);
+        assert(s16->sui.qp_cursor == 1);
+        nl_anim_step(s16);
+        assert(s16->anim.qp_glow_vx_fp != 0);
+        for (int f = 0; f < 24; f++) {
+            nl_anim_step(s16);
+            nl_render_frame(s16, fb);
+        }
+        assert(s16->anim.qp_glow_vx_fp == 0);
+
+        /* Press ENTER to switch profile -> closes QP, latches consume_exe_release, NEVER launches game */
+        uint8_t prev_av = s16->profiles.items[0].avatar_id;
+        uint8_t next_av = s16->profiles.items[1].avatar_id;
+        assert(nl_handle_key(s16, NL_KEY_EXE) == true);
+        assert(s16->sui.qp_open == false);
+        assert(s16->anim.qp_opening == false);
+        assert(s16->sui.consume_exe_release == true);
+        assert(s16->anim.launch_holding == false);
+        assert(s16->launch_requested == false);
+        assert(s16->profiles.active_index == 1);
+
+        /* Verify outgoing & incoming avatars captured for Orbital Prism Identity Shift */
+        assert(s16->anim.prof_switch_active == true);
+        assert(s16->anim.prof_switch_from_avatar_id == prev_av);
+        assert(s16->anim.prof_switch_avatar_id == next_av);
+        assert(s16->anim.prof_switch_max == 20);
+
+        /* Stray NL_KEY_EXE or Mouse click over a game card DURING profile transition MUST NOT launch */
+        nl_handle_key(s16, NL_KEY_EXE);
+        assert(s16->launch_requested == false);
+        s16->settings.touchpad_mode = NL_TP_MODE_MOUSE;
+        nl_mouse_move_to(s16, hlm.margin_x + 20, hlm.top_y + 20);
+        nl_mouse_click(s16);
+        assert(s16->launch_requested == false);
+        s16->settings.touchpad_mode = NL_TP_MODE_TOUCHPAD;
+
+        /* Step & render full 20-frame Profile Switch animation across all 3 themes */
+        const nl_display_mode_t themes[3] = { NL_DISPLAY_DARK, NL_DISPLAY_LIGHT, NL_DISPLAY_GRAY };
+        for (int ti = 0; ti < 3; ti++) {
+            s16->display_mode = themes[ti];
+            s16->anim.prof_switch_active = true;
+            s16->anim.prof_switch_tick = 0;
+            for (int f = 0; f < s16->anim.prof_switch_max; f++) {
+                nl_render_frame(s16, fb);
+                nl_anim_step(s16);
+            }
+            assert(s16->anim.prof_switch_active == false);
+        }
+
+        /* 37e. Strictly Centered '+' Button Morph -> Floating Avatar Picker -> Avatar Birth */
+        s16->display_mode = NL_DISPLAY_DARK;
+        s16->sui.consume_exe_release = false;
+        assert(nl_handle_char_input(s16, '.') == true);
+        for (int f = 0; f < 16; f++) nl_anim_step(s16);
+        s16->sui.qp_cursor = s16->profiles.count; /* '+' slot */
+        assert(nl_handle_key(s16, NL_KEY_EXE) == true);
+        assert(s16->anim.prof_plus_active == true);
+        assert(s16->anim.prof_plus_max == 14);
+        assert(s16->sui.consume_exe_release == true);
+        assert(s16->launch_requested == false);
+        int anchored_x = s16->anim.prof_plus_origin_x;
+        int anchored_y = s16->anim.prof_plus_origin_y;
+        assert(anchored_x > 160 && anchored_y == 120);
+
+        /* Step '+' morph: origin stays anchored & hands off smoothly to qp_pick_open */
+        for (int f = 0; f < s16->anim.prof_plus_max; f++) {
+            assert(s16->anim.prof_plus_origin_x == anchored_x);
+            assert(s16->anim.prof_plus_origin_y == anchored_y);
+            nl_render_frame(s16, fb);
+            nl_anim_step(s16);
+        }
+        assert(s16->anim.prof_plus_active == false);
+        assert(s16->sui.qp_pick_open == true);
+        assert(s16->anim.qp_pick_fp >= 48);
+
+        /* Render Avatar Picker bloom and create new profile with ENTER (no game launch!) */
+        for (int f = 0; f < 14; f++) {
+            nl_anim_step(s16);
+            nl_render_frame(s16, fb);
+        }
+        s16->sui.consume_exe_release = false;
+        s16->sui.qp_pick_cursor = 7;
+        assert(nl_handle_key(s16, NL_KEY_EXE) == true);
+        assert(s16->sui.qp_pick_open == false);
+        assert(s16->sui.consume_exe_release == true);
+        assert(s16->launch_requested == false);
+        assert(s16->anim.prof_birth_active == true);
+        assert(s16->profiles.count == 3);
+
+        for (int f = 0; f < s16->anim.prof_birth_max; f++) {
+            nl_render_frame(s16, fb);
+            nl_anim_step(s16);
+        }
+        assert(s16->anim.prof_birth_active == false);
+
+        /* Close Quick Profile (avatar birth returns cleanly to QP dock) then verify Settings modal EXE sets consume_exe_release */
+        if (s16->sui.qp_open) nl_handle_key(s16, NL_KEY_ESC);
+        s16->sui.consume_exe_release = false;
+        nl_handle_key(s16, NL_KEY_SETTINGS);
+        assert(s16->sui.screen == NL_UI_SETTINGS_MAIN);
+        nl_handle_key(s16, NL_KEY_EXE);
+        assert(s16->sui.consume_exe_release == true);
+        assert(s16->launch_requested == false);
+
+        nl_free_icons(s16);
+        free(s16);
+        printf("[PASS] Section 37 #R17 (exact R15 horizontal side-peeks, mirrored vertical top/bottom natural icon peeks across 5 layouts, zero carousels, modal ENTER latch & Orbital Prism animations) verified.\n");
+    }
+
+    /* ======================================================================
+     * 38. #R18 TWO SURGICAL VISUAL FIXES VERIFICATION:
+     *     (1) Horizontal Mode ONLY: pagination renders in background layer BEHIND
+     *         library cards/icons (cards draw over pagination when overlapping;
+     *         Vertical Mode remains 100% untouched).
+     *     (2) Quick Profile Selector: zero residual horizontal bar/dash below or
+     *         cutting across avatars on Dark, Light, and Gray themes while keeping
+     *         the luminous multicolor halo and all profile animations intact.
+     * ====================================================================== */
+    {
+        nl_state_t *s18 = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(s18 != NULL);
+        nl_init_state(s18);
+        assert(strstr(NL_BUILD_STAMP_STR, "#R23") != NULL);
+
+        /* Populate 40 games (3 pages in 4x4) with bright distinct RGB565 icons */
+        s18->total_games = 40;
+        for (int i = 0; i < s18->total_games; i++) {
+            snprintf(s18->games[i].title, sizeof(s18->games[i].title), "Game%02d", i + 1);
+            snprintf(s18->games[i].filename, sizeof(s18->games[i].filename), "game%02d.tns", i + 1);
+            snprintf(s18->games[i].path, sizeof(s18->games[i].path), "/documents/Jeux/game%02d.tns", i + 1);
+            s18->games[i].icon_source = NL_ICON_CAPTURED;
+            s18->games[i].icon_w = 32;
+            s18->games[i].icon_h = 32;
+            s18->games[i].icon_pixels = (uint16_t *)malloc(32U * 32U * sizeof(uint16_t));
+            assert(s18->games[i].icon_pixels != NULL);
+            uint16_t solid = RGB565(240, 48, 48); /* High-contrast vivid red card */
+            for (int p = 0; p < 32 * 32; p++) s18->games[i].icon_pixels[p] = solid;
+            s18->games[i].icon_alpha = NULL;
+        }
+
+        /* 38a. Horizontal Mode 4x4 (show_shortcuts=false, search_bar open => row 3 overlaps pagination_y=226):
+         *      Verify pagination dots exist in the gaps AND game card pixels draw ON TOP of pagination! */
+        s18->settings.layout = NL_LAYOUT_4X4;
+        s18->settings.scroll_dir = NL_SCROLL_HORIZONTAL;
+        s18->settings.show_shortcuts = false;
+        s18->settings.show_names = false;
+        s18->anim.switch_shortcuts_fp = 0;
+        s18->display_mode = NL_DISPLAY_LIGHT;
+        s18->accent_color = NL_ACCENT_BLUE;
+        nl_rebuild_filter(s18);
+        s18->anim.scroll_x_fp = 0;
+        s18->anim.scroll_y_fp = 0;
+        s18->anim.dot_pos_fp  = 0;
+
+        nl_layout_metrics_t hlm;
+        nl_get_layout_metrics_full(NL_LAYOUT_4X4, NL_SCROLL_HORIZONTAL, false, false, s18->filtered_count, &hlm);
+        assert(hlm.is_horizontal == true);
+        assert(hlm.pagination_y == NL_PAGINATION_Y_NO_SC);
+
+        /* First verify normal view still shows pagination dots at y = pagination_y + 3 */
+        const nl_theme_t *lth = nl_get_theme(NL_DISPLAY_LIGHT, NL_ACCENT_BLUE);
+        nl_render_frame(s18, fb);
+        int pag_accent_px = 0;
+        for (int x = 120; x < 200; x++) {
+            if (fb[(hlm.pagination_y + 3) * NL_SCREEN_W + x] == lth->accent_primary) pag_accent_px++;
+        }
+        assert(pag_accent_px >= 10);
+
+        /* Now shift cards vertically into pagination_y via inline search bar (search_h=28):
+         * row 3 cards (col 1 & col 2) now span y = 203..249 right over pagination_y = 226..233.
+         * Because pagination is drawn FIRST (behind cards) in Horizontal Mode, card pixels MUST
+         * cover pagination dots at the card interior — NEVER overwritten by pagination accent color! */
+        s18->sui.search_active = true;
+        s18->anim.search_bar_fp = 256;
+        nl_render_frame(s18, fb);
+        int slot_x = 0, slot_y = 0;
+        /* f_idx = 13 -> row 3, col 1 (sits right across x ~ 100..146, overlapping left pagination dot!) */
+        nl_compute_grid_slot_pos(&hlm, s18->filtered_count, 13, &slot_x, &slot_y);
+        int sample_x = slot_x + hlm.card_w / 2;
+        int sample_y = hlm.pagination_y + 3;
+        uint16_t card_over_pag_px = fb[sample_y * NL_SCREEN_W + sample_x];
+        /* Card interior must be vivid red (RGB565(240,48,48)), NOT background and NOT pagination dot color */
+        assert(card_over_pag_px != lth->bg_main);
+        assert(card_over_pag_px != lth->accent_primary);
+        assert(card_over_pag_px != lth->dot_inactive);
+        assert(((card_over_pag_px >> 11) & 31U) >= 24U); /* Strong red channel from game icon on top */
+        s18->sui.search_active = false;
+        s18->anim.search_bar_fp = 0;
+
+        /* Verify Vertical Mode remains 100% untouched (clips strictly at view_bottom, pagination drawn on top cleanly) */
+        s18->settings.scroll_dir = NL_SCROLL_VERTICAL;
+        nl_rebuild_filter(s18);
+        s18->anim.scroll_x_fp = 0;
+        s18->anim.scroll_y_fp = 0;
+        s18->anim.dot_pos_fp  = 0;
+        nl_layout_metrics_t vlm18;
+        nl_get_layout_metrics_full(NL_LAYOUT_4X4, NL_SCROLL_VERTICAL, false, false, s18->filtered_count, &vlm18);
+        assert(vlm18.is_horizontal == false);
+        nl_render_frame(s18, fb);
+        for (int y = vlm18.view_bottom; y < vlm18.pagination_y; y++) {
+            for (int x = 10; x < 310; x++) {
+                assert(fb[y * NL_SCREEN_W + x] == lth->bg_main);
+            }
+        }
+
+        /* 38b. Quick Profile Selector: ZERO residual horizontal line/bar below or behind avatars
+         *      across Dark, Light, and Gray themes, while multicolor luminous halo remains 100% intact! */
+        s18->settings.scroll_dir = NL_SCROLL_HORIZONTAL;
+        nl_rebuild_filter(s18);
+        s18->anim.scroll_x_fp = 0;
+        s18->anim.scroll_y_fp = 0;
+        s18->anim.dot_pos_fp  = 0;
+        s18->profiles.count = 3;
+        s18->profiles.active_index = 0;
+        s18->profiles.items[0].avatar_id = 0;
+        s18->profiles.items[1].avatar_id = 1;
+        s18->profiles.items[2].avatar_id = 2;
+        s18->settings.profile_lock_enabled = false;
+        s18->sui.qp_open = true;
+        s18->sui.qp_cursor = 0;
+        s18->anim.qp_open_fp = 256;
+        s18->anim.qp_opening = false;
+        s18->anim.qp_sel_bounce_fp = 0;
+
+        /* Compute exact slot 0 center (shown = 4 slots: 3 profiles + '+', diam=34, stride=44) */
+        const int shown = 4;
+        const int diam = 34;
+        const int stride = 44;
+        const int strip_w = shown * diam + (shown - 1) * (stride - diam);
+        const int start_x = 160 - strip_w / 2;
+        const int scx0 = start_x + diam / 2;
+        const int cy = 120;
+        s18->anim.qp_glow_x_fp = scx0 << 4;
+        s18->anim.qp_trail_x_fp = scx0 << 4;
+        s18->anim.qp_glow_y_fp = cy << 4;
+        s18->anim.qp_slot_scale_fp[0] = 276;
+        s18->anim.qp_slot_scale_fp[1] = 228;
+        s18->anim.qp_slot_scale_fp[2] = 228;
+        s18->anim.qp_slot_scale_fp[3] = 228;
+
+        const nl_display_mode_t modes18[3] = { NL_DISPLAY_DARK, NL_DISPLAY_LIGHT, NL_DISPLAY_GRAY };
+        for (int mi = 0; mi < 3; mi++) {
+            s18->display_mode = modes18[mi];
+            const nl_theme_t *mth = nl_get_theme(modes18[mi], NL_ACCENT_BLUE);
+            uint16_t box_bg = mth->is_light
+                ? RGB565(250, 252, 255)
+                : ((modes18[mi] == NL_DISPLAY_GRAY) ? RGB565(78, 82, 90) : RGB565(18, 22, 32));
+            nl_render_frame(s18, fb);
+
+            /* 1) Confirm luminous multicolor halo IS still intact around selected avatar (radius ~21px at left/right/top) */
+            int halo_px = 0;
+            for (int dx = -24; dx <= -19; dx++) {
+                if (fb[cy * NL_SCREEN_W + (scx0 + dx)] != box_bg) halo_px++;
+            }
+            for (int dx = 19; dx <= 24; dx++) {
+                if (fb[cy * NL_SCREEN_W + (scx0 + dx)] != box_bg) halo_px++;
+            }
+            assert(halo_px >= 6);
+
+            /* 2) Confirm ZERO residual horizontal dash/line below the halo at y = cy + 27 .. cy + 36
+             *    (where the old active pill / name slot / divider sat, well below ring outer edge cy+26) */
+            for (int y = cy + 27; y <= cy + 36; y++) {
+                for (int x = scx0 - 20; x <= scx0 + 20; x++) {
+                    assert(fb[y * NL_SCREEN_W + x] == box_bg);
+                }
+            }
+
+            /* 3) Confirm the old 8x3 active accent pill at (scx0, cy + 23..25) is GONE (no pure accent_primary block
+             *    and no dark/gray shadow bar RGB565(4,6,10)/RGB565(196,206,220) cutting across bottom of halo at sy+cur_diam) */
+            uint16_t old_sh_col = mth->is_light ? RGB565(196, 206, 220) : RGB565(4, 6, 10);
+            int cur_diam = (diam * 276 + 128) >> 8; /* 37 */
+            int sy0 = (cy - 1) - cur_diam / 2;
+            int sh_hits = 0;
+            for (int y = sy0 + cur_diam; y < sy0 + cur_diam + 4; y++) {
+                for (int x = scx0 - 12; x <= scx0 + 12; x++) {
+                    if (fb[y * NL_SCREEN_W + x] == old_sh_col) sh_hits++;
+                }
+            }
+            assert(sh_hits == 0);
+        }
+
+        nl_free_icons(s18);
+        free(s18);
+        printf("[PASS] Section 38 #R18 (horizontal-only pagination background z-order + Quick Profile zero residual line across Dark/Light/Gray) verified.\n");
+    }
+
+    /* ======================================================================
+     * 39. #R19 CUSTOM 144x144 PNG ICON PERFORMANCE OPTIMIZATION & ZERO-VISUAL-CHANGE
+     *     CACHE VERIFICATION:
+     *     (a) Fast 144x144 RGBA & RGB PNG decode + 32-bit area-averaging downscale
+     *         to 84x84 + dead-alpha pruning when final icon is 100% opaque
+     *     (b) Bit-for-bit identical rendering between cold uncached & warm cached
+     *         card sprites / static library FB / dimmed overlay FB across layouts
+     *         (4x4, 3x3, 3x2, 1x1) and themes (Dark, Light, Gray)
+     *     (c) In-place icon pixel mutation invalidation, mouse hover invalidation,
+     *         and OOM memory recovery cleanup (nl_recover_memory_on_oom)
+     * ====================================================================== */
+    {
+        const char *r19_root = "/tmp/nl_r19_suite_fs";
+        assert(system("rm -rf /tmp/nl_r19_suite_fs && mkdir -p /tmp/nl_r19_suite_fs/ndless/icons /tmp/nl_r19_suite_fs/games") == 0);
+
+        /* Write 3 real 144x144 PNG icons (uncompressed zlib-stored DEFLATE blocks):
+         *  0: 144x144 RGBA with rounded transparent corners -> keeps icon_alpha != NULL
+         *  1: 144x144 RGBA with alpha==255 everywhere       -> prunes dead icon_alpha == NULL
+         *  2: 144x144 RGB  (color_type=2 fast unpack)       -> icon_alpha == NULL */
+        const char *gnames[3] = { "rgba144", "opaque144", "rgb144" };
+        for (int gi = 0; gi < 3; gi++) {
+            char tns_p[256], png_p[256];
+            snprintf(tns_p, sizeof(tns_p), "%s/games/%s.tns", r19_root, gnames[gi]);
+            FILE *gf = fopen(tns_p, "wb");
+            assert(gf != NULL);
+            fwrite("PRG\0TEST", 1, 8, gf);
+            fclose(gf);
+
+            snprintf(png_p, sizeof(png_p), "%s/ndless/icons/%s.png.tns", r19_root, gnames[gi]);
+            const int pw = 144, ph = 144;
+            const int ctype = (gi == 2) ? 2 : 6;
+            const int bpp = (ctype == 6) ? 4 : 3;
+            const size_t raw_len = (size_t)ph * (1U + (size_t)pw * (size_t)bpp);
+            uint8_t *raw = (uint8_t *)malloc(raw_len);
+            assert(raw != NULL);
+            for (int y = 0; y < ph; y++) {
+                uint8_t *row = raw + (size_t)y * (1U + (size_t)pw * (size_t)bpp);
+                row[0] = 0; /* Filter: None */
+                for (int x = 0; x < pw; x++) {
+                    uint8_t *px = row + 1 + x * bpp;
+                    if (gi == 0) {
+                        px[0] = (uint8_t)(40 + (x * 180) / pw);
+                        px[1] = (uint8_t)(80 + (y * 140) / ph);
+                        px[2] = 220;
+                        bool corner = (x < 12 && y < 12) || (x >= pw - 12 && y < 12) ||
+                                      (x < 12 && y >= ph - 12) || (x >= pw - 12 && y >= ph - 12);
+                        px[3] = corner ? 0 : 255;
+                    } else if (gi == 1) {
+                        px[0] = 32; px[1] = 216; px[2] = 96; px[3] = 255;
+                    } else {
+                        px[0] = 232; px[1] = 88; px[2] = 48;
+                    }
+                }
+            }
+
+            /* Build valid zlib stream with stored DEFLATE blocks (max 65535 bytes/block) */
+            size_t nblocks = (raw_len + 65534U) / 65535U;
+            size_t zcap = 2U + raw_len + nblocks * 5U + 4U;
+            uint8_t *zbuf = (uint8_t *)malloc(zcap);
+            assert(zbuf != NULL);
+            size_t zpos = 0;
+            zbuf[zpos++] = 0x78;
+            zbuf[zpos++] = 0x01;
+            uint32_t s1 = 1U, s2 = 0U;
+            for (size_t i = 0; i < raw_len; i++) {
+                s1 = (s1 + raw[i]) % 65521U;
+                s2 = (s2 + s1) % 65521U;
+            }
+            size_t rem = raw_len, off = 0;
+            while (rem > 0) {
+                size_t blk = (rem > 65535U) ? 65535U : rem;
+                rem -= blk;
+                zbuf[zpos++] = (rem == 0) ? 0x01 : 0x00;
+                zbuf[zpos++] = (uint8_t)(blk & 0xFFU);
+                zbuf[zpos++] = (uint8_t)((blk >> 8) & 0xFFU);
+                uint16_t nlen = (uint16_t)(~blk);
+                zbuf[zpos++] = (uint8_t)(nlen & 0xFFU);
+                zbuf[zpos++] = (uint8_t)((nlen >> 8) & 0xFFU);
+                memcpy(zbuf + zpos, raw + off, blk);
+                zpos += blk;
+                off += blk;
+            }
+            uint32_t adler = (s2 << 16) | s1;
+            zbuf[zpos++] = (uint8_t)((adler >> 24) & 0xFFU);
+            zbuf[zpos++] = (uint8_t)((adler >> 16) & 0xFFU);
+            zbuf[zpos++] = (uint8_t)((adler >> 8) & 0xFFU);
+            zbuf[zpos++] = (uint8_t)(adler & 0xFFU);
+
+            FILE *pf = fopen(png_p, "wb");
+            assert(pf != NULL);
+            static const uint8_t png_sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+            fwrite(png_sig, 1, 8, pf);
+            uint8_t ihdr[25] = {
+                0, 0, 0, 13, 'I', 'H', 'D', 'R',
+                0, 0, 0, 144, 0, 0, 0, 144,
+                8, (uint8_t)ctype, 0, 0, 0,
+                0, 0, 0, 0 /* dummy CRC (decoder ignores CRC) */
+            };
+            fwrite(ihdr, 1, 25, pf);
+            uint8_t idat_hdr[8] = {
+                (uint8_t)((zpos >> 24) & 0xFFU), (uint8_t)((zpos >> 16) & 0xFFU),
+                (uint8_t)((zpos >> 8) & 0xFFU), (uint8_t)(zpos & 0xFFU),
+                'I', 'D', 'A', 'T'
+            };
+            fwrite(idat_hdr, 1, 8, pf);
+            fwrite(zbuf, 1, zpos, pf);
+            uint8_t zero_crc[4] = {0, 0, 0, 0};
+            fwrite(zero_crc, 1, 4, pf);
+            uint8_t iend[12] = {0, 0, 0, 0, 'I', 'E', 'N', 'D', 0, 0, 0, 0};
+            fwrite(iend, 1, 12, pf);
+            fclose(pf);
+            free(zbuf);
+            free(raw);
+        }
+
+        nl_state_t *s19 = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(s19 != NULL);
+        nl_init_state(s19);
+        snprintf(s19->sys.docs_root, sizeof(s19->sys.docs_root), "%s", r19_root);
+        snprintf(s19->covers_dir, sizeof(s19->covers_dir), "%s/ndless/covers", r19_root);
+        snprintf(s19->icons_dir, sizeof(s19->icons_dir), "%s/ndless/icons", r19_root);
+        s19->total_games = 3;
+        for (int i = 0; i < 3; i++) {
+            snprintf(s19->games[i].title, sizeof(s19->games[i].title), "%s", gnames[i]);
+            snprintf(s19->games[i].filename, sizeof(s19->games[i].filename), "%s.tns", gnames[i]);
+            snprintf(s19->games[i].path, sizeof(s19->games[i].path), "%s/games/%s.tns", r19_root, gnames[i]);
+            assert(nl_load_game_icon(&s19->games[i], s19->covers_dir) == true);
+        }
+
+        /* 39a. Verify 144x144 decode dimensions, colors, alpha preservation & dead-alpha pruning */
+        assert(s19->games[0].icon_source == NL_ICON_PNG);
+        assert(s19->games[0].icon_w == NL_ICON_MAX_DIM && s19->games[0].icon_h == NL_ICON_MAX_DIM);
+        assert(s19->games[0].icon_pixels != NULL && s19->games[0].icon_alpha != NULL);
+        assert(s19->games[0].icon_alpha[0] == 0); /* Corner remained transparent */
+        assert(s19->games[0].icon_alpha[(NL_ICON_MAX_DIM / 2) * NL_ICON_MAX_DIM + (NL_ICON_MAX_DIM / 2)] == 255);
+
+        assert(s19->games[1].icon_source == NL_ICON_PNG);
+        assert(s19->games[1].icon_w == NL_ICON_MAX_DIM && s19->games[1].icon_h == NL_ICON_MAX_DIM);
+        assert(s19->games[1].icon_pixels != NULL);
+        assert(s19->games[1].icon_alpha == NULL); /* Dead alpha pruned automatically! */
+        uint16_t c1 = s19->games[1].icon_pixels[42 * NL_ICON_MAX_DIM + 42];
+        assert(((c1 >> 5) & 63U) >= 50U); /* Strong green */
+
+        assert(s19->games[2].icon_source == NL_ICON_PNG);
+        assert(s19->games[2].icon_w == NL_ICON_MAX_DIM && s19->games[2].icon_h == NL_ICON_MAX_DIM);
+        assert(s19->games[2].icon_pixels != NULL && s19->games[2].icon_alpha == NULL);
+        uint16_t c2 = s19->games[2].icon_pixels[42 * NL_ICON_MAX_DIM + 42];
+        assert(((c2 >> 11) & 31U) >= 26U); /* Strong red */
+
+        /* Expand to 24 games with 84x84 RGBA icons for full multi-page cache equivalence tests */
+        s19->total_games = 24;
+        for (int i = 3; i < 24; i++) {
+            snprintf(s19->games[i].title, sizeof(s19->games[i].title), "Icon%02d", i);
+            snprintf(s19->games[i].filename, sizeof(s19->games[i].filename), "icon%02d.tns", i);
+            snprintf(s19->games[i].path, sizeof(s19->games[i].path), "%s/games/icon%02d.tns", r19_root, i);
+            s19->games[i].icon_source = NL_ICON_PNG;
+            s19->games[i].icon_w = NL_ICON_MAX_DIM;
+            s19->games[i].icon_h = NL_ICON_MAX_DIM;
+            s19->games[i].icon_pixels = (uint16_t *)malloc((size_t)NL_ICON_MAX_DIM * NL_ICON_MAX_DIM * sizeof(uint16_t));
+            s19->games[i].icon_alpha  = (uint8_t *)malloc((size_t)NL_ICON_MAX_DIM * NL_ICON_MAX_DIM);
+            assert(s19->games[i].icon_pixels != NULL && s19->games[i].icon_alpha != NULL);
+            for (int y = 0; y < NL_ICON_MAX_DIM; y++) {
+                for (int x = 0; x < NL_ICON_MAX_DIM; x++) {
+                    int idx = y * NL_ICON_MAX_DIM + x;
+                    s19->games[i].icon_pixels[idx] = RGB565((x * 3 + i * 9) & 255, (y * 3 + i * 5) & 255, (120 + i * 4) & 255);
+                    s19->games[i].icon_alpha[idx] = (x < 6 && y < 6) ? 64 : 255;
+                }
+            }
+        }
+
+        uint16_t *fb_a = (uint16_t *)malloc(NL_FB_BYTES);
+        uint16_t *fb_b = (uint16_t *)malloc(NL_FB_BYTES);
+        assert(fb_a != NULL && fb_b != NULL);
+
+        /* 39b. Bit-for-bit cold vs warm cache equivalence across layouts & themes */
+        const nl_layout_t lays19[4] = { NL_LAYOUT_4X4, NL_LAYOUT_3X3, NL_LAYOUT_3X2, NL_LAYOUT_1X1 };
+        const nl_display_mode_t modes19[3] = { NL_DISPLAY_DARK, NL_DISPLAY_LIGHT, NL_DISPLAY_GRAY };
+        for (int li = 0; li < 4; li++) {
+            for (int mi = 0; mi < 3; mi++) {
+                s19->settings.layout = lays19[li];
+                s19->settings.scroll_dir = NL_SCROLL_HORIZONTAL;
+                s19->display_mode = modes19[mi];
+                nl_rebuild_filter(s19);
+                s19->anim.scroll_x_fp = 0;
+                s19->anim.scroll_y_fp = 0;
+                s19->anim.dot_pos_fp = 0;
+                for (int g = 0; g < s19->total_games; g++) {
+                    s19->anim.card_scale_fp[g] = (g == 0) ? NL_SCALE_SELECTED : NL_SCALE_NORMAL;
+                }
+                nl_renderer_cleanup();
+                nl_render_frame(s19, fb_a); /* Cold render -> builds sprite + static FB caches */
+                nl_render_frame(s19, fb_b); /* Warm render -> hits static FB cache */
+                assert(memcmp(fb_a, fb_b, NL_FB_BYTES) == 0);
+
+                /* Force static FB cache miss via scroll offset while keeping sprite cache warm */
+                s19->anim.scroll_x_fp = 16; /* 1px scroll */
+                nl_render_frame(s19, fb_b); /* Warm sprite cache */
+                nl_renderer_cleanup();
+                nl_render_frame(s19, fb_a); /* Cold sprite cache */
+                assert(memcmp(fb_a, fb_b, NL_FB_BYTES) == 0);
+            }
+        }
+
+        /* 39c. In-place icon pixel mutation invalidates BOTH sprite cache & static library cache */
+        s19->settings.layout = NL_LAYOUT_4X4;
+        s19->display_mode = NL_DISPLAY_DARK;
+        nl_rebuild_filter(s19);
+        s19->anim.scroll_x_fp = 0;
+        nl_render_frame(s19, fb_a);
+        int vis_gi = s19->filtered_indices[1];
+        for (int p = 0; p < NL_ICON_MAX_DIM * NL_ICON_MAX_DIM; p++) {
+            s19->games[vis_gi].icon_pixels[p] = RGB565(255, 255, 0); /* Bright yellow in-place */
+        }
+        nl_render_frame(s19, fb_b);
+        assert(memcmp(fb_a, fb_b, NL_FB_BYTES) != 0);
+
+        /* 39d. Dimmed overlay cache (Quick Profile 60 FPS halo) bit-for-bit parity vs cold render */
+        s19->sui.qp_open = true;
+        s19->anim.qp_open_fp = 256;
+        s19->anim.qp_opening = false;
+        for (int f = 0; f < 8; f++) {
+            nl_anim_step(s19);
+            nl_render_frame(s19, fb_b); /* Warm G_DIM_BG_FB hits */
+        }
+        nl_renderer_cleanup();
+        nl_render_frame(s19, fb_a); /* Cold rebuild at exact same halo phase */
+        assert(memcmp(fb_a, fb_b, NL_FB_BYTES) == 0);
+        s19->sui.qp_open = false;
+        s19->anim.qp_open_fp = 0;
+
+        /* 39e. Mouse movement updates cursor while static library cache stays valid & hover invalidates properly */
+        s19->settings.touchpad_mode = NL_TP_MODE_MOUSE;
+        nl_mouse_move_to(s19, 100, 100);
+        nl_render_frame(s19, fb_a);
+        nl_mouse_move_to(s19, 104, 100);
+        nl_render_frame(s19, fb_b);
+        assert(memcmp(fb_a, fb_b, NL_FB_BYTES) != 0); /* Cursor moved */
+        nl_renderer_cleanup();
+        nl_render_frame(s19, fb_a);
+        assert(memcmp(fb_a, fb_b, NL_FB_BYTES) == 0); /* Identical to cold render */
+
+        /* 39f. OOM recovery cleans up all renderer caches safely and re-renders cleanly */
+        nl_recover_memory_on_oom(s19, "r19_test", NULL);
+        nl_render_frame(s19, fb_b);
+        nl_renderer_cleanup();
+        nl_render_frame(s19, fb_a);
+        assert(memcmp(fb_a, fb_b, NL_FB_BYTES) == 0);
+
+        free(fb_a);
+        free(fb_b);
+        nl_free_icons(s19);
+        free(s19);
+        assert(system("rm -rf /tmp/nl_r19_suite_fs") == 0);
+        printf("[PASS] Section 39 #R19 (144x144 PNG fast decode/32-bit downscale/dead-alpha pruning, bit-for-bit sprite/library/dimmed cache parity, in-place mutation invalidation & OOM cleanup) verified.\n");
+    }
+
+    /* =========================================================================
+     * 40. #R20 ICON TRANSPARENCY & ENLARGEMENT FIXES, 4 LAUNCH ANIMATIONS,
+     *     60 FPS STARTUP HYDRATION/INTRA-PNG PUMPING & "daniel.b" SIGNATURE
+     * ========================================================================= */
+    {
+        assert(strstr(NL_BUILD_STAMP_STR, "#R23") != NULL);
+        const char *r20_root = "/tmp/nl_r20_suite_fs";
+        assert(system("rm -rf /tmp/nl_r20_suite_fs && mkdir -p /tmp/nl_r20_suite_fs/ndless/covers /tmp/nl_r20_suite_fs/ndless/icons /tmp/nl_r20_suite_fs/games") == 0);
+
+        nl_state_t *s20 = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(s20 != NULL);
+        nl_init_state(s20);
+        snprintf(s20->sys.docs_root, sizeof(s20->sys.docs_root), "%s", r20_root);
+        snprintf(s20->covers_dir, sizeof(s20->covers_dir), "%s/ndless/covers", r20_root);
+        snprintf(s20->icons_dir, sizeof(s20->icons_dir), "%s/ndless/icons", r20_root);
+        s20->total_games = 6;
+        for (int i = 0; i < 6; i++) {
+            snprintf(s20->games[i].title, sizeof(s20->games[i].title), "Game%d", i);
+            snprintf(s20->games[i].filename, sizeof(s20->games[i].filename), "game%d.tns", i);
+            snprintf(s20->games[i].path, sizeof(s20->games[i].path), "%s/games/game%d.tns", r20_root, i);
+            s20->games[i].accent_color = RGB565(80 + i * 25, 140, 220);
+        }
+
+        /* Game 0: Transparent 84x84 PNG icon (floating diamond/cube with fully transparent corners!) */
+        s20->games[0].icon_source = NL_ICON_PNG;
+        s20->games[0].icon_w = NL_ICON_MAX_DIM;
+        s20->games[0].icon_h = NL_ICON_MAX_DIM;
+        s20->games[0].icon_pixels = (uint16_t *)malloc((size_t)NL_ICON_MAX_DIM * NL_ICON_MAX_DIM * sizeof(uint16_t));
+        s20->games[0].icon_alpha  = (uint8_t *)malloc((size_t)NL_ICON_MAX_DIM * NL_ICON_MAX_DIM);
+        assert(s20->games[0].icon_pixels && s20->games[0].icon_alpha);
+        for (int y = 0; y < NL_ICON_MAX_DIM; y++) {
+            for (int x = 0; x < NL_ICON_MAX_DIM; x++) {
+                int idx = y * NL_ICON_MAX_DIM + x;
+                int dx = x - NL_ICON_MAX_DIM / 2;
+                int dy = y - NL_ICON_MAX_DIM / 2;
+                if (dx < 0) dx = -dx;
+                if (dy < 0) dy = -dy;
+                bool inside = (dx + dy <= 28);
+                s20->games[0].icon_pixels[idx] = inside ? RGB565(40, 210, 60) : RGB565(0, 0, 0);
+                s20->games[0].icon_alpha[idx]  = inside ? 255 : 0;
+            }
+        }
+        /* Game 1: No custom icon (NL_ICON_NONE) -> default launcher card must stay intact */
+        s20->games[1].icon_source = NL_ICON_NONE;
+
+        /* Game 2: Has valid .scr.tns screenshot */
+        s20->games[2].has_screenshot = true;
+        s20->games[2].scr_pixels = (uint16_t *)malloc(NL_COVER_BYTES);
+        assert(s20->games[2].scr_pixels != NULL);
+        for (int i = 0; i < NL_COVER_W * NL_COVER_H; i++) {
+            s20->games[2].scr_pixels[i] = RGB565(220, 60, 120);
+        }
+
+        nl_rebuild_filter(s20);
+        s20->settings.layout = NL_LAYOUT_2X2;
+        s20->settings.show_shortcuts = true;
+        nl_rebuild_filter(s20);
+
+        /* 40a. Icon Fix 1A & 1B: Transparent PNG corners show EXACT th->bg_main (zero gray slab & zero border),
+         *      both when unselected AND when enlarged on selection, across Dark/Light/Gray! */
+        nl_layout_metrics_t lm20;
+        nl_get_layout_metrics_for_count(NL_LAYOUT_2X2, s20->settings.show_names,
+                                        s20->settings.show_shortcuts, s20->filtered_count, &lm20);
+        int g0x = 0, g0y = 0, g1x = 0, g1y = 0;
+        nl_compute_grid_slot_pos(&lm20, s20->filtered_count, 0, &g0x, &g0y);
+        nl_compute_grid_slot_pos(&lm20, s20->filtered_count, 1, &g1x, &g1y);
+
+        const nl_display_mode_t dms20[3] = { NL_DISPLAY_DARK, NL_DISPLAY_LIGHT, NL_DISPLAY_GRAY };
+        for (int di = 0; di < 3; di++) {
+            s20->display_mode = dms20[di];
+            const nl_theme_t *th20 = nl_get_theme(s20->display_mode, s20->accent_color);
+            /* Unselected Game 0 (select Game 1) */
+            s20->selected_pos = 1;
+            for (int g = 0; g < s20->total_games; g++) {
+                s20->anim.card_scale_fp[g] = (g == 1) ? NL_SCALE_SELECTED : NL_SCALE_NORMAL;
+            }
+            nl_renderer_cleanup();
+            nl_render_frame(s20, fb);
+            /* Transparent corner of Game 0 must be exact bg_main (zero gray backdrop slab & zero 1px border!) */
+            assert(fb[(g0y + 1) * NL_SCREEN_W + (g0x + 1)] == th20->bg_main);
+            assert(fb[(g0y + 6) * NL_SCREEN_W + (g0x + 6)] == th20->bg_main);
+            /* Center of Game 0 diamond must be vivid green (not bg_main) */
+            assert(fb[(g0y + lm20.card_h / 2) * NL_SCREEN_W + (g0x + lm20.card_w / 2)] != th20->bg_main);
+            /* Game 1 (default monogram card without custom icon) must still have its card background (not bg_main) */
+            assert(fb[(g1y + 10) * NL_SCREEN_W + (g1x + 10)] != th20->bg_main);
+
+            /* Selected & enlarging Game 0 (scale_fp = NL_SCALE_SELECTED) -> still ZERO gray rectangular border! */
+            s20->selected_pos = 0;
+            s20->anim.card_scale_fp[0] = NL_SCALE_SELECTED;
+            s20->anim.card_scale_fp[1] = NL_SCALE_NORMAL;
+            nl_renderer_cleanup();
+            nl_render_frame(s20, fb);
+            int dw0 = (lm20.card_w * NL_SCALE_SELECTED + 128) >> 8;
+            int dh0 = (lm20.card_h * NL_SCALE_SELECTED + 128) >> 8;
+            int dx0 = g0x - (dw0 - lm20.card_w) / 2;
+            int dy0 = g0y - (dh0 - lm20.card_h) / 2;
+            if (dy0 < NL_VIEW_TOP + 1) dy0 = NL_VIEW_TOP + 1;
+            /* Outer corner of enlarging bounding box must be exact bg_main (no gray box border!) */
+            assert(fb[(dy0 + 1) * NL_SCREEN_W + (dx0 + 1)] == th20->bg_main);
+            assert(fb[(dy0 + 4) * NL_SCREEN_W + (dx0 + 4)] == th20->bg_main);
+        }
+
+        /* 40b. Ultra-discreet bottom-left "daniel.b" micro-signature check (with & without bottom bar) */
+        for (int sc = 0; sc < 2; sc++) {
+            s20->settings.show_shortcuts = (sc == 1);
+            s20->anim.switch_shortcuts_fp = (sc == 1) ? 256 : 0;
+            s20->display_mode = NL_DISPLAY_DARK;
+            const nl_theme_t *th20 = nl_get_theme(s20->display_mode, s20->accent_color);
+            nl_renderer_cleanup();
+            nl_render_frame(s20, fb);
+            uint16_t expected_bg = (sc == 1) ? th20->bg_bottom_bar : th20->bg_main;
+            int sig_lit = 0;
+            for (int py = NL_SCREEN_H - 6; py < NL_SCREEN_H - 1; py++) {
+                for (int px = 3; px < 28; px++) {
+                    if (fb[py * NL_SCREEN_W + px] != expected_bg) sig_lit++;
+                }
+            }
+            assert(sig_lit >= 35 && sig_lit <= 80); /* Crisp 3x5 "daniel.b" pixels lit */
+        }
+
+        /* 40c. Settings -> Animations -> Animation de lancement navigation & persistence (config + profiles) */
+        s20->sui.screen = NL_UI_LIBRARY;
+        nl_handle_key(s20, NL_KEY_SETTINGS);
+        assert(s20->sui.screen == NL_UI_SETTINGS_MAIN);
+        assert(s20->sui.menu_cursor == NL_SET_MENU_DISPLAY);
+        nl_handle_key(s20, NL_KEY_DOWN);
+        assert(s20->sui.menu_cursor == NL_SET_MENU_ANIMATIONS);
+        nl_handle_key(s20, NL_KEY_EXE);
+        assert(s20->sui.screen == NL_UI_SETTINGS_ANIMATIONS);
+        assert(s20->sui.anim_cursor == 0);
+        nl_render_frame(s20, fb);
+
+        /* Navigate to Row 2 (Lancement des jeux) and cycle Theme Drop -> Spinner -> Loading Bar */
+        nl_handle_key(s20, NL_KEY_DOWN);
+        nl_handle_key(s20, NL_KEY_DOWN);
+        assert(s20->sui.anim_cursor == 2);
+        nl_handle_key(s20, NL_KEY_EXE);
+        assert(s20->settings.launch_anim_mode == NL_LAUNCH_ANIM_THEME_DROP);
+        nl_render_frame(s20, fb);
+
+        nl_handle_key(s20, NL_KEY_RIGHT);
+        assert(s20->settings.launch_anim_mode == NL_LAUNCH_ANIM_SPINNER);
+        nl_render_frame(s20, fb);
+
+        nl_handle_key(s20, NL_KEY_EXE);
+        assert(s20->settings.launch_anim_mode == NL_LAUNCH_ANIM_LOADING_BAR);
+        nl_render_frame(s20, fb);
+
+        /* Config persistence */
+        const char *cfg20 = "/tmp/nl_r20_suite_fs/ndless/nlauncher.cfg.tns";
+        const char *prof20 = "/tmp/nl_r20_suite_fs/ndless/nlauncher.profiles.tns";
+        assert(nl_save_config(s20, cfg20) == true);
+        nl_profiles_init_default(s20);
+        nl_profile_snapshot_active(s20);
+        assert(nl_save_profiles(s20, prof20) == true);
+
+        nl_state_t *s20_rel = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(s20_rel != NULL);
+        nl_init_state(s20_rel);
+        assert(nl_load_config(s20_rel, cfg20) == true);
+        assert(s20_rel->settings.launch_anim_mode == NL_LAUNCH_ANIM_LOADING_BAR);
+        assert(nl_load_profiles(s20_rel, prof20) == true);
+        assert(s20_rel->settings.launch_anim_mode == NL_LAUNCH_ANIM_LOADING_BAR);
+        nl_free_icons(s20_rel);
+        free(s20_rel);
+
+        /* 40d. Render ALL 4 launch animations across Dark/Light/Gray, with & without .scr.tns, all 5 layouts */
+        s20->sui.screen = NL_UI_LIBRARY;
+        uint16_t *fb_m0 = (uint16_t *)malloc(NL_FB_BYTES);
+        uint16_t *fb_m1 = (uint16_t *)malloc(NL_FB_BYTES);
+        uint16_t *fb_m2 = (uint16_t *)malloc(NL_FB_BYTES);
+        uint16_t *fb_m3a = (uint16_t *)malloc(NL_FB_BYTES);
+        uint16_t *fb_m3b = (uint16_t *)malloc(NL_FB_BYTES);
+        assert(fb_m0 && fb_m1 && fb_m2 && fb_m3a && fb_m3b);
+
+        s20->display_mode = NL_DISPLAY_DARK;
+        s20->launch_game_idx = 0;
+        s20->selected_pos = 0;
+        s20->anim.launch_anim_active = true;
+
+        /* Mid-frame distinctness between Mode 0 (Actuelle), Mode 1 (Theme Drop), Mode 2 (Spinner) */
+        s20->settings.launch_anim_mode = NL_LAUNCH_ANIM_CURRENT;
+        nl_render_launch_zoom(s20, fb_m0, 14, 30);
+        s20->settings.launch_anim_mode = NL_LAUNCH_ANIM_THEME_DROP;
+        nl_render_launch_zoom(s20, fb_m1, 14, 30);
+        s20->settings.launch_anim_mode = NL_LAUNCH_ANIM_SPINNER;
+        nl_render_launch_zoom(s20, fb_m2, 14, 30);
+        assert(memcmp(fb_m0, fb_m1, NL_FB_BYTES) != 0);
+        assert(memcmp(fb_m0, fb_m2, NL_FB_BYTES) != 0);
+        assert(memcmp(fb_m1, fb_m2, NL_FB_BYTES) != 0);
+
+        /* Mode 3 (Loading Bar) reflects real launch_load_pct difference (20% vs 88%) */
+        s20->settings.launch_anim_mode = NL_LAUNCH_ANIM_LOADING_BAR;
+        s20->anim.launch_load_pct = 20;
+        nl_render_launch_zoom(s20, fb_m3a, 24, 38);
+        s20->anim.launch_load_pct = 88;
+        nl_render_launch_zoom(s20, fb_m3b, 24, 38);
+        assert(memcmp(fb_m3a, fb_m3b, NL_FB_BYTES) != 0);
+
+        /* Exercise all 4 modes x 3 themes x Game 0 (transparent PNG) & Game 2 (.scr.tns) without crashes */
+        for (int am = 0; am < NL_LAUNCH_ANIM_COUNT; am++) {
+            s20->settings.launch_anim_mode = (nl_launch_anim_t)am;
+            for (int di = 0; di < 3; di++) {
+                s20->display_mode = dms20[di];
+                s20->launch_game_idx = (di == 2) ? 2 : 0;
+                s20->anim.launch_load_pct = 50;
+                nl_render_launch_zoom(s20, fb, 1, 30);
+                nl_render_launch_zoom(s20, fb, 15, 30);
+                s20->anim.launch_load_pct = 100;
+                nl_render_launch_zoom(s20, fb, 30, 30);
+            }
+        }
+        s20->anim.launch_anim_active = false;
+
+        /* 40e. Warm-boot nl_hydrate_icons_from_cache & nl_probe_all_screenshots_ex callback pumping */
+        const char *cache20 = "/tmp/nl_r20_suite_fs/ndless/nlauncher.cache.tns";
+        assert(nl_save_library_cache(s20, cache20) == true);
+        nl_free_game_icons_only(s20);
+        assert(s20->games[0].icon_pixels == NULL);
+        int hyd_cnt = nl_hydrate_icons_from_cache(s20, cache20, NULL, NULL);
+        assert(hyd_cnt == 1);
+        assert(s20->games[0].icon_source == NL_ICON_PNG);
+        assert(s20->games[0].icon_pixels != NULL && s20->games[0].icon_alpha != NULL);
+        assert(s20->games[0].icon_alpha[0] == 0);
+        assert(s20->games[0].icon_alpha[(NL_ICON_MAX_DIM / 2) * NL_ICON_MAX_DIM + (NL_ICON_MAX_DIM / 2)] == 255);
+        nl_probe_all_screenshots_ex(s20, NULL, NULL);
+
+        free(fb_m0); free(fb_m1); free(fb_m2); free(fb_m3a); free(fb_m3b);
+        nl_free_icons(s20);
+        free(s20);
+        assert(system("rm -rf /tmp/nl_r20_suite_fs") == 0);
+        printf("[PASS] Section 40 #R20 (Icon transparency & zoom border fixes, 4 launch animations, Settings->Animations persistence, warm-boot cache hydration & daniel.b micro-signature) verified.\n");
+    }
+
+    /* =========================================================================
+     * 41. #R21 FAST GAME-RETURN OPTIMIZATION (EXEC SPRITE RETENTION),
+     *     NON-BLOCKING RETURN DROPLET REVEAL & PROFILE DROPLET ANIMATIONS
+     * ========================================================================= */
+    {
+        assert(strstr(NL_BUILD_STAMP_STR, "#R23") != NULL);
+        nl_renderer_cleanup();
+        assert(nl_renderer_cached_sprite_count() == 0);
+
+        nl_state_t *s21 = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(s21 != NULL);
+        nl_init_state(s21);
+        nl_profiles_init_default(s21);
+        s21->settings.layout = NL_LAYOUT_3X3;
+        s21->settings.scroll_dir = NL_SCROLL_HORIZONTAL;
+        s21->total_games = 18;
+
+        /* Populate 18 games across 2 pages (3x3) with synthetic pre-decoded 84x84 icons (downscaled into G_CARD_CACHE) */
+        for (int i = 0; i < 18; i++) {
+            snprintf(s21->games[i].title, sizeof(s21->games[i].title), "Game%02d", i + 1);
+            snprintf(s21->games[i].filename, sizeof(s21->games[i].filename), "game%02d.tns", i + 1);
+            snprintf(s21->games[i].path, sizeof(s21->games[i].path), "/documents/ndless/game%02d.tns", i + 1);
+            s21->games[i].icon_w = 84;
+            s21->games[i].icon_h = 84;
+            s21->games[i].icon_source = NL_ICON_PNG;
+            s21->games[i].icon_pixels = (uint16_t *)malloc(84U * 84U * sizeof(uint16_t));
+            s21->games[i].icon_alpha  = (uint8_t *)malloc(84U * 84U);
+            assert(s21->games[i].icon_pixels != NULL && s21->games[i].icon_alpha != NULL);
+            uint16_t col = (uint16_t)(((i * 3 + 7) << 11) | ((i * 5 + 12) << 5) | (i * 2 + 9));
+            for (int p = 0; p < 84 * 84; p++) {
+                s21->games[i].icon_pixels[p] = col;
+                s21->games[i].icon_alpha[p] = 255U;
+            }
+        }
+        nl_rebuild_filter(s21);
+        for (int st = 0; st < 20; st++) (void)nl_anim_step(s21);
+
+        /* 41a. Verify nl_renderer_prepare_for_exec preserves visible-page sprites while evicting off-page sprites across 5 launches */
+        uint16_t *fb_base = (uint16_t *)malloc(NL_FB_BYTES);
+        uint16_t *fb_ret  = (uint16_t *)malloc(NL_FB_BYTES);
+        uint16_t *fb_qp0  = (uint16_t *)malloc(NL_FB_BYTES);
+        uint16_t *fb_qp1  = (uint16_t *)malloc(NL_FB_BYTES);
+        uint16_t *fb_pl   = (uint16_t *)malloc(NL_FB_BYTES);
+        assert(fb_base && fb_ret && fb_qp0 && fb_qp1 && fb_pl);
+
+        for (int cycle = 0; cycle < 5; cycle++) {
+            /* Touch page 1 first so off-page sprites populate cache, then return to page 0 */
+            s21->selected_pos = 9 + (cycle % 9);
+            for (int st = 0; st < 15; st++) (void)nl_anim_step(s21);
+            nl_render_frame(s21, fb_base);
+
+            s21->selected_pos = cycle % 9;
+            for (int st = 0; st < 15; st++) (void)nl_anim_step(s21);
+            nl_render_frame(s21, fb_base);
+            int before_exec = nl_renderer_cached_sprite_count();
+            assert(before_exec >= 12);
+
+            /* Prepare for child game exec: frees transient FBs + off-page sprites while keeping visible page sprites warm */
+            nl_renderer_prepare_for_exec(s21);
+            int kept_after_exec = nl_renderer_cached_sprite_count();
+            assert(kept_after_exec >= 8 && kept_after_exec <= before_exec);
+
+            /* Return immediately with non-blocking droplet reveal */
+            nl_return_drop_start(s21, s21->filtered_indices[s21->selected_pos]);
+            assert(s21->anim.return_drop_active == true);
+            assert(s21->anim.return_drop_tick == 0);
+            nl_render_frame(s21, fb_ret);
+            int diff_ret = 0;
+            for (int p = 0; p < NL_FB_PIXELS; p++) {
+                if (fb_ret[p] != fb_base[p]) diff_ret++;
+            }
+            assert(diff_ret > 800); /* Visible luminous droplet reveal + soft veil on Frame 1 */
+        }
+
+        /* 41b. Verify Return Droplet animation works across all 3 themes (Dark, Light, Gray)
+         *      AND is strictly non-blocking (navigation, Settings, and re-launch work immediately!) */
+        nl_display_mode_t dms21[3] = { NL_DISPLAY_DARK, NL_DISPLAY_LIGHT, NL_DISPLAY_GRAY };
+        for (int di = 0; di < 3; di++) {
+            s21->display_mode = dms21[di];
+            nl_return_drop_start(s21, 0);
+            for (int t = 0; t < 25; t++) {
+                nl_render_frame(s21, fb_ret);
+                (void)nl_anim_step(s21);
+            }
+            assert(s21->anim.return_drop_active == false);
+        }
+
+        /* Immediate navigation during active return droplet animation MUST succeed with zero delay */
+        s21->display_mode = NL_DISPLAY_DARK;
+        s21->selected_pos = 0;
+        nl_return_drop_start(s21, 0);
+        assert(s21->anim.return_drop_active == true);
+        assert(nl_handle_key(s21, NL_KEY_RIGHT) == true);
+        assert(s21->selected_pos == 1);
+        assert(s21->anim.return_drop_active == true); /* Navigation stays live while droplets smoothly finish */
+
+        /* Opening Settings or launching immediately cancels return droplet reveal cleanly */
+        assert(nl_handle_key(s21, NL_KEY_SETTINGS) == true);
+        assert(s21->sui.screen == NL_UI_SETTINGS_MAIN);
+        assert(s21->anim.return_drop_active == false);
+        assert(nl_handle_key(s21, NL_KEY_ESC) == true);
+        assert(s21->sui.screen == NL_UI_LIBRARY);
+
+        /* 41c. Verify Quick Profile opening droplets & '+' button droplets render cleanly across themes */
+        for (int di = 0; di < 3; di++) {
+            s21->display_mode = dms21[di];
+            s21->sui.qp_open = true;
+            s21->anim.qp_opening = true;
+            s21->anim.qp_open_fp = 110;
+            nl_render_frame(s21, fb_qp0);
+            s21->anim.qp_open_fp = 256;
+            nl_render_frame(s21, fb_qp1);
+            int diff_qp = 0;
+            for (int p = 0; p < NL_FB_PIXELS; p++) {
+                if (fb_qp0[p] != fb_qp1[p]) diff_qp++;
+            }
+            assert(diff_qp > 500);
+
+            /* '+' button transition droplets */
+            s21->anim.prof_plus_active = true;
+            s21->anim.prof_plus_tick = 7;
+            s21->anim.prof_plus_max = 14;
+            s21->anim.prof_plus_origin_x = 182;
+            s21->anim.prof_plus_origin_y = 120;
+            nl_render_frame(s21, fb_pl);
+            s21->anim.prof_plus_active = false;
+            s21->sui.qp_open = false;
+            s21->anim.qp_open_fp = 0;
+
+            /* Avatar picker opening trailing droplets */
+            s21->sui.qp_pick_open = true;
+            s21->anim.qp_pick_fp = 96;
+            nl_render_frame(s21, fb_pl);
+            s21->sui.qp_pick_open = false;
+            s21->anim.qp_pick_fp = 0;
+        }
+
+        free(fb_base); free(fb_ret); free(fb_qp0); free(fb_qp1); free(fb_pl);
+        nl_free_icons(s21);
+        nl_profiles_free(s21);
+        free(s21);
+        printf("[PASS] Section 41 #R21 (Fast game-return warm sprite retention across 5 launches, non-blocking return reveal across 3 themes, immediate input responsiveness, and Quick Profile / '+' animations) verified.\n");
+    }
+
+    /* ========================================================================
+     * 42. #R22 UNIFIED 4-LAYER ORGANIC LIQUID PROPAGATION VERIFICATION
+     *     - Organic asymmetry at start (irreg=256) -> progressive rounding (irreg=22)
+     *     - 4-color theme progression luminance ordering (Dark, Light, Gray)
+     *     - Game Launch (NL_LAUNCH_ANIM_THEME_DROP) 4-wave full-screen coverage
+     *     - Non-blocking Game Return reverse 4-layer organic reveal
+     *     - Profile Open, Dedicated Profile Close, Profile Switch, '+' & Avatar Picker + Birth
+     * ======================================================================== */
+    {
+        assert(strstr(NL_BUILD_STAMP_STR, "#R23") != NULL);
+
+        /* 42a. Verify organic contour starts visibly irregular (non-circular) & progressively rounds out */
+        int min_start = 9999, max_start = 0;
+        int min_end = 9999, max_end = 0;
+        for (int a = 0; a < 256; a += 4) {
+            int rs = nl_liquid_eval_radius(a, 100, 256, 0x1107U, 0);
+            int re = nl_liquid_eval_radius(a, 100, 22,  0x1107U, 28);
+            if (rs < min_start) min_start = rs;
+            if (rs > max_start) max_start = rs;
+            if (re < min_end)   min_end   = re;
+            if (re > max_end)   max_end   = re;
+        }
+        int spread_start = max_start - min_start;
+        int spread_end   = max_end - min_end;
+        assert(spread_start >= 22);       /* Clearly irregular & asymmetric organic contour at start (>= 22%) */
+        assert(spread_end <= 6);          /* Progressively rounded out at end (<= 6%) */
+        assert(spread_start > spread_end * 4);
+
+        /* 42b. Verify exact 4-color theme progression luminance ordering for Dark, Light, Gray */
+        nl_accent_color_t accents22[4] = { NL_ACCENT_BLUE, NL_ACCENT_RED, NL_ACCENT_GREEN, NL_ACCENT_YELLOW };
+        for (int ai = 0; ai < 4; ai++) {
+            int lum_dark[4], lum_light[4], lum_gray[4];
+            for (int l = 0; l < 4; l++) {
+                uint16_t cd = nl_liquid_theme_color_rgb565(NL_DISPLAY_DARK,  accents22[ai], l);
+                uint16_t cl = nl_liquid_theme_color_rgb565(NL_DISPLAY_LIGHT, accents22[ai], l);
+                uint16_t cg = nl_liquid_theme_color_rgb565(NL_DISPLAY_GRAY,  accents22[ai], l);
+                lum_dark[l]  = (int)((cd >> 11) & 31) * 3 + (int)((cd >> 5) & 63) * 3 + (int)(cd & 31);
+                lum_light[l] = (int)((cl >> 11) & 31) * 3 + (int)((cl >> 5) & 63) * 3 + (int)(cl & 31);
+                lum_gray[l]  = (int)((cg >> 11) & 31) * 3 + (int)((cg >> 5) & 63) * 3 + (int)(cg & 31);
+            }
+            /* Dark: lightest -> darkest */
+            assert(lum_dark[0] > lum_dark[1] && lum_dark[1] > lum_dark[2] && lum_dark[2] > lum_dark[3]);
+            /* Light: darkest -> lightest */
+            assert(lum_light[0] < lum_light[1] && lum_light[1] < lum_light[2] && lum_light[2] < lum_light[3]);
+            /* Gray: lightest -> increasingly grayed */
+            assert(lum_gray[0] > lum_gray[1] && lum_gray[1] > lum_gray[2] && lum_gray[2] > lum_gray[3]);
+        }
+
+        /* 42c. Render full 30-frame Game Launch (Theme Drop), 22-frame Game Return, and all 4 Profile transitions */
+        nl_state_t *s22 = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        uint16_t *fb22  = (uint16_t *)malloc(NL_FB_BYTES);
+        uint16_t *fb22b = (uint16_t *)malloc(NL_FB_BYTES);
+        assert(s22 != NULL && fb22 != NULL && fb22b != NULL);
+        nl_init_state(s22);
+        nl_profiles_init_default(s22);
+        s22->total_games = 6;
+        for (int i = 0; i < 6; i++) {
+            snprintf(s22->games[i].title, sizeof(s22->games[i].title), "Liquid%d", i + 1);
+            snprintf(s22->games[i].filename, sizeof(s22->games[i].filename), "liquid%d.tns", i + 1);
+            snprintf(s22->games[i].path, sizeof(s22->games[i].path), "/documents/games/liquid%d.tns", i + 1);
+        }
+        nl_rebuild_filter(s22);
+        s22->settings.launch_anim_mode = NL_LAUNCH_ANIM_THEME_DROP;
+
+        nl_display_mode_t dms22[3] = { NL_DISPLAY_DARK, NL_DISPLAY_LIGHT, NL_DISPLAY_GRAY };
+        for (int di = 0; di < 3; di++) {
+            s22->display_mode = dms22[di];
+
+            /* Game Launch 4-layer organic propagation (frames 0..30) */
+            for (int step = 0; step <= 30; step++) {
+                nl_render_launch_zoom(s22, fb22, step, 30);
+            }
+            /* Final frame must cleanly cover full 320x240 screen with layer 3 final theme color */
+            uint16_t final_c3 = nl_liquid_theme_color_rgb565(dms22[di], s22->accent_color, 3);
+            assert(fb22[0] == final_c3);
+            assert(fb22[NL_SCREEN_W - 1] == final_c3);
+            assert(fb22[(NL_SCREEN_H - 1) * NL_SCREEN_W] == final_c3);
+            assert(fb22[NL_FB_PIXELS - 1] == final_c3);
+            assert(fb22[120 * NL_SCREEN_W + 160] == final_c3);
+
+            /* Game Return non-blocking reverse 4-layer organic reveal */
+            nl_render_frame(s22, fb22b); /* Pure library reference */
+            nl_return_drop_start(s22, 0);
+            assert(s22->anim.return_drop_max == 18);
+            for (int rt = 0; rt < 24; rt++) {
+                nl_render_frame(s22, fb22);
+                if (rt == 6) {
+                    /* Early-mid reveal: corners still carry liquid bands while live aperture is opening */
+                    int diff_mid = 0;
+                    for (int px = 0; px < NL_FB_PIXELS; px++) {
+                        if (fb22[px] != fb22b[px]) diff_mid++;
+                    }
+                    assert(diff_mid > 1000 && diff_mid < NL_FB_PIXELS);
+                }
+                (void)nl_anim_step(s22);
+            }
+            assert(s22->anim.return_drop_active == false);
+
+            /* Profile A: Quick Profile Opening organic liquid propagation */
+            s22->sui.qp_open = true;
+            s22->anim.qp_opening = true;
+            s22->anim.qp_open_fp = 128;
+            nl_render_frame(s22, fb22);
+
+            /* Profile D: Dedicated Quick Profile Closing organic liquid propagation */
+            s22->sui.qp_open = false;
+            s22->anim.qp_opening = false;
+            s22->anim.qp_open_fp = 128;
+            nl_render_frame(s22, fb22b);
+            int diff_open_close = 0;
+            for (int px = 0; px < NL_FB_PIXELS; px++) {
+                if (fb22[px] != fb22b[px]) diff_open_close++;
+            }
+            assert(diff_open_close > 500); /* Closing propagation is visually distinct from opening! */
+            s22->anim.qp_open_fp = 0;
+
+            /* Profile B: Profile Switch enriched with 4-layer organic liquid propagation */
+            s22->anim.prof_switch_active = true;
+            s22->anim.prof_switch_max = 26;
+            s22->anim.prof_switch_origin_x = 116;
+            s22->anim.prof_switch_origin_y = 120;
+            s22->anim.prof_switch_origin_d = 34;
+            s22->anim.prof_switch_avatar_id = 2;
+            s22->anim.prof_switch_from_avatar_id = 0;
+            for (int pt = 0; pt < 26; pt += 4) {
+                s22->anim.prof_switch_tick = pt;
+                nl_render_frame(s22, fb22);
+            }
+            s22->anim.prof_switch_active = false;
+
+            /* Profile C: '+' Button + Avatar Picker Open/Close + Profile Birth organic liquid */
+            s22->sui.qp_open = true;
+            s22->anim.qp_open_fp = 256;
+            s22->anim.prof_plus_active = true;
+            s22->anim.prof_plus_max = 16;
+            s22->anim.prof_plus_origin_x = 182;
+            s22->anim.prof_plus_origin_y = 120;
+            for (int pt = 0; pt < 16; pt += 3) {
+                s22->anim.prof_plus_tick = pt;
+                nl_render_frame(s22, fb22);
+            }
+            s22->anim.prof_plus_active = false;
+            s22->sui.qp_open = false;
+            s22->anim.qp_open_fp = 0;
+
+            s22->sui.qp_pick_open = true;
+            s22->anim.qp_pick_fp = 112;
+            nl_render_frame(s22, fb22);
+            s22->sui.qp_pick_open = false;
+            s22->anim.qp_pick_fp = 112;
+            nl_render_frame(s22, fb22);
+            s22->anim.qp_pick_fp = 0;
+
+            s22->sui.qp_open = true;
+            s22->anim.qp_open_fp = 256;
+            s22->anim.prof_birth_active = true;
+            s22->anim.prof_birth_max = 18;
+            s22->anim.prof_birth_tick = 8;
+            s22->anim.prof_birth_avatar_id = 5;
+            s22->anim.prof_birth_slot = 0;
+            nl_render_frame(s22, fb22);
+            s22->anim.prof_birth_active = false;
+            s22->sui.qp_open = false;
+            s22->anim.qp_open_fp = 0;
+        }
+
+        free(fb22); free(fb22b);
+        nl_profiles_free(s22);
+        free(s22);
+        printf("[PASS] Section 42 #R22 (Unified 4-layer organic liquid propagation: irregular->rounded contour, Dark/Light/Gray 4-color progressions, Game Launch, non-blocking Game Return reveal, and Profile Open/Close/Switch/+/Birth) verified.\n");
+    }
+
+    /* ========================================================================
+     * 43. #R23 ULTRA-FAST GAME RETURN (CX II-T STATIC FB + ADJACENT PEEK WARM
+     *     SPRITES + CONDITIONAL FILTER REBUILD) & 4 INDEPENDENT ANIMATION
+     *     CATEGORIES (APP OPEN / APP CLOSE / GAME LAUNCH / GAME RETURN)
+     * ======================================================================== */
+    {
+        assert(strstr(NL_BUILD_STAMP_STR, "#R23") != NULL);
+        nl_renderer_cleanup();
+        assert(system("rm -rf /tmp/nl_r23_suite_fs && mkdir -p /tmp/nl_r23_suite_fs/ndless") == 0);
+
+        nl_state_t *s23 = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        uint16_t *fb_a  = (uint16_t *)malloc(NL_FB_BYTES);
+        uint16_t *fb_b  = (uint16_t *)malloc(NL_FB_BYTES);
+        uint16_t *fb_c  = (uint16_t *)malloc(NL_FB_BYTES);
+        uint16_t *fb_d  = (uint16_t *)malloc(NL_FB_BYTES);
+        assert(s23 && fb_a && fb_b && fb_c && fb_d);
+
+        nl_init_state(s23);
+        nl_profiles_init_default(s23);
+        s23->sys.hw_is_cx2 = true; /* TI-Nspire CX II-T (64 MB RAM) */
+        s23->settings.layout = NL_LAYOUT_3X3;
+        s23->settings.scroll_dir = NL_SCROLL_HORIZONTAL;
+
+        /* Verify #R23 defaults for all 4 independent animation categories */
+        assert(s23->settings.app_open_anim    == NL_OPEN_ANIM_CURRENT);
+        assert(s23->settings.app_close_anim   == NL_CLOSE_ANIM_LIQUID);
+        assert(s23->settings.launch_anim_mode == NL_LAUNCH_ANIM_CURRENT);
+        assert(s23->settings.return_anim_mode == NL_RETURN_ANIM_LIQUID);
+
+        /* 43a. Strict independence across all 4 rows in Settings -> Animations */
+        s23->sui.screen = NL_UI_LIBRARY;
+        nl_handle_key(s23, NL_KEY_SETTINGS);
+        nl_handle_key(s23, NL_KEY_DOWN);
+        nl_handle_key(s23, NL_KEY_EXE);
+        assert(s23->sui.screen == NL_UI_SETTINGS_ANIMATIONS);
+        assert(s23->sui.anim_cursor == 0);
+
+        /* Row 0: Ouverture de l'app -> change to ZOOM, verify rows 1/2/3 untouched */
+        nl_handle_key(s23, NL_KEY_RIGHT);
+        assert(s23->settings.app_open_anim == NL_OPEN_ANIM_LIQUID);
+        nl_handle_key(s23, NL_KEY_EXE);
+        assert(s23->settings.app_open_anim    == NL_OPEN_ANIM_ZOOM);
+        assert(s23->settings.app_close_anim   == NL_CLOSE_ANIM_LIQUID);
+        assert(s23->settings.launch_anim_mode == NL_LAUNCH_ANIM_CURRENT);
+        assert(s23->settings.return_anim_mode == NL_RETURN_ANIM_LIQUID);
+
+        /* Row 1: Fermeture de l'app -> change to FADE, verify rows 0/2/3 untouched */
+        nl_handle_key(s23, NL_KEY_DOWN);
+        assert(s23->sui.anim_cursor == 1);
+        nl_handle_key(s23, NL_KEY_RIGHT);
+        assert(s23->settings.app_open_anim    == NL_OPEN_ANIM_ZOOM);
+        assert(s23->settings.app_close_anim   == NL_CLOSE_ANIM_FADE);
+        assert(s23->settings.launch_anim_mode == NL_LAUNCH_ANIM_CURRENT);
+        assert(s23->settings.return_anim_mode == NL_RETURN_ANIM_LIQUID);
+
+        /* Row 2: Lancement des jeux -> change to SPINNER, verify rows 0/1/3 untouched */
+        nl_handle_key(s23, NL_KEY_DOWN);
+        assert(s23->sui.anim_cursor == 2);
+        nl_handle_key(s23, NL_KEY_RIGHT);
+        nl_handle_key(s23, NL_KEY_RIGHT);
+        assert(s23->settings.app_open_anim    == NL_OPEN_ANIM_ZOOM);
+        assert(s23->settings.app_close_anim   == NL_CLOSE_ANIM_FADE);
+        assert(s23->settings.launch_anim_mode == NL_LAUNCH_ANIM_SPINNER);
+        assert(s23->settings.return_anim_mode == NL_RETURN_ANIM_LIQUID);
+
+        /* Row 3: Retour des jeux -> change to ZOOM via LEFT wrap/cycle, verify rows 0/1/2 untouched */
+        nl_handle_key(s23, NL_KEY_DOWN);
+        assert(s23->sui.anim_cursor == 3);
+        nl_handle_key(s23, NL_KEY_RIGHT);
+        assert(s23->settings.app_open_anim    == NL_OPEN_ANIM_ZOOM);
+        assert(s23->settings.app_close_anim   == NL_CLOSE_ANIM_FADE);
+        assert(s23->settings.launch_anim_mode == NL_LAUNCH_ANIM_SPINNER);
+        assert(s23->settings.return_anim_mode == NL_RETURN_ANIM_ZOOM);
+
+        /* Mouse click on Row 1 advances ONLY Row 1 (FADE -> ZOOM) */
+        s23->sui.ctrl_mouse_active = true;
+        nl_mouse_move_to(s23, 160, 48 + 1 * 28 + 10);
+        assert(nl_mouse_click(s23) == true);
+        s23->sui.ctrl_mouse_active = false;
+        assert(s23->sui.anim_cursor == 1);
+        assert(s23->settings.app_close_anim   == NL_CLOSE_ANIM_ZOOM);
+        assert(s23->settings.app_open_anim    == NL_OPEN_ANIM_ZOOM);
+        assert(s23->settings.launch_anim_mode == NL_LAUNCH_ANIM_SPINNER);
+        assert(s23->settings.return_anim_mode == NL_RETURN_ANIM_ZOOM);
+
+        /* Render all 4 selected rows cleanly */
+        for (int r = 0; r < NL_ANIM_CAT_COUNT; r++) {
+            s23->sui.anim_cursor = r;
+            nl_render_frame(s23, fb_a);
+        }
+
+        /* 43b. Full persistence in config AND profiles + profile switch isolation + factory reset */
+        const char *cfg23  = "/tmp/nl_r23_suite_fs/ndless/nlauncher.cfg.tns";
+        const char *prof23 = "/tmp/nl_r23_suite_fs/ndless/nlauncher.profiles.tns";
+        assert(nl_save_config(s23, cfg23) == true);
+        nl_profile_snapshot_active(s23);
+        int p2_idx = nl_profile_create(s23, "FastProf", 3);
+        assert(p2_idx == 1);
+        s23->settings.app_open_anim    = NL_OPEN_ANIM_INSTANT;
+        s23->settings.app_close_anim   = NL_CLOSE_ANIM_INSTANT;
+        s23->settings.launch_anim_mode = NL_LAUNCH_ANIM_LOADING_BAR;
+        s23->settings.return_anim_mode = NL_RETURN_ANIM_INSTANT;
+        nl_profile_snapshot_active(s23);
+        assert(nl_save_profiles(s23, prof23) == true);
+
+        /* Switch back to profile 0 and verify profile 0's 4 categories restored */
+        assert(nl_profile_switch_to(s23, 0) == true);
+        assert(s23->settings.app_open_anim    == NL_OPEN_ANIM_ZOOM);
+        assert(s23->settings.app_close_anim   == NL_CLOSE_ANIM_ZOOM);
+        assert(s23->settings.launch_anim_mode == NL_LAUNCH_ANIM_SPINNER);
+        assert(s23->settings.return_anim_mode == NL_RETURN_ANIM_ZOOM);
+
+        /* Reload into fresh state */
+        nl_state_t *s23_rel = (nl_state_t *)calloc(1, sizeof(nl_state_t));
+        assert(s23_rel != NULL);
+        nl_init_state(s23_rel);
+        assert(nl_load_config(s23_rel, cfg23) == true);
+        assert(s23_rel->settings.app_open_anim    == NL_OPEN_ANIM_ZOOM);
+        assert(s23_rel->settings.app_close_anim   == NL_CLOSE_ANIM_ZOOM);
+        assert(s23_rel->settings.launch_anim_mode == NL_LAUNCH_ANIM_SPINNER);
+        assert(s23_rel->settings.return_anim_mode == NL_RETURN_ANIM_ZOOM);
+        assert(nl_load_profiles(s23_rel, prof23) == true);
+        assert(s23_rel->profiles.count == 2);
+        assert(s23_rel->profiles.items[1].app_open_anim    == NL_OPEN_ANIM_INSTANT);
+        assert(s23_rel->profiles.items[1].app_close_anim   == NL_CLOSE_ANIM_INSTANT);
+        assert(s23_rel->profiles.items[1].launch_anim_mode == NL_LAUNCH_ANIM_LOADING_BAR);
+        assert(s23_rel->profiles.items[1].return_anim_mode == NL_RETURN_ANIM_INSTANT);
+
+        /* Factory reset restores all 4 categories to defaults */
+        assert(nl_reset_settings_only(s23_rel, cfg23) == true);
+        assert(s23_rel->settings.app_open_anim    == NL_OPEN_ANIM_CURRENT);
+        assert(s23_rel->settings.app_close_anim   == NL_CLOSE_ANIM_LIQUID);
+        assert(s23_rel->settings.launch_anim_mode == NL_LAUNCH_ANIM_CURRENT);
+        assert(s23_rel->settings.return_anim_mode == NL_RETURN_ANIM_LIQUID);
+        nl_profiles_free(s23_rel);
+        free(s23_rel);
+
+        /* 43c. CX II-T Fast-Return verification:
+         *      - 36 games across 4 pages (3x3) with 84x84 icons
+         *      - G_LIB_STATIC_FB stays cached across nl_renderer_prepare_for_exec (hw_is_cx2 == true)
+         *      - Current page 0 + adjacent peek page 1 stay warm, while distant page 3 is evicted
+         *      - nl_return_needs_filter_rebuild() skips rebuild for ALPHA_ASC, requires for LAST_USED / RECENT
+         */
+        s23->sui.screen = NL_UI_LIBRARY;
+        s23->settings.layout = NL_LAYOUT_3X3;
+        s23->settings.scroll_dir = NL_SCROLL_HORIZONTAL;
+        s23->total_games = 36;
+        for (int i = 0; i < 36; i++) {
+            snprintf(s23->games[i].title, sizeof(s23->games[i].title), "Fast%02d", i + 1);
+            snprintf(s23->games[i].filename, sizeof(s23->games[i].filename), "fast%02d.tns", i + 1);
+            snprintf(s23->games[i].path, sizeof(s23->games[i].path), "/documents/ndless/fast%02d.tns", i + 1);
+            s23->games[i].icon_w = 84;
+            s23->games[i].icon_h = 84;
+            s23->games[i].icon_source = NL_ICON_PNG;
+            s23->games[i].icon_pixels = (uint16_t *)malloc(84U * 84U * sizeof(uint16_t));
+            s23->games[i].icon_alpha  = (uint8_t *)malloc(84U * 84U);
+            assert(s23->games[i].icon_pixels && s23->games[i].icon_alpha);
+            uint16_t col = (uint16_t)((((i * 5 + 3) & 31) << 11) | (((i * 7 + 9) & 63) << 5) | ((i * 3 + 11) & 31));
+            for (int p = 0; p < 84 * 84; p++) {
+                s23->games[i].icon_pixels[p] = col;
+                s23->games[i].icon_alpha[p] = 255U;
+            }
+        }
+        nl_rebuild_filter(s23);
+
+        s23->active_category = NL_CAT_ALL;
+        s23->settings.sort_order = NL_SORT_ALPHA_ASC;
+        assert(nl_return_needs_filter_rebuild(s23) == false);
+        s23->settings.sort_order = NL_SORT_ALPHA_DESC;
+        assert(nl_return_needs_filter_rebuild(s23) == false);
+        s23->settings.sort_order = NL_SORT_LAST_USED;
+        assert(nl_return_needs_filter_rebuild(s23) == true);
+        s23->settings.sort_order = NL_SORT_MOST_LAUNCHED;
+        assert(nl_return_needs_filter_rebuild(s23) == true);
+        s23->settings.sort_order = NL_SORT_PLAY_TIME;
+        assert(nl_return_needs_filter_rebuild(s23) == true);
+        s23->settings.sort_order = NL_SORT_ALPHA_ASC;
+        s23->active_category = NL_CAT_RECENT;
+        assert(nl_return_needs_filter_rebuild(s23) == true);
+        s23->active_category = NL_CAT_ALL;
+
+        /* Warm all 4 pages via real horizontal navigation, then return to page 0 */
+        s23->selected_pos = 0;
+        nl_rebuild_filter(s23);
+        nl_render_frame(s23, fb_a);
+        for (int pstep = 0; pstep < 3; pstep++) {
+            for (int k = 0; k < 3; k++) (void)nl_handle_key(s23, NL_KEY_RIGHT);
+            for (int st = 0; st < 25; st++) (void)nl_anim_step(s23);
+            nl_render_frame(s23, fb_a);
+        }
+        for (int pstep = 0; pstep < 3; pstep++) {
+            for (int k = 0; k < 3; k++) (void)nl_handle_key(s23, NL_KEY_LEFT);
+            for (int st = 0; st < 25; st++) (void)nl_anim_step(s23);
+            nl_render_frame(s23, fb_a);
+        }
+        assert(s23->current_page == 0);
+        int before23 = nl_renderer_cached_sprite_count();
+        assert(before23 >= 24);
+        assert(nl_renderer_has_static_fb_cached() == true);
+
+        nl_renderer_prepare_for_exec(s23);
+        int after23 = nl_renderer_cached_sprite_count();
+        assert(nl_renderer_has_static_fb_cached() == true);  /* CX II-T preserves G_LIB_STATIC_FB! */
+        assert(after23 >= 12 && after23 < before23);         /* Keeps page 0 + page 1 peek, evicts distant pages 2-3 */
+
+        /* Verify CX I (hw_is_cx2 == false) still frees static FB to protect tighter 32 MB RAM */
+        s23->sys.hw_is_cx2 = false;
+        nl_renderer_prepare_for_exec(s23);
+        assert(nl_renderer_has_static_fb_cached() == false);
+        s23->sys.hw_is_cx2 = true;
+        nl_render_frame(s23, fb_a);
+
+        /* 43d. Render ALL 4 App Open, ALL 4 App Close, and ALL 4 Return modes with distinct visual outputs */
+        nl_display_mode_t dms23[3] = { NL_DISPLAY_DARK, NL_DISPLAY_LIGHT, NL_DISPLAY_GRAY };
+        nl_render_splash(s23, fb_b, 20, 20); /* Splash reference */
+        for (int di = 0; di < 3; di++) {
+            s23->display_mode = dms23[di];
+            nl_render_frame(s23, fb_a); /* Library reference */
+
+            /* App Open: CURRENT vs LIQUID vs ZOOM vs INSTANT at mid-frame */
+            s23->settings.app_open_anim = NL_OPEN_ANIM_CURRENT;
+            nl_render_boot_transition(s23, fb_c, fb_b, fb_a, 8, 16);
+            s23->settings.app_open_anim = NL_OPEN_ANIM_LIQUID;
+            nl_render_boot_transition(s23, fb_d, fb_b, fb_a, 8, 16);
+            assert(memcmp(fb_c, fb_d, NL_FB_BYTES) != 0);
+            s23->settings.app_open_anim = NL_OPEN_ANIM_ZOOM;
+            nl_render_boot_transition(s23, fb_c, fb_b, fb_a, 8, 16);
+            assert(memcmp(fb_c, fb_d, NL_FB_BYTES) != 0);
+            s23->settings.app_open_anim = NL_OPEN_ANIM_INSTANT;
+            nl_render_boot_transition(s23, fb_c, fb_b, fb_a, 8, 16);
+            assert(memcmp(fb_c, fb_a, NL_FB_BYTES) == 0);
+
+            /* App Close: LIQUID vs FADE vs ZOOM vs INSTANT at mid-frame */
+            s23->settings.app_close_anim = NL_CLOSE_ANIM_LIQUID;
+            nl_render_app_close_anim(s23, fb_c, fb_a, 6, 12);
+            s23->settings.app_close_anim = NL_CLOSE_ANIM_FADE;
+            nl_render_app_close_anim(s23, fb_d, fb_a, 5, 10);
+            assert(memcmp(fb_c, fb_d, NL_FB_BYTES) != 0);
+            s23->settings.app_close_anim = NL_CLOSE_ANIM_ZOOM;
+            nl_render_app_close_anim(s23, fb_c, fb_a, 5, 10);
+            assert(memcmp(fb_c, fb_d, NL_FB_BYTES) != 0);
+            s23->settings.app_close_anim = NL_CLOSE_ANIM_INSTANT;
+            nl_render_app_close_anim(s23, fb_c, fb_a, 1, 1);
+
+            /* Game Return: LIQUID (18t) vs ZOOM (14t) vs FADE (10t) vs INSTANT (0t) */
+            s23->settings.return_anim_mode = NL_RETURN_ANIM_INSTANT;
+            nl_return_drop_start(s23, 0);
+            assert(s23->anim.return_drop_active == false);
+
+            s23->settings.return_anim_mode = NL_RETURN_ANIM_FADE;
+            nl_return_drop_start(s23, 0);
+            assert(s23->anim.return_drop_active == true && s23->anim.return_drop_max == 10);
+            s23->anim.return_drop_tick = 4;
+            nl_render_frame(s23, fb_c);
+
+            s23->settings.return_anim_mode = NL_RETURN_ANIM_ZOOM;
+            nl_return_drop_start(s23, 0);
+            assert(s23->anim.return_drop_active == true && s23->anim.return_drop_max == 14);
+            s23->anim.return_drop_tick = 5;
+            nl_render_frame(s23, fb_d);
+            assert(memcmp(fb_c, fb_d, NL_FB_BYTES) != 0);
+
+            s23->settings.return_anim_mode = NL_RETURN_ANIM_LIQUID;
+            nl_return_drop_start(s23, 0);
+            assert(s23->anim.return_drop_active == true && s23->anim.return_drop_max == 18);
+            s23->anim.return_drop_tick = 6;
+            nl_render_frame(s23, fb_c);
+            assert(memcmp(fb_c, fb_d, NL_FB_BYTES) != 0);
+            s23->anim.return_drop_active = false;
+        }
+
+        free(fb_a); free(fb_b); free(fb_c); free(fb_d);
+        nl_free_icons(s23);
+        nl_profiles_free(s23);
+        free(s23);
+        assert(system("rm -rf /tmp/nl_r23_suite_fs") == 0);
+        printf("[PASS] Section 43 #R23 (Ultra-fast CX II-T game return: preserved static FB & adjacent peek sprites + conditional filter rebuild; 4 independent animation categories: App Open / App Close / Game Launch / Game Return + persistence + profiles + factory reset) verified.\n");
+    }
+
+    nl_renderer_cleanup();
 
     printf("============================================================\n");
     printf(" ALL NATIVE C v3.1 TESTS PASSED SUCCESSFULLY (100%%)\n");

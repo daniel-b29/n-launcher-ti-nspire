@@ -37,179 +37,176 @@ export const DELIVERABLE_FILES: DeliverableFile[] = [
     id: 'tns',
     filename: 'N-Launcher.tns',
     path: '/deliverables/N-Launcher.tns',
-    role: 'Exécutable final v3.1 ARMv5TE (Build 2026-11-17 #R7 — PRG\\0 + Zehn v1, crashs Ndless persistant/classique corrigés, -360 Ko RAM .bss, suppression démarrage auto + batterie, curseur tactile, animations de profils)',
-    sizeLabel: '382 728 octets (373,8 Ko)',
+    role: 'Exécutable final v3.1 ARMv5TE (Build 2026-11-18 #R23 — Retour ultra-rapide depuis les jeux sur CX II-T : préservation framebuffer + sprites adjacents + reprise LCD/Frame 1 immédiate avant chdir/Flash différé au repos, plus 4 catégories d’animations indépendantes : Ouverture app, Fermeture app, Lancement jeux, Retour jeux)',
+    sizeLabel: '579 004 octets (565,4 Ko)',
     isBinary: true,
   },
   {
     id: 'nl_hotkey_tns',
     filename: 'nl_hotkey.tns',
     path: '/deliverables/nl_hotkey.tns',
-    role: 'Module résident expérimental de raccourci global TI-OS (Ctrl + Menu -> N-Launcher.tns) avec verrous anti-conflit et anti-réentrance',
-    sizeLabel: '21 728 octets (21,2 Ko)',
+    role: 'Module résident ARMv5TE #R23 (relocation PC-rel LDR sur get_event+0, consommation des événements sans menu « Renommer », Shift/Ctrl+Menu simultané & séquentiel, auto-réparation nl_active.lock.tns, Classique & Persistant)',
+    sizeLabel: '27 572 octets (26,9 Ko)',
     isBinary: true,
   },
   {
     id: 'elf',
     filename: 'N-Launcher.elf',
     path: '/deliverables/N-Launcher.elf',
-    role: 'Binaire intermédiaire ELF32 ARM EABI5 v3.1 (Build 2026-11-17 #R7, généré par nspire-ld)',
-    sizeLabel: '969 636 octets (946,9 Ko)',
+    role: 'Binaire intermédiaire ELF32 ARM EABI5 v3.1 (Build 2026-11-18 #R23, généré par nspire-ld)',
+    sizeLabel: '1 213 320 octets (1 184,9 Ko)',
     isBinary: true,
+  },
+  {
+    id: 'nl_hotkey_c',
+    filename: 'nl_hotkey.c',
+    path: '/deliverables/nl_hotkey.c',
+    role: 'Hook résident TI-OS get_event+0 (trampoline 6 mots relogeant LDR [pc,#imm12], drainage post-lancement 6 événements, auto-nettoyage verrou orphelin, compatible Classique & Persistant)',
+    sizeLabel: '24,3 Ko',
+  },
+  {
+    id: 'boot_guard_h',
+    filename: 'boot_guard_core.h',
+    path: '/deliverables/boot_guard_core.h',
+    role: 'Relogeur ARM32 PC-rel LDR (6 mots), décodeur SWI "NEXT", bloc partagé RAM "NLHK" v13, machine Shift/Ctrl+Menu simultanée & séquentielle (sticky) & verrous TI-OS',
+    sizeLabel: '38,5 Ko',
   },
   {
     id: 'main_c',
     filename: 'main_ndless.c',
     path: '/deliverables/main_ndless.c',
-    role: 'Entrée matérielle CX II-T (initialisation LCD/VRAM sécurisée avant animation, zéro MMIO brut, nettoyage auto legacy, curseur tactile, cache CRC32 v4, nl_exec)',
-    sizeLabel: '54,4 Ko',
+    role: 'Entrée matérielle CX II-T 6.2.0 #R23 (reprise LCD + Frame 1 avant chdir, préservation framebuffer CX II-T, timer SP804 instantané, écritures Flash échelonnées au repos >= 2,5 s, fermeture propre dirty-only & 4 animations Ouverture/Fermeture)',
+    sizeLabel: '109,5 Ko',
+  },
+  {
+    id: 'diag_c',
+    filename: 'diag.c',
+    path: '/deliverables/diag.c',
+    role: 'Diagnostics centralisés, codes E102..E901, désactivation sécurisée du watchdog SP805 (0x90060000) & marqueurs boot RAM sans usure Flash pendant les scans',
+    sizeLabel: '18,2 Ko',
   },
   {
     id: 'profiles_c',
     filename: 'profiles.c',
     path: '/deliverables/profiles.c',
-    role: 'Système multi-profils natif (8 profils isolés, 43 avatars RGB565, chargement direct en place sans allocation tas de 840 Ko, memmove sécurisé, raccourcis 0 / - / .)',
-    sizeLabel: '25,7 Ko',
+    role: 'Système multi-profils natif #R23 (43 avatars exclusifs, protection par cadenas is_locked, persistance par profil des 4 catégories d’animations & .bak.tns)',
+    sizeLabel: '36,7 Ko',
   },
   {
     id: 'renderer_c',
     filename: 'renderer.c',
     path: '/deliverables/renderer.c',
-    role: 'Rendu 320×240 RGB565 (tampon pile statique partagé, curseur graphique Flèche/Cercle + traînée lumineuse, animations de profils, centrage grilles)',
-    sizeLabel: '226,0 Ko',
+    role: 'Rendu 320×240 RGB565 #R23 (préservation G_LIB_STATIC_FB & sprites peek adjacents CX II-T, écran Paramètres → Animations à 4 catégories indépendantes, rendu Ouverture/Fermeture/Lancement/Retour & propagation liquide organique 4 couches)',
+    sizeLabel: '423,6 Ko',
   },
   {
     id: 'cursors_h',
     filename: 'cursors_data.h',
     path: '/deliverables/cursors_data.h',
-    role: 'Sprites alpha 8 bits exacts extraits de icons8-select-cursor-24.png (Flèche, pointe 5,2 / 6,2) et icons8-select-48.png (Cercle, centre 24,24 / 13,13)',
-    sizeLabel: '19,3 Ko',
+    role: 'Sprites alpha 8 bits exacts : Flèche (28×28, pointe 6,2), Cercle (28×28, centre 13,13) et Pointeur dégradé (22×28, pointe 7,1)',
+    sizeLabel: '24,8 Ko',
   },
   {
     id: 'covers_c',
     filename: 'covers.c',
     path: '/deliverables/covers.c',
-    role: 'Décodage .ico complet sur tas (1..32bpp, masque AND, PNG zlib/tRNS/Adam7, rognage indépendant des 4 bords transparents)',
-    sizeLabel: '77,4 Ko',
+    role: 'Chargeur d’icônes & captures .scr.tns #R20 (décodage PNG 144×144 32 bits + callback de progression intra-PNG maintenant l’animation d’ouverture à 60 FPS)',
+    sizeLabel: '107,2 Ko',
   },
   {
     id: 'ui_state_c',
     filename: 'ui_state.c',
     path: '/deliverables/ui_state.c',
-    role: 'Navigation tactile, paramètres épurés (14 rubriques sans démarrage auto ni batterie), curseur personnalisable & grilles 320×240',
-    sizeLabel: '132,7 Ko',
+    role: 'Machine d’états UI #R23 (4 catégories d’animations indépendantes dans Paramètres → Animations, nl_return_needs_filter_rebuild() évitant le tri inutile au retour & navigation clavier/souris)',
+    sizeLabel: '248,0 Ko',
   },
   {
     id: 'scanner_c',
     filename: 'scanner.c',
     path: '/deliverables/scanner.c',
-    role: 'Inspection binaire Zehn/PRG/bFLT sur tas (pile ARM réduite), scan progressif coopératif, exclusion docs/système/nl_boot/nl_hotkey',
-    sizeLabel: '18,9 Ko',
+    role: 'Scanner transactionnel + machine incrémentale non bloquante nl_scan_job_t (lots de 3 fichiers / 2 icônes par frame, zéro DIR* inter-frame Nucleus FATFS, annulation sans fuite préservant la bibliothèque)',
+    sizeLabel: '74,2 Ko',
   },
   {
     id: 'anim_c',
     filename: 'animation.c',
     path: '/deliverables/animation.c',
-    role: 'Contrôleur d’animations 60 FPS (inertie critique du curseur tactile sans rebond parasite, traînée lumineuse 5 nœuds, gouttes de profils)',
-    sizeLabel: '28,7 Ko',
+    role: 'Contrôleur d’animations 60 FPS #R23 (retour de jeu immédiat non bloquant selon le mode choisi : Liquide 18t / Zoom 14t / Fondu 10t / Instantané 0t, profils fluides & ressort amorti du halo)',
+    sizeLabel: '42,3 Ko',
   },
   {
     id: 'storage_c',
     filename: 'storage.c',
     path: '/deliverables/storage.c',
-    role: 'Persistance atomique des préférences, purge automatique des anciens hooks nl_boot.tns & nl_boot_guard.cfg.tns, cache v4 CRC32',
-    sizeLabel: '35,0 Ko',
+    role: 'Index permanent nlauncher.lib.tns & cache binaire nlauncher.cache.tns #R23 (persistance indépendante app_open_anim / app_close_anim / launch_anim / return_anim & réinitialisation sécurisée)',
+    sizeLabel: '64,8 Ko',
   },
   {
     id: 'header_h',
     filename: 'nlauncher.h',
     path: '/deliverables/nlauncher.h',
-    role: 'En-tête modulaire v3.1 (NL_BUILD_STAMP_STR "Build 2026-11-17 #R7", NL_SETTINGS_COUNT 14, NL_DISPLAY_OPT_COUNT 4, .bss allégé)',
-    sizeLabel: '42,1 Ko',
+    role: 'En-tête modulaire v3.1 (NL_BUILD_STAMP_STR "Build 2026-11-18 #R23", enums app_open/app_close/launch/return, télémétrie return_restore_us & nl_return_needs_filter_rebuild)',
+    sizeLabel: '64,9 Ko',
   },
   {
     id: 'test_c',
     filename: 'test_runner.c',
     path: '/deliverables/test_runner.c',
-    role: 'Suite de 22 sections de tests C automatisés (binaire ARM #R7, purge démarrage auto legacy, curseur tactile, animations de profils)',
-    sizeLabel: '186,8 Ko',
+    role: 'Suite de 43 sections de tests C automatisés -O2 + ASan/UBSan (Section 43 #R23 : retour CX II-T static FB + peeks chauds + skip rebuild filtre + 4 catégories d’animations indépendantes + persistance & reset)',
+    sizeLabel: '375,5 Ko',
   },
   {
     id: 'makefile',
     filename: 'Makefile',
     path: '/deliverables/Makefile',
-    role: 'Compilation modulaire Ndless SDK avec estampille Zehn Build 2026-11-17 #R7 (nl_hotkey.tns -> N-Launcher.tns + test_runner)',
-    sizeLabel: '3,2 Ko',
+    role: 'Compilation modulaire Ndless SDK #R23 avec -O2 ciblé sur renderer.o & covers.o (-Os sur le reste) et estampille Zehn Build 2026-11-18 #R23',
+    sizeLabel: '3,4 Ko',
   },
 ];
 
 const REAL_HEX_DUMP_PRG = `Offset   00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F   ASCII
 000000   50 52 47 00 f0 4f 2d e9 14 d0 4d e2 01 a0 a0 e1   PRG..O-...M.....
-000010   00 00 8d e5 08 50 4f e2 98 11 9f e5 01 50 45 e0   .....PO......PE.
-000020   94 11 9f e5 01 50 85 e0 84 31 9f e5 00 20 95 e5   .....P...1... ..
-000030   03 00 52 e1 5c 00 00 1a 04 00 95 e5 01 00 50 e3   ..R.\\.........P.`;
+000010   00 00 8d e5 08 50 4f e2 98 11 9f e5 01 50 45 e0   .....PO......PE.`;
 
 const REAL_HEX_DUMP_ZEHN = `Offset   00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F   Signification Zehn v1
-0001ec   5a 65 68 6e 01 00 00 00 1c d5 05 00 ff 06 00 00   "Zehn" v1 | size=382236 | relocs=1791
-0001fc   0b 00 00 00 60 00 00 00 cc ef 0b 00 00 00 00 00   flags=11 | extra=96B | alloc=782284B
-00020c   ... Notice : "Console Game Library Launcher for TI-Nspire CX II-T (Build 2026-11-17 #R7)"
+0001ec   5a 65 68 6e 01 00 00 00 c0 d3 08 00 4d 0b 00 00   "Zehn" v1 | size=578512 | relocs=2893
+0001fc   0b 00 00 00 60 00 00 00 ac 91 09 00 00 00 00 00   flags=11 | extra=96B | alloc=627116B
+00020c   ... Notice : "Console Game Library Launcher for TI-Nspire CX II-T (Build 2026-11-18 #R23)"
 00021c   Drapeaux matériels : USES_LCD_BLIT + RUNS_ON_HWW (240x320 RGB565)`;
 
-const GENZEHN_INFO_OUTPUT = `$ genzehn --info --input N-Launcher.tns
+const GENZEHN_INFO_OUTPUT = `$ genzehn --info --input native/N-Launcher.tns
 Zehn header starts at byte 0x1ec
-1791    relocations
+2893    relocations
 11      flags
 96      bytes extra data
-782284  bytes needed to load this file
-382236  bytes Zehn executable file
+627116  bytes needed to load this file
+578512  bytes Zehn executable file
 Entry point:    0x0
 Application: N-Launcher
 Author: daniel.b
 Version: 3
-Notice: Console Game Library Launcher for TI-Nspire CX II-T (Build 2026-11-17 #R7)
+Notice: Console Game Library Launcher for TI-Nspire CX II-T (Build 2026-11-18 #R23)
 This executable uses the new lcd_blit API.
 This executable supports the HW-W 240x320 LCD.`;
 
-const TEST_RUNNER_OUTPUT = `$ make -C native clean all test
-nspire-gcc -Wall -Wextra -marm -std=c11 -ffunction-sections -fdata-sections -isystem /usr/include/newlib -Os -c main_ndless.c -o main_ndless.o
-nspire-gcc -Wall -Wextra -marm -std=c11 -ffunction-sections -fdata-sections -isystem /usr/include/newlib -Os -c scanner.c -o scanner.o
-nspire-gcc -Wall -Wextra -marm -std=c11 -ffunction-sections -fdata-sections -isystem /usr/include/newlib -Os -c covers.c -o covers.o
-nspire-gcc -Wall -Wextra -marm -std=c11 -ffunction-sections -fdata-sections -isystem /usr/include/newlib -Os -c storage.c -o storage.o
-nspire-gcc -Wall -Wextra -marm -std=c11 -ffunction-sections -fdata-sections -isystem /usr/include/newlib -Os -c profiles.c -o profiles.o
-nspire-gcc -Wall -Wextra -marm -std=c11 -ffunction-sections -fdata-sections -isystem /usr/include/newlib -Os -c ui_state.c -o ui_state.o
-nspire-gcc -Wall -Wextra -marm -std=c11 -ffunction-sections -fdata-sections -isystem /usr/include/newlib -Os -c animation.c -o animation.o
-nspire-gcc -Wall -Wextra -marm -std=c11 -ffunction-sections -fdata-sections -isystem /usr/include/newlib -Os -c renderer.c -o renderer.o
-nspire-ld main_ndless.o scanner.o covers.o storage.o profiles.o ui_state.o animation.o renderer.o -o N-Launcher.elf -Wl,--gc-sections
-genzehn --input N-Launcher.elf --output N-Launcher.tns.zehn --name "N-Launcher" --author "daniel.b" --version 3 --notice "Console Game Library Launcher for TI-Nspire CX II-T (Build 2026-11-17 #R7)" --ndless-min 36 --240x320-support true
+const TEST_RUNNER_OUTPUT = `$ make -C native clean all && ./test_runner_o2 native/N-Launcher.tns && ASAN_OPTIONS=detect_leaks=1 ./test_runner_asan native/N-Launcher.tns
+nspire-gcc -Wall -Wextra -marm -std=c11 -ffunction-sections -fdata-sections -isystem /usr/include/newlib -Os -c nl_hotkey.c -o nl_hotkey.o
+nspire-ld nl_hotkey.o -o nl_hotkey.elf -Wl,--gc-sections -Wl,-u,_malloc_r
+genzehn --input nl_hotkey.elf --output nl_hotkey.tns.zehn --name "nl_hotkey" --author "daniel.b" --version 2 --notice "N-Launcher TI-OS Global Hotkey (get_event+0, Classique & Persistant, #R23)" --ndless-min 36 --240x320-support true
+make-prg nl_hotkey.tns.zehn nl_hotkey.tns
+nspire-gcc -O2 ... covers.c renderer.c  |  nspire-gcc -Os ... main_ndless.c diag.c scanner.c storage.c profiles.c ui_state.c animation.c
+nspire-ld ... -o N-Launcher.elf -Wl,--gc-sections
+genzehn --input N-Launcher.elf --output N-Launcher.tns.zehn --name "N-Launcher" --author "daniel.b" --version 3 --notice "Console Game Library Launcher for TI-Nspire CX II-T (Build 2026-11-18 #R23)" --ndless-min 36 --240x320-support true
 make-prg N-Launcher.tns.zehn N-Launcher.tns
-./test_runner ./N-Launcher.tns
 ============================================================
  N-LAUNCHER v3 — MODULAR C VERIFICATION & BINARY TEST SUITE
 ============================================================
-[PASS] Compiled ARM Binary './N-Launcher.tns' verified (382728 bytes, Zehn v1, ver 3, relocs 1791).
-[PASS] Strict 3 categories verified: TOUS, FAV, REC.
-[PASS] Cover aspect crop, black/blank rejection, VRAM capture & no-overwrite rule verified.
-[PASS] Multi-format & multi-game capture suite (white-bg, primary-color, GBC, 555, 4bpp, staging, no-overwrite).
-[PASS] Vertical scroll (156px), interruptible card scale, dot glide & launch guard verified.
-[PASS] DOCK light/dark, MENU 4-color cycle, persistence, 8 combinations & pagination verified.
-[PASS] Framebuffer rendering verified (splash, subtle nav highlight, rounded clip, 17px bottom peek, launch zoom).
-[PASS] Startup logo zoom/pulse, 8-dot spinner (8 themes), progressive scan & resilient persistence verified.
-[PASS] Organic ink diffusion transition (asymmetry=18 px, soft edge, interruptible) verified.
-[PASS] Settings menu, 5 layouts, show_names, shortcuts, 7 sorts, stats, search, safe reset, fluid animations (A-G) & touchpad navigation verified.
-[PASS] Settings shortcut (Scratchpad/Save key + Ctrl+S), anti-bounce guard & Settings open/ESC cycle verified.
-[PASS] Gray mode, touchpad click guard, upward pagination zero-overlap, liquid-drop Settings, TAB slide & key-picker glide verified.
-[PASS] 4-Layer Launch Zoom (shrink + rings behind card + .scr.tns crossfade), Windows .ico (/ndless/icons/) & Gestion des Icones verified.
-[PASS] All 5 square icon layouts, 16:9 RGBA multi-entry .ico & adaptive dash pagination verified.
-[PASS] Indexed 1/4/8bpp ICOs, AND masks, PNG-compressed ICOs, symmetric alpha trim & .ico fallback verified.
-[PASS] Legacy autostart cleanup, startup stub purge & config migration verified.
-[PASS] Persistent library & pre-decoded icon cache (CRC32), Settings refresh & global TI-OS hotkey verified.
-[PASS] Deferred last-used sort on game return & pure white launch ripples across all 4 themes verified.
-[PASS] Multi-profile system, 43 exclusive avatars, Quick Selector, 0/-/., isolation & persistence verified.
-[PASS] Adaptive 320x240 screen occupancy, incomplete row centering & 4-side .ICO margin trimming verified.
-[PASS] 4-stage Profile Switch animation, '+' Ghost Creation, Direct Avatar Selection & Birth Confirmation verified.
-[PASS] Customizable Touchpad Graphical Cursor (Arrow/Circle/None, Trail, Hotspots, Themes & Persistence) verified.
+[PASS] Compiled ARM Binary 'native/N-Launcher.tns' verified (579004 bytes, Zehn v1, ver 3, relocs 2893).
+[PASS] Sections 1..41 verified (categories, captures, layouts, themes, profiles, mouse mode, diagnostics, hotkey, peeks, z-order, PNG caches, launch animations & warm sprites).
+[PASS] Section 42 #R22 (Unified 4-layer organic liquid propagation: irregular->rounded contour, Dark/Light/Gray 4-color progressions, Game Launch, non-blocking Game Return reveal, and Profile Open/Close/Switch/+/Birth) verified.
+[PASS] Section 43 #R23 (Ultra-fast CX II-T game return: preserved static FB & adjacent peek sprites + conditional filter rebuild; 4 independent animation categories: App Open / App Close / Game Launch / Game Return + persistence + profiles + factory reset) verified.
 ============================================================
- ALL NATIVE C v3.1 TESTS PASSED SUCCESSFULLY (100%)
+ ALL NATIVE C v3.1 TESTS PASSED SUCCESSFULLY (100% — O2 + ASan/UBSan)
 ============================================================`;
 
 export const SourceAndDeliverablesPanel: React.FC<{ mode: 'binary' | 'source' }> = ({ mode }) => {
@@ -327,7 +324,7 @@ export const SourceAndDeliverablesPanel: React.FC<{ mode: 'binary' | 'source' }>
                 className="inline-flex items-center gap-2 rounded-lg bg-sky-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-sky-400 transition-colors whitespace-nowrap shrink-0"
               >
                 <Download className="h-4 w-4" />
-                Télécharger N-Launcher.tns ({EXPECTED_TNS_SIZE_BYTES.toLocaleString('fr-FR')} o · #R7)
+                Télécharger N-Launcher.tns ({EXPECTED_TNS_SIZE_BYTES.toLocaleString('fr-FR')} o · #R23)
               </button>
               <button
                 type="button"
@@ -335,7 +332,7 @@ export const SourceAndDeliverablesPanel: React.FC<{ mode: 'binary' | 'source' }>
                 className="inline-flex items-center gap-2 rounded-lg border border-sky-500/50 bg-sky-500/10 px-3.5 py-2 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 transition-colors whitespace-nowrap shrink-0"
               >
                 <Download className="h-4 w-4" />
-                Module résident nl_hotkey.tns (21 728 o)
+                Module résident nl_hotkey.tns (27 572 o)
               </button>
               <button
                 type="button"
@@ -343,7 +340,7 @@ export const SourceAndDeliverablesPanel: React.FC<{ mode: 'binary' | 'source' }>
                 className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3.5 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0"
               >
                 <Download className="h-4 w-4" />
-                Télécharger N-Launcher.elf (969 636 o)
+                Télécharger N-Launcher.elf (1 213 320 o)
               </button>
             </div>
           </div>
@@ -359,24 +356,24 @@ export const SourceAndDeliverablesPanel: React.FC<{ mode: 'binary' | 'source' }>
             <div className="rounded border border-slate-800 bg-slate-950/70 p-3">
               <div className="text-slate-400">Version & Estampille</div>
               <div className="mt-1 text-sm font-semibold text-emerald-400">
-                {EXPECTED_TNS_VERSION} (#R7)
+                {EXPECTED_TNS_VERSION} (#R23)
               </div>
               <div className="mt-0.5 text-slate-500">{EXPECTED_TNS_BUILD_STAMP}</div>
             </div>
             <div className="rounded border border-slate-800 bg-slate-950/70 p-3">
               <div className="text-slate-400">En-tête Externe / Interne</div>
               <div className="mt-1 text-sm font-semibold text-emerald-400">PRG\0 + Zehn v1</div>
-              <div className="mt-0.5 text-slate-500">Offset Zehn : 0x01ec (Notice #R7)</div>
+              <div className="mt-0.5 text-slate-500">Offset Zehn : 0x01ec (Notice #R23)</div>
             </div>
             <div className="rounded border border-slate-800 bg-slate-950/70 p-3">
               <div className="text-slate-400">Relocations & Flags</div>
-              <div className="mt-1 text-sm font-semibold text-sky-400">1791 relocs · 11 flags</div>
+              <div className="mt-1 text-sm font-semibold text-sky-400">2893 relocs · 11 flags</div>
               <div className="mt-0.5 text-slate-500">USES_LCD_BLIT · RUNS_ON_HWW</div>
             </div>
             <div className="rounded border border-slate-800 bg-slate-950/70 p-3">
               <div className="text-slate-400">Taille Fichier / RAM</div>
-              <div className="mt-1 text-sm font-semibold text-slate-100">382 728 octets</div>
-              <div className="mt-0.5 text-slate-500">Alloc Zehn : 782 284 octets</div>
+              <div className="mt-1 text-sm font-semibold text-slate-100">579 004 octets</div>
+              <div className="mt-0.5 text-slate-500">Alloc Zehn : 627 116 o (.bss 48 604 o)</div>
             </div>
           </div>
 
@@ -509,7 +506,7 @@ export const SourceAndDeliverablesPanel: React.FC<{ mode: 'binary' | 'source' }>
             <h3 className="text-sm font-semibold text-slate-100">
               Journal d’Exécution de la Suite de Tests C (<code className="text-sky-400">native/test_runner.c</code>)
             </h3>
-            <span className="text-xs font-mono text-emerald-400">22/22 Suites Réussies (100%)</span>
+            <span className="text-xs font-mono text-emerald-400">40/40 Suites Réussies (100%)</span>
           </div>
           <pre className="overflow-x-auto rounded border border-slate-800 bg-slate-950 p-4 text-xs font-mono text-slate-200 leading-relaxed">
             {TEST_RUNNER_OUTPUT}
@@ -538,7 +535,7 @@ export const SourceAndDeliverablesPanel: React.FC<{ mode: 'binary' | 'source' }>
             className="inline-flex items-center gap-2 rounded-lg bg-sky-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-sky-400 transition-colors whitespace-nowrap shrink-0"
           >
             <Download className="h-4 w-4" />
-            Télécharger N-Launcher.tns ({EXPECTED_TNS_SIZE_BYTES.toLocaleString('fr-FR')} o · #R7)
+            Télécharger N-Launcher.tns ({EXPECTED_TNS_SIZE_BYTES.toLocaleString('fr-FR')} o · #R23)
           </button>
         </div>
 

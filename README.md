@@ -4,9 +4,9 @@
 [![Platform](https://img.shields.io/badge/TI--Nspire-CX%20II--T%20%7C%20CX%20%7C%20Ndless-blue)](https://github.com/daniel-b29/n-launcher-ti-nspire)
 [![Language](https://img.shields.io/badge/C11%20%2B%20React%20%2F%20TypeScript-320x240%20RGB565-informational)](https://github.com/daniel-b29/n-launcher-ti-nspire)
 
-> **Game launcher and frontend menu for Ndless games on TI-Nspire CX / CX II-T** (OS 5.2 / 5.3 / Ndless r2020+), with a pixel-accurate 320×240 RGB565 web simulator.
+> **Game launcher and frontend menu for Ndless games on TI-Nspire CX / CX II-T** (TI-OS 6.2.0 / 5.2+ / ~4.5.0, Ndless Classic & Persistent), with a pixel-accurate 320×240 RGB565 web simulator.
 
-**N-Launcher** (`N-Launcher.tns`, v3.1) est un lanceur de jeux natif écrit en **C11 modulaire** pour les calculatrices **Texas Instruments TI-Nspire CX II-T** (ainsi que TI-Nspire CX / CX CAS) équipées de **Ndless** (OS ≥ 5.2, Ndless r2020+ / 5.2.0.771 / 5.3.0.564).
+**N-Launcher** (`N-Launcher.tns`, v3.1 `#R10`) est un lanceur de jeux natif écrit en **C11 modulaire** pour les calculatrices **Texas Instruments TI-Nspire CX II-T (TI-OS 6.2.0)** et **TI-Nspire CX / CX CAS (TI-OS ~4.5.0)** équipées de **Ndless** (**Classique non persistant** et **Persistant**).
 
 Il transforme la calculatrice en véritable interface de console portable (320×240 RGB565), accompagnée d'un **simulateur web interactif React/TypeScript** fidèle au pixel près pour tester et inspecter les binaires `.tns` sur ordinateur.
 
@@ -35,8 +35,10 @@ Il transforme la calculatrice en véritable interface de console portable (320×
 - **3 modes d'affichage & 4 couleurs d'accent** (**12 thèmes**) : cycle **Sombre → Clair → Gris** (`DOC`) et **Bleu → Rouge → Vert → Jaune** (`MENU`) avec transition d'encre organique.
 - **Système multi-profils isolés** : jusqu'à **8 profils** dotés chacun de ses favoris, raccourcis et statistiques de jeu, avec **43 avatars exclusifs**.
 - **Recherche instantanée en bibliothèque** : tapez directement une lettre ou un chiffre pour filtrer dans la catégorie active (`TOUS`, `FAV`, `REC`).
-- **Démarrage automatique sécurisé anti-boucle** : protection par garde `nl_boot_guard.cfg.tns` et mode récupération en maintenant `ESC` ou `ON` au démarrage.
-- **Indicateur de batterie optique TI-OS** & **statistiques de temps de jeu** via l'horloge temps réel (RTC).
+- **Raccourci global TI-OS (`nl_hotkey.tns`)** : lancez N-Launcher directement depuis TI-OS avec **`Ctrl + Menu`**, **`Shift + Menu`** ou **`Ctrl + Shift + Menu`** (compatible Ndless Classique en RAM & Ndless Persistant, sans lancement automatique au démarrage).
+- **Mode 1 (Pavé tactile) & Mode 2 (Souris 320×240)** : curseur 2D fluide avec 3 styles (Flèche / Cercle / Pointeur), traînée et activation temporaire par maintien de `CTRL`.
+- **Diagnostic centralisé (`diag.c`) & isolation des défauts** : journal persistant `nlauncher.diag.log.tns`, codes `E102..E901`, sauvegardes `.bak.tns` et écran *Paramètres → Diagnostics & Journaux*.
+- **Statistiques de temps de jeu** via l'horloge temps réel (RTC).
 
 ---
 
@@ -103,13 +105,11 @@ Il transforme la calculatrice en véritable interface de console portable (320×
 
 ## Installation sur TI-Nspire CX II-T
 
-1. Assurez-vous que **Ndless** est installé et actif sur votre calculatrice TI-Nspire CX II-T (OS 5.2 / 5.3, Ndless r2020+) ou CX / CX CAS.
-2. Téléchargez le binaire prêt à l'emploi depuis la page **[GitHub Releases (`v3.1.0`)](https://github.com/daniel-b29/n-launcher-ti-nspire/releases/latest)** *(ou directement [`releases/N-Launcher.tns`](releases/N-Launcher.tns) — conservez exactement ce nom sans espace avant `.tns`)*.
-3. Transférez **`N-Launcher.tns`** dans `/documents/ndless/` ou `/documents/` via TI-Nspire Computer Link / nLink.
+1. Assurez-vous que **Ndless** est installé et actif sur votre calculatrice TI-Nspire CX II-T (TI-OS 6.2.0 / 5.2+) ou CX / CX CAS (~4.5.0).
+2. Téléchargez le binaire prêt à l'emploi depuis la page **[GitHub Releases](https://github.com/daniel-b29/n-launcher-ti-nspire/releases/latest)** *(ou directement [`releases/N-Launcher.tns`](releases/N-Launcher.tns) — conservez exactement ce nom sans espace avant `.tns`)*.
+3. Transférez **`N-Launcher.tns`** dans `/documents/ndless/` ou `/documents/` via TI-Nspire Computer Link / nLink. *(Optionnel : placez également `nl_hotkey.tns` dans `/documents/ndless/startup/`, sinon N-Launcher l'y extrait automatiquement dès l'activation du raccourci TI-OS).*
 4. Placez vos jeux `.tns` dans `/documents/games/`, `/documents/ndless/`, `/documents/roms/` ou n'importe quel sous-dossier de `/documents/`.
-5. Lancez **`N-Launcher.tns`** depuis la calculatrice avec **`EXE`** (`Enter`).
-
-> **Note :** En cas de problème avec le démarrage automatique, maintenez **`ESC`** ou **`ON`** pendant l'allumage de la calculatrice pour déclencher le mode récupération et revenir immédiatement sur TI-OS.
+5. Lancez **`N-Launcher.tns`** depuis la calculatrice avec **`EXE`** (`Enter`), puis configurez si besoin le **Raccourci TI-OS** (`Ctrl+Menu`, `Shift+Menu` ou `Ctrl+Shift+Menu`) dans *Paramètres*.
 
 ---
 
@@ -186,7 +186,7 @@ n-launcher-ti-nspire/
 
 **N-Launcher** is a native **C11 console-style game launcher** (`N-Launcher.tns`) and **320×240 RGB565 React/TypeScript web simulator** for **Texas Instruments TI-Nspire CX II-T** (and TI-Nspire CX / CX CAS) calculators running **Ndless**.
 
-- **Core features**: Binary `.tns` header scanner (`PRG\0`, `Zehn`, `bFLT`), Windows `.ico` / PNG / BMP cover decoder, 5 grid layouts (`1×1`–`4×4`), 12 themes (Dark / Light / Gray × 4 accents), 8 isolated user profiles with 43 avatars, instant library search, RTC play-time statistics, optical TI-OS battery indicator, and anti-bootloop autostart guard (`ESC`/`ON` recovery).
+- **Core features**: Binary `.tns` header scanner (`PRG\0`, `Zehn`, `bFLT`), Windows `.ico` / PNG / BMP cover decoder, 5 grid layouts (`1×1`–`4×4`), 12 themes (Dark / Light / Gray × 4 accents), 8 isolated user profiles with 43 avatars, instant library search, RTC play-time statistics, Touchpad + 2D Mouse mode (`320×240`, 3 cursors), centralized diagnostics (`diag.c`), and TI-OS global hotkey (`nl_hotkey.tns`: `Ctrl+Menu`, `Shift+Menu`, `Ctrl+Shift+Menu`).
 - **Technical reports & AI index**:
   - [Development Progress & Architecture Decisions](docs/PROGRESS.md)
   - [C & TypeScript Test Report](docs/TEST_REPORT.md)

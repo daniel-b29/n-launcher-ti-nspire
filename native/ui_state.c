@@ -6,6 +6,7 @@
  ****************************************************************************/
 
 #include "nlauncher.h"
+#include "boot_guard_core.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -308,21 +309,215 @@ const char *nl_sort_order_label(nl_sort_order_t sort) {
     }
 }
 
-const char *nl_battery_level_label(nl_battery_level_t level) {
-    switch (level) {
-        case NL_BAT_HIGH:   return "Eleve";
-        case NL_BAT_MEDIUM: return "Moyen";
-        case NL_BAT_LOW:    return "Faible";
-        case NL_BAT_UNAVAILABLE:
-        default:            return "Indisponible";
+
+const char *nl_scroll_dir_label(nl_scroll_dir_t dir) {
+    return (dir == NL_SCROLL_HORIZONTAL) ? "Horizontal" : "Vertical";
+}
+
+const char *nl_app_open_anim_label(nl_app_open_anim_t mode) {
+    switch (mode) {
+        case NL_OPEN_ANIM_LIQUID:  return "Liquide Organique";
+        case NL_OPEN_ANIM_ZOOM:    return "Zoom Fluide";
+        case NL_OPEN_ANIM_INSTANT: return "Instantane";
+        case NL_OPEN_ANIM_CURRENT:
+        default:                   return "Actuelle (Logo)";
     }
 }
 
+const char *nl_app_open_anim_short_label(nl_app_open_anim_t mode) {
+    switch (mode) {
+        case NL_OPEN_ANIM_LIQUID:  return "Liquide";
+        case NL_OPEN_ANIM_ZOOM:    return "Zoom";
+        case NL_OPEN_ANIM_INSTANT: return "Instant.";
+        case NL_OPEN_ANIM_CURRENT:
+        default:                   return "Actuelle";
+    }
+}
 
-void nl_get_layout_metrics_for_count(nl_layout_t layout, bool show_names, bool show_shortcuts, int item_count, nl_layout_metrics_t *out) {
+const char *nl_app_open_anim_desc(nl_app_open_anim_t mode) {
+    switch (mode) {
+        case NL_OPEN_ANIM_LIQUID:  return "4 propagations liquides a l'ouverture";
+        case NL_OPEN_ANIM_ZOOM:    return "Zoom fluide rapide vers la bibliotheque";
+        case NL_OPEN_ANIM_INSTANT: return "Acces direct immediat sans splash";
+        case NL_OPEN_ANIM_CURRENT:
+        default:                   return "Logo N-Launcher + fondu fluide d'origine";
+    }
+}
+
+const char *nl_app_open_anim_to_str(nl_app_open_anim_t mode) {
+    switch (mode) {
+        case NL_OPEN_ANIM_LIQUID:  return "liquid";
+        case NL_OPEN_ANIM_ZOOM:    return "zoom";
+        case NL_OPEN_ANIM_INSTANT: return "instant";
+        case NL_OPEN_ANIM_CURRENT:
+        default:                   return "current";
+    }
+}
+
+nl_app_open_anim_t nl_str_to_app_open_anim(const char *val) {
+    if (!val || val[0] == '\0') return NL_OPEN_ANIM_CURRENT;
+    if (strcmp(val, "liquid") == 0  || strcmp(val, "1") == 0) return NL_OPEN_ANIM_LIQUID;
+    if (strcmp(val, "zoom") == 0    || strcmp(val, "2") == 0) return NL_OPEN_ANIM_ZOOM;
+    if (strcmp(val, "instant") == 0 || strcmp(val, "3") == 0) return NL_OPEN_ANIM_INSTANT;
+    return NL_OPEN_ANIM_CURRENT;
+}
+
+const char *nl_app_close_anim_label(nl_app_close_anim_t mode) {
+    switch (mode) {
+        case NL_CLOSE_ANIM_FADE:    return "Fondu Fluide";
+        case NL_CLOSE_ANIM_ZOOM:    return "Zoom Arriere";
+        case NL_CLOSE_ANIM_INSTANT: return "Instantane";
+        case NL_CLOSE_ANIM_LIQUID:
+        default:                    return "Liquide Organique";
+    }
+}
+
+const char *nl_app_close_anim_short_label(nl_app_close_anim_t mode) {
+    switch (mode) {
+        case NL_CLOSE_ANIM_FADE:    return "Fondu";
+        case NL_CLOSE_ANIM_ZOOM:    return "Zoom";
+        case NL_CLOSE_ANIM_INSTANT: return "Instant.";
+        case NL_CLOSE_ANIM_LIQUID:
+        default:                    return "Liquide";
+    }
+}
+
+const char *nl_app_close_anim_desc(nl_app_close_anim_t mode) {
+    switch (mode) {
+        case NL_CLOSE_ANIM_FADE:    return "Disparition douce rapide vers TI-OS";
+        case NL_CLOSE_ANIM_ZOOM:    return "Repli centre rapide avant fermeture";
+        case NL_CLOSE_ANIM_INSTANT: return "Sortie immediate sans animation";
+        case NL_CLOSE_ANIM_LIQUID:
+        default:                    return "4 propagations liquides rapides (sortie)";
+    }
+}
+
+const char *nl_app_close_anim_to_str(nl_app_close_anim_t mode) {
+    switch (mode) {
+        case NL_CLOSE_ANIM_FADE:    return "fade";
+        case NL_CLOSE_ANIM_ZOOM:    return "zoom";
+        case NL_CLOSE_ANIM_INSTANT: return "instant";
+        case NL_CLOSE_ANIM_LIQUID:
+        default:                    return "liquid";
+    }
+}
+
+nl_app_close_anim_t nl_str_to_app_close_anim(const char *val) {
+    if (!val || val[0] == '\0') return NL_CLOSE_ANIM_LIQUID;
+    if (strcmp(val, "fade") == 0    || strcmp(val, "1") == 0) return NL_CLOSE_ANIM_FADE;
+    if (strcmp(val, "zoom") == 0    || strcmp(val, "2") == 0) return NL_CLOSE_ANIM_ZOOM;
+    if (strcmp(val, "instant") == 0 || strcmp(val, "3") == 0) return NL_CLOSE_ANIM_INSTANT;
+    return NL_CLOSE_ANIM_LIQUID;
+}
+
+const char *nl_launch_anim_label(nl_launch_anim_t mode) {
+    switch (mode) {
+        case NL_LAUNCH_ANIM_THEME_DROP:  return "Theme Drop";
+        case NL_LAUNCH_ANIM_SPINNER:     return "Spinner";
+        case NL_LAUNCH_ANIM_LOADING_BAR: return "Loading Bar";
+        case NL_LAUNCH_ANIM_CURRENT:
+        default:                         return "Actuelle (Capture)";
+    }
+}
+
+const char *nl_launch_anim_short_label(nl_launch_anim_t mode) {
+    switch (mode) {
+        case NL_LAUNCH_ANIM_THEME_DROP:  return "Liquide";
+        case NL_LAUNCH_ANIM_SPINNER:     return "Spinner";
+        case NL_LAUNCH_ANIM_LOADING_BAR: return "Barre";
+        case NL_LAUNCH_ANIM_CURRENT:
+        default:                         return "Capture";
+    }
+}
+
+const char *nl_launch_anim_desc(nl_launch_anim_t mode) {
+    switch (mode) {
+        case NL_LAUNCH_ANIM_THEME_DROP:  return "4 propagations liquides organiques";
+        case NL_LAUNCH_ANIM_SPINNER:     return "Spinner rotatif sur l'icone agrandie";
+        case NL_LAUNCH_ANIM_LOADING_BAR: return "Recentrage + barre de chargement reelle";
+        case NL_LAUNCH_ANIM_CURRENT:
+        default:                         return "Zoom, 3 ondes et capture d'ecran";
+    }
+}
+
+const char *nl_launch_anim_to_str(nl_launch_anim_t mode) {
+    switch (mode) {
+        case NL_LAUNCH_ANIM_THEME_DROP:  return "theme_drop";
+        case NL_LAUNCH_ANIM_SPINNER:     return "spinner";
+        case NL_LAUNCH_ANIM_LOADING_BAR: return "loading_bar";
+        case NL_LAUNCH_ANIM_CURRENT:
+        default:                         return "current";
+    }
+}
+
+nl_launch_anim_t nl_str_to_launch_anim(const char *val) {
+    if (!val || val[0] == '\0') return NL_LAUNCH_ANIM_CURRENT;
+    if (strcmp(val, "theme_drop") == 0 || strcmp(val, "1") == 0) return NL_LAUNCH_ANIM_THEME_DROP;
+    if (strcmp(val, "spinner") == 0    || strcmp(val, "2") == 0) return NL_LAUNCH_ANIM_SPINNER;
+    if (strcmp(val, "loading_bar") == 0 || strcmp(val, "3") == 0) return NL_LAUNCH_ANIM_LOADING_BAR;
+    return NL_LAUNCH_ANIM_CURRENT;
+}
+
+const char *nl_return_anim_label(nl_return_anim_t mode) {
+    switch (mode) {
+        case NL_RETURN_ANIM_ZOOM:    return "Zoom Inverse";
+        case NL_RETURN_ANIM_FADE:    return "Fondu Rapide";
+        case NL_RETURN_ANIM_INSTANT: return "Instantane";
+        case NL_RETURN_ANIM_LIQUID:
+        default:                     return "Liquide Inverse";
+    }
+}
+
+const char *nl_return_anim_short_label(nl_return_anim_t mode) {
+    switch (mode) {
+        case NL_RETURN_ANIM_ZOOM:    return "Zoom";
+        case NL_RETURN_ANIM_FADE:    return "Fondu";
+        case NL_RETURN_ANIM_INSTANT: return "Instant.";
+        case NL_RETURN_ANIM_LIQUID:
+        default:                     return "Liquide";
+    }
+}
+
+const char *nl_return_anim_desc(nl_return_anim_t mode) {
+    switch (mode) {
+        case NL_RETURN_ANIM_ZOOM:    return "Retour rapide centre sur le jeu quitte";
+        case NL_RETURN_ANIM_FADE:    return "Levee fluide immediate sans attente";
+        case NL_RETURN_ANIM_INSTANT: return "Retour instantane sans effet visuel";
+        case NL_RETURN_ANIM_LIQUID:
+        default:                     return "4 propagations liquides inverses (rapide)";
+    }
+}
+
+const char *nl_return_anim_to_str(nl_return_anim_t mode) {
+    switch (mode) {
+        case NL_RETURN_ANIM_ZOOM:    return "zoom";
+        case NL_RETURN_ANIM_FADE:    return "fade";
+        case NL_RETURN_ANIM_INSTANT: return "instant";
+        case NL_RETURN_ANIM_LIQUID:
+        default:                     return "liquid";
+    }
+}
+
+nl_return_anim_t nl_str_to_return_anim(const char *val) {
+    if (!val || val[0] == '\0') return NL_RETURN_ANIM_LIQUID;
+    if (strcmp(val, "zoom") == 0    || strcmp(val, "1") == 0) return NL_RETURN_ANIM_ZOOM;
+    if (strcmp(val, "fade") == 0    || strcmp(val, "2") == 0) return NL_RETURN_ANIM_FADE;
+    if (strcmp(val, "instant") == 0 || strcmp(val, "3") == 0) return NL_RETURN_ANIM_INSTANT;
+    return NL_RETURN_ANIM_LIQUID;
+}
+
+void nl_get_layout_metrics_full(
+    nl_layout_t layout,
+    nl_scroll_dir_t scroll_dir,
+    bool show_names,
+    bool show_shortcuts,
+    int item_count,
+    nl_layout_metrics_t *out
+) {
     if (!out) return;
-    out->view_bottom  = show_shortcuts ? NL_VIEW_BOTTOM : NL_VIEW_BOTTOM_NO_SC;
-    out->pagination_y = show_shortcuts ? NL_PAGINATION_Y : NL_PAGINATION_Y_NO_SC;
+    out->view_bottom   = show_shortcuts ? NL_VIEW_BOTTOM : NL_VIEW_BOTTOM_NO_SC;
+    out->pagination_y  = show_shortcuts ? NL_PAGINATION_Y : NL_PAGINATION_Y_NO_SC;
+    out->is_horizontal = (scroll_dir == NL_SCROLL_HORIZONTAL);
 
     switch (layout) {
         case NL_LAYOUT_1X1:
@@ -566,16 +761,80 @@ void nl_get_layout_metrics_for_count(nl_layout_t layout, bool show_names, bool s
         }
     }
 
+    /* R15 Horizontal mode (exact reference): guarantee >= 28 px side margin for 12 px left & right icon peeks.
+     * R17 Vertical mode (exact mirror of R15 horizontal): guarantee >= 22 px top & bottom margin in multi-page mode
+     * so neighboring pages' real icons peek naturally by 12 px at top & bottom with >= 10 px inter-page gap. */
+    if (out->is_horizontal) {
+        if (out->margin_x < 28 && out->cols > 1) {
+            int max_cw = NL_SCREEN_W - 56;
+            int content_w = out->cols * out->card_w + (out->cols - 1) * out->gap_x;
+            while (content_w > max_cw && out->gap_x > 6) {
+                out->gap_x--;
+                content_w = out->cols * out->card_w + (out->cols - 1) * out->gap_x;
+            }
+            while (content_w > max_cw && out->card_w > 24) {
+                out->card_w--;
+                out->card_h = out->card_w;
+                content_w = out->cols * out->card_w + (out->cols - 1) * out->gap_x;
+            }
+            out->margin_x = (NL_SCREEN_W - content_w) / 2;
+        }
+    } else if (item_count <= 0 || item_count > out->per_page) {
+        int avail_h = out->view_bottom - NL_VIEW_TOP;
+        int max_ch = avail_h - 40; /* 20 px top + 20 px bottom => 12 px peek + 8 px inter-page gap */
+        int min_gap_y = (out->rows <= 2) ? (show_names ? 3 : 5) : ((out->rows == 3) ? (show_names ? 2 : 4) : 2);
+        int content_h = out->rows * (out->card_h + out->label_h) + (out->rows - 1) * out->gap_y;
+        while (content_h > max_ch && out->gap_y > min_gap_y) {
+            out->gap_y--;
+            content_h = out->rows * (out->card_h + out->label_h) + (out->rows - 1) * out->gap_y;
+        }
+        while (content_h > max_ch && out->card_h > 24) {
+            out->card_h--;
+            out->card_w = out->card_h;
+            content_h = out->rows * (out->card_h + out->label_h) + (out->rows - 1) * out->gap_y;
+        }
+        if (out->cols > 1) {
+            int content_w = out->cols * out->card_w + (out->cols - 1) * out->gap_x;
+            out->margin_x = (NL_SCREEN_W - content_w) / 2;
+        } else {
+            out->margin_x = (NL_SCREEN_W - out->card_w) / 2;
+        }
+        out->top_y = NL_VIEW_TOP + (avail_h - content_h) / 2;
+    }
+
     out->row_stride_y = out->card_h + out->label_h + out->gap_y;
-    out->page_stride_y = out->row_stride_y * out->rows;
+    if (out->is_horizontal) {
+        out->page_stride_y = out->row_stride_y * out->rows;
+        /* Exact 12 px adjacent cover peek on left & right edges (320 - 12 = 308) */
+        int stride_x = (NL_SCREEN_W - 12) - out->margin_x;
+        int min_stride = out->cols * out->card_w + (out->cols - 1) * out->gap_x + 16;
+        if (stride_x < min_stride) stride_x = min_stride;
+        out->page_stride_x = stride_x;
+    } else {
+        if (item_count <= 0 || item_count > out->per_page) {
+            /* Exact 12 px adjacent cover peek on top & bottom edges */
+            int content_h = out->rows * (out->card_h + out->label_h) + (out->rows - 1) * out->gap_y;
+            int stride_y = (out->view_bottom - 12) - out->top_y;
+            int min_stride_y = content_h + 8;
+            if (stride_y < min_stride_y) stride_y = min_stride_y;
+            out->page_stride_y = stride_y;
+        } else {
+            out->page_stride_y = out->row_stride_y * out->rows;
+        }
+        out->page_stride_x = NL_SCREEN_W;
+    }
+}
+
+void nl_get_layout_metrics_for_count(nl_layout_t layout, bool show_names, bool show_shortcuts, int item_count, nl_layout_metrics_t *out) {
+    nl_get_layout_metrics_full(layout, NL_SCROLL_VERTICAL, show_names, show_shortcuts, item_count, out);
 }
 
 void nl_get_layout_metrics_ex(nl_layout_t layout, bool show_names, bool show_shortcuts, nl_layout_metrics_t *out) {
-    nl_get_layout_metrics_for_count(layout, show_names, show_shortcuts, 0, out);
+    nl_get_layout_metrics_full(layout, NL_SCROLL_VERTICAL, show_names, show_shortcuts, 0, out);
 }
 
 void nl_get_layout_metrics(nl_layout_t layout, bool show_names, nl_layout_metrics_t *out) {
-    nl_get_layout_metrics_for_count(layout, show_names, true, 0, out);
+    nl_get_layout_metrics_full(layout, NL_SCROLL_VERTICAL, show_names, true, 0, out);
 }
 
 void nl_compute_grid_slot_pos(const nl_layout_metrics_t *m, int filtered_count, int f_idx, int *out_x, int *out_y) {
@@ -602,7 +861,7 @@ void nl_compute_grid_slot_pos(const nl_layout_metrics_t *m, int filtered_count, 
     }
 
     int page_top_y = m->top_y;
-    if (filtered_count > per_page) {
+    if (m->is_horizontal && filtered_count > per_page) {
         int page_items = filtered_count - page * per_page;
         if (page_items > per_page) page_items = per_page;
         if (page_items < 1) page_items = 1;
@@ -617,7 +876,12 @@ void nl_compute_grid_slot_pos(const nl_layout_metrics_t *m, int filtered_count, 
         }
     }
 
-    *out_y = page_top_y + page * m->page_stride_y + row_in_page * m->row_stride_y;
+    if (m->is_horizontal) {
+        *out_x += page * m->page_stride_x;
+        *out_y = page_top_y + row_in_page * m->row_stride_y;
+    } else {
+        *out_y = page_top_y + page * m->page_stride_y + row_in_page * m->row_stride_y;
+    }
 }
 
 void nl_format_duration(uint32_t seconds, char *out_buf, size_t max_len) {
@@ -726,7 +990,7 @@ int nl_get_shortcut_defs(const nl_state_t *state, nl_shortcut_def_t *out_defs, i
         { "ESC",       "Retour / Quitter" },
         { "TAB",       "Categorie TOUS/FAV/REC" },
         { ".",         "Selecteur rapide profil" },
-        { "0 / -",     "Profil prec. / suiv." },
+        { "0 / -",     "Page prec. / suiv." },
         { "A-Z / 1-9", "Recherche directe accueil" },
         { "VAR / *",   "Ajouter/Retirer favori" },
         { "TRIG / =",  "Page prec. / suiv." },
@@ -754,7 +1018,10 @@ int nl_get_shortcut_defs(const nl_state_t *state, nl_shortcut_def_t *out_defs, i
             count++;
         }
         if (count < max_defs) {
-            snprintf(out_defs[count].key_label, sizeof(out_defs[count].key_label), "CTRL+MENU");
+            const char *hk_tag = "CTRL+MENU";
+            if (state->settings.hotkey_combo == (int)NL_HK_COMBO_SHIFT_MENU) hk_tag = "SHFT+MENU";
+            else if (state->settings.hotkey_combo == (int)NL_HK_COMBO_CTRL_SHIFT_MENU) hk_tag = "C+S+MENU";
+            snprintf(out_defs[count].key_label, sizeof(out_defs[count].key_label), "%s", hk_tag);
             snprintf(out_defs[count].action_label, sizeof(out_defs[count].action_label),
                      state->settings.global_hotkey ? "Ouvrir depuis TI-OS (ON)" : "Ouvrir depuis TI-OS (OFF)");
             count++;
@@ -967,6 +1234,101 @@ bool nl_tp_click_poll(
     return false;
 }
 
+nl_tp_click_action_t nl_mouse_tp_poll(
+    nl_tp_click_guard_t *guard,
+    bool contact,
+    bool pressed,
+    bool center_click,
+    bool hover_active,
+    bool tap_to_click_enabled,
+    uint16_t raw_x,
+    uint16_t raw_y,
+    uint16_t pad_w,
+    uint16_t pad_h
+) {
+    (void)center_click;
+    (void)hover_active;
+    if (!guard) return NL_TP_ACT_NONE;
+
+    if (guard->cooldown_ticks > 0) {
+        guard->cooldown_ticks--;
+    }
+    if (guard->recent_move_ticks > 0) {
+        guard->recent_move_ticks--;
+    }
+
+    int32_t w = (pad_w >= 200U) ? (int32_t)pad_w : 2328;
+    int32_t h = (pad_h >= 200U) ? (int32_t)pad_h : 1691;
+
+    bool pressed_edge = pressed && !guard->prev_pressed;
+    guard->prev_pressed = pressed;
+
+    /* 1. REAL HARDWARE PHYSICAL CLICK (always available in Mouse Mode, independent of tap-to-click).
+     *    Accept ANY rising edge of the physical touchpad dome click without gating on center box
+     *    or stale hover_active; nl_mouse_click() evaluates exact current hover target. */
+    if (pressed) {
+        guard->tap_had_press = true;
+        guard->tap_tracking = false;
+        guard->tap_moved = false;
+        guard->tap_ticks = 0;
+        guard->tap_max_delta = 0;
+        if (pressed_edge && guard->cooldown_ticks == 0) {
+            guard->cooldown_ticks = NL_TP_CLICK_COOLDOWN_TICKS;
+            return NL_TP_ACT_PHYSICAL_CLICK;
+        }
+        return NL_TP_ACT_NONE;
+    }
+
+    /* 2. REAL CAPACITIVE TAP-TO-CLICK (anywhere on touchpad surface, independent of physical press). */
+    if (contact) {
+        if (!guard->tap_tracking && !guard->tap_had_press) {
+            guard->tap_tracking = true;
+            guard->tap_in_center = true;
+            guard->tap_moved = false;
+            guard->tap_down_x = raw_x;
+            guard->tap_down_y = raw_y;
+            guard->tap_ticks = 1;
+            guard->tap_max_delta = 0;
+        } else if (guard->tap_tracking) {
+            guard->tap_ticks++;
+            int32_t dx_norm = ((int32_t)raw_x - (int32_t)guard->tap_down_x) * 1024 / w;
+            int32_t dy_norm = ((int32_t)raw_y - (int32_t)guard->tap_down_y) * 1024 / h;
+            int32_t adx = (dx_norm < 0) ? -dx_norm : dx_norm;
+            int32_t ady = (dy_norm < 0) ? -dy_norm : dy_norm;
+            int32_t max_d = (adx > ady) ? adx : ady;
+            if (max_d > guard->tap_max_delta) {
+                guard->tap_max_delta = max_d;
+            }
+            if (max_d > NL_TP_TAP_SLIDE_CANCEL) {
+                guard->tap_moved = true;
+                guard->recent_move_ticks = 24;
+            }
+        }
+        return NL_TP_ACT_NONE;
+    }
+
+    /* Finger lifted (contact == false && pressed == false) */
+    nl_tp_click_action_t act = NL_TP_ACT_NONE;
+    if (guard->tap_tracking) {
+        if (tap_to_click_enabled &&
+            !guard->tap_had_press &&
+            !guard->tap_moved &&
+            guard->tap_ticks >= 1 &&
+            guard->tap_ticks <= NL_TP_TAP_MAX_TICKS &&
+            guard->cooldown_ticks == 0) {
+            guard->cooldown_ticks = NL_TP_TAP_COOLDOWN_TICKS;
+            act = NL_TP_ACT_TAP_CLICK;
+        }
+    }
+    guard->tap_tracking = false;
+    guard->tap_in_center = false;
+    guard->tap_moved = false;
+    guard->tap_had_press = false;
+    guard->tap_ticks = 0;
+    guard->tap_max_delta = 0;
+    return act;
+}
+
 void nl_save_shortcut_reset(nl_save_shortcut_t *sc) {
     if (!sc) return;
     memset(sc, 0, sizeof(*sc));
@@ -1049,23 +1411,35 @@ void nl_init_state(nl_state_t *state) {
     state->active_category = NL_CAT_ALL;
     state->display_mode = NL_DISPLAY_DARK;
     state->accent_color = NL_ACCENT_BLUE;
-    state->settings.autostart = false;
     state->settings.global_hotkey = false;
+    state->settings.hotkey_combo = (int)NL_HK_COMBO_CTRL_MENU;
     state->settings.layout = NL_LAYOUT_3X2;
+    state->settings.scroll_dir = NL_SCROLL_VERTICAL;
+    state->settings.profile_lock_enabled = false;
     state->settings.show_names = false;
     state->settings.show_shortcuts = true;
-    state->settings.show_battery = false;
     state->settings.touchpad_mode = NL_TP_MODE_TOUCHPAD;
     state->settings.touchpad_nav = false;
     state->settings.touchpad_sensitivity = NL_TP_SENS_DEFAULT;
     state->settings.cursor_speed = NL_CURSOR_SPEED_DEFAULT;
     state->settings.touchpad_cursor_show = false;
     state->settings.touchpad_cursor_style = NL_CURSOR_STYLE_ARROW;
+    state->settings.cursor_size = NL_CURSOR_SIZE_DEFAULT;
+    state->settings.tap_to_click = false;
     state->settings.sort_order = NL_SORT_ALPHA_ASC;
+    state->settings.app_open_anim = NL_OPEN_ANIM_CURRENT;
+    state->settings.app_close_anim = NL_CLOSE_ANIM_LIQUID;
+    state->settings.launch_anim_mode = NL_LAUNCH_ANIM_CURRENT;
+    state->settings.return_anim_mode = NL_RETURN_ANIM_LIQUID;
     state->sui.screen = NL_UI_LIBRARY;
+    state->sui.anim_cursor = 0;
     state->sui.tp_cursor = 0;
+    state->sui.tp_scroll = 0;
     state->sui.tp_tab = 0;
+    state->sui.tp_custom_row = 0;
     state->sui.tp_style_cursor = 0;
+    state->sui.tp_size_cursor = (int)NL_CURSOR_SIZE_DEFAULT;
+    state->sui.hotkey_cursor = 0;
     state->sui.ctrl_mouse_active = false;
     state->sui.hover_kind = NL_HOVER_NONE;
     state->sui.hover_index = 0;
@@ -1081,7 +1455,6 @@ void nl_init_state(nl_state_t *state) {
     state->anim.ink_max = NL_INK_TRANS_TICKS;
     state->anim.switch_hotkey_fp = 0;
     state->anim.switch_shortcuts_fp = 256;
-    state->anim.switch_battery_fp = 0;
     state->anim.switch_touchpad_fp = 0;
     state->anim.switch_tp_mode_fp = 0;
     state->anim.tp_slider_pos_fp = NL_TP_SENS_DEFAULT * 256;
@@ -1132,6 +1505,8 @@ void nl_init_state(nl_state_t *state) {
     state->anim.cur_target_x_fp = 160 << 4;
     state->anim.cur_target_y_fp = 116 << 4;
     state->anim.cur_opacity_fp = 0;
+    state->anim.cur_click_pulse_fp = 0;
+    state->anim.switch_tap_click_fp = 0;
     state->anim.toast_max_ticks = 75;
     snprintf(state->sys.os_version, sizeof(state->sys.os_version), "TI-Nspire OS");
     for (int i = 0; i < NL_MAX_GAMES; i++) {
@@ -1167,14 +1542,35 @@ void nl_show_toast(nl_state_t *state, const char *msg, int duration_ticks) {
 static void sync_scroll_targets(nl_state_t *state, bool snap) {
     if (!state) return;
     nl_layout_metrics_t m;
-    nl_get_layout_metrics_for_count(state->settings.layout, state->settings.show_names, state->settings.show_shortcuts, state->filtered_count, &m);
+    nl_get_layout_metrics_full(
+        state->settings.layout,
+        state->settings.scroll_dir,
+        state->settings.show_names,
+        state->settings.show_shortcuts,
+        state->filtered_count,
+        &m
+    );
 
-    state->anim.target_scroll_y_fp = (state->current_page * m.page_stride_y) << 4;
+    if (m.is_horizontal) {
+        state->anim.target_scroll_x_fp = (state->current_page * m.page_stride_x) << 4;
+        state->anim.target_scroll_y_fp = 0;
+    } else {
+        state->anim.target_scroll_y_fp = (state->current_page * m.page_stride_y) << 4;
+        state->anim.target_scroll_x_fp = 0;
+    }
     state->anim.target_dot_fp = state->current_page << 4;
 
     if (!state->anim.initialized || snap) {
         state->anim.scroll_y_fp = state->anim.target_scroll_y_fp;
+        state->anim.scroll_start_y_fp = state->anim.target_scroll_y_fp;
+        state->anim.scroll_last_target_fp = state->anim.target_scroll_y_fp;
+        state->anim.scroll_x_fp = state->anim.target_scroll_x_fp;
+        state->anim.scroll_start_x_fp = state->anim.target_scroll_x_fp;
+        state->anim.scroll_last_target_x_fp = state->anim.target_scroll_x_fp;
         state->anim.dot_pos_fp = state->anim.target_dot_fp;
+        state->anim.dot_start_fp = state->anim.target_dot_fp;
+        state->anim.scroll_anim_max = 14;
+        state->anim.scroll_anim_tick = 14;
         if (state->filtered_count > 0 && state->selected_pos < state->filtered_count) {
             int sel_game = state->filtered_indices[state->selected_pos];
             state->anim.card_scale_fp[sel_game] = NL_SCALE_SELECTED;
@@ -1305,7 +1701,14 @@ void nl_rebuild_filter(nl_state_t *state) {
     }
 
     nl_layout_metrics_t m;
-    nl_get_layout_metrics_for_count(state->settings.layout, state->settings.show_names, state->settings.show_shortcuts, state->filtered_count, &m);
+    nl_get_layout_metrics_full(
+        state->settings.layout,
+        state->settings.scroll_dir,
+        state->settings.show_names,
+        state->settings.show_shortcuts,
+        state->filtered_count,
+        &m
+    );
 
     for (int i = 0; i < NL_MAX_GAMES; i++) {
         state->anim.card_dx_fp[i] = 0;
@@ -1326,8 +1729,8 @@ void nl_rebuild_filter(nl_state_t *state) {
                     nl_compute_grid_slot_pos(&m, state->filtered_count, f, &new_x, &new_y);
                     int dx_px = old_x - new_x;
                     int dy_px = old_y - new_y;
-                    state->anim.card_dx_fp[g_idx] = dx_px << 4;
-                    state->anim.card_dy_fp[g_idx] = dy_px << 4;
+                    state->anim.card_dx_fp[g_idx] = dx_px * 16;
+                    state->anim.card_dy_fp[g_idx] = dy_px * 16;
                 }
             }
         }
@@ -1378,11 +1781,17 @@ static void settings_sync_cursor_targets(nl_state_t *state, bool snap, int prev_
             cur = sui->display_cursor;
             scr = sui->display_scroll;
             break;
+        case NL_UI_SETTINGS_ANIMATIONS:
+            row_y0 = 44;
+            stride = 32;
+            cur = sui->anim_cursor;
+            scr = 0;
+            break;
         case NL_UI_SETTINGS_TOUCHPAD:
             row_y0 = 47;
-            stride = 38;
+            stride = 31;
             cur = sui->tp_cursor;
-            scr = 0;
+            scr = sui->tp_scroll;
             break;
         case NL_UI_SETTINGS_SHORTCUTS:
             row_y0 = 32;
@@ -1414,6 +1823,12 @@ static void settings_sync_cursor_targets(nl_state_t *state, bool snap, int prev_
             cur = (sui->prof_mode == NL_PROF_MODE_LIST) ? sui->prof_cursor
                 : ((sui->prof_mode == NL_PROF_MODE_DETAIL) ? sui->prof_detail_cursor : 0);
             scr = (sui->prof_mode == NL_PROF_MODE_LIST) ? sui->prof_scroll : 0;
+            break;
+        case NL_UI_SETTINGS_DIAG:
+            row_y0 = (sui->diag_tab == 0) ? 67 : 96;
+            stride = (sui->diag_tab == 0) ? 30 : 20;
+            cur = sui->diag_cursor;
+            scr = sui->diag_scroll;
             break;
         default:
             row_y0 = 34;
@@ -1448,6 +1863,9 @@ static void settings_transition_screen(nl_state_t *state, nl_ui_screen_t next_sc
     if (next_screen == NL_UI_SETTINGS_RESET) {
         state->anim.modal_fp = 32;
         state->anim.modal_btn_fp = state->sui.reset_confirm_yes ? 256 : 0;
+    } else if (next_screen == NL_UI_SETTINGS_DIAG && state->sui.diag_confirm_modal) {
+        state->anim.modal_fp = 32;
+        state->anim.modal_btn_fp = state->sui.diag_confirm_yes ? 256 : 0;
     } else if (next_screen == NL_UI_SETTINGS_PROFILES && state->sui.prof_mode == NL_PROF_MODE_CONFIRM_DELETE) {
         state->anim.modal_fp = 32;
         state->anim.modal_btn_fp = state->sui.prof_delete_yes ? 256 : 0;
@@ -1468,15 +1886,19 @@ static void settings_close_to_library(nl_state_t *state) {
     state->sui.prof_from_quick = false;
     state->sui.prof_mode = NL_PROF_MODE_LIST;
     state->anim.modal_fp = 0;
-    if (state->anim.set_open_fp <= 48) {
+    if (state->anim.set_open_fp <= 8) {
         state->anim.set_open_fp = 0;
-    } else {
-        state->anim.set_open_fp = (state->anim.set_open_fp > 208) ? 208 : (state->anim.set_open_fp - 32);
+    } else if (state->anim.set_open_fp > 248) {
+        state->anim.set_open_fp = 248;
     }
 }
 
 void nl_toggle_favorite(nl_state_t *state) {
     if (!state || state->filtered_count <= 0) return;
+    if (nl_profile_is_protected(state, state->profiles.active_index)) {
+        nl_show_toast(state, "Profil verrouille", 50);
+        return;
+    }
     int game_idx = state->filtered_indices[state->selected_pos];
     bool next_fav = !state->games[game_idx].is_favorite;
     state->games[game_idx].is_favorite = next_fav;
@@ -1591,9 +2013,27 @@ void nl_record_play_session(nl_state_t *state, int game_idx, uint32_t start_rtc,
     state->sui.config_dirty = true;
 }
 
+bool nl_return_needs_filter_rebuild(const nl_state_t *state) {
+    if (!state) return true;
+    if (state->active_category == NL_CAT_RECENT) return true;
+    if (state->settings.sort_order == NL_SORT_LAST_USED ||
+        state->settings.sort_order == NL_SORT_MOST_LAUNCHED ||
+        state->settings.sort_order == NL_SORT_PLAY_TIME) {
+        return true;
+    }
+    return false;
+}
+
 static void on_selection_changed(nl_state_t *state) {
     nl_layout_metrics_t m;
-    nl_get_layout_metrics_for_count(state->settings.layout, state->settings.show_names, state->settings.show_shortcuts, state->filtered_count, &m);
+    nl_get_layout_metrics_full(
+        state->settings.layout,
+        state->settings.scroll_dir,
+        state->settings.show_names,
+        state->settings.show_shortcuts,
+        state->filtered_count,
+        &m
+    );
     state->current_page = state->selected_pos / m.per_page;
     sync_scroll_targets(state, false);
 }
@@ -1635,6 +2075,13 @@ static void adjust_list_scroll(int cursor, int *scroll, int visible_rows) {
 
 static void assign_shortcut_key_to_game(nl_state_t *state, int game_idx, char key_char, bool force_replace) {
     if (!state || game_idx < 0 || game_idx >= state->total_games) return;
+    if (nl_profile_is_protected(state, state->profiles.active_index)) {
+        state->sui.sc_picking_key = false;
+        state->sui.sc_conflict_prompt = false;
+        state->anim.modal_fp = 0;
+        nl_show_toast(state, "Profil verrouille", 50);
+        return;
+    }
     char u = (char)toupper((unsigned char)key_char);
     if (nl_shortcut_is_reserved(u)) {
         nl_show_toast(state, "TOUCHE SYSTEME RESERVEE", 60);
@@ -1667,28 +2114,6 @@ static void assign_shortcut_key_to_game(nl_state_t *state, int game_idx, char ke
     nl_show_toast(state, msg, 55);
 }
 
-static void execute_autostart_toggle(nl_state_t *state) {
-    bool target = !state->settings.autostart;
-    if (state->sys.docs_root[0] != '\0') {
-        char diag[64];
-        nl_autostart_set(state, target, diag, sizeof(diag));
-        nl_show_toast(state, diag, 70);
-    } else {
-        /* Host/unit mode without filesystem path: record request */
-        state->sui.autostart_toggle_req = true;
-        state->sui.autostart_target_val = target;
-        if (!state->sys.has_ndless || !state->sys.ndless_persistent) {
-            state->settings.autostart = false;
-            nl_show_toast(state, "Ndless persistant requis", 70);
-        } else {
-            state->settings.autostart = target;
-            state->sys.autostart_active = target;
-            nl_show_toast(state, target ? "Lancement auto : ON" : "Lancement auto : OFF", 55);
-        }
-    }
-    state->sui.config_dirty = true;
-}
-
 static void execute_hotkey_toggle(nl_state_t *state) {
     bool target = !state->settings.global_hotkey;
     if (state->sys.docs_root[0] != '\0') {
@@ -1700,14 +2125,35 @@ static void execute_hotkey_toggle(nl_state_t *state) {
         state->sui.hotkey_target_val = target;
         if (!state->sys.has_ndless) {
             state->settings.global_hotkey = false;
+            state->sys.hotkey_active = false;
+            state->sys.hotkey_ram_active = false;
             nl_show_toast(state, "Ndless requis pour Ctrl+Menu", 70);
         } else {
             state->settings.global_hotkey = target;
             state->sys.hotkey_active = target;
-            nl_show_toast(state, target ? "Raccourci TI-OS (Ctrl+Menu) : ON" : "Raccourci TI-OS : OFF", 55);
+            state->sys.hotkey_ram_active = target;
+            const char *lbl = nl_hk_combo_label((nl_hk_combo_t)state->settings.hotkey_combo);
+            snprintf(state->sys.hotkey_diag, sizeof(state->sys.hotkey_diag),
+                     target ? "RAM + startup : %s" : "Raccourci TI-OS desactive", lbl);
+            char msg[NL_MAX_TOAST_LEN];
+            snprintf(msg, sizeof(msg), target ? "Raccourci (%s): ON" : "Raccourci TI-OS : OFF", lbl);
+            nl_show_toast(state, msg, 55);
         }
     }
     state->sui.config_dirty = true;
+}
+
+static void cycle_hotkey_combo(nl_state_t *state, int delta) {
+    int cur = state->settings.hotkey_combo;
+    int nxt = (cur + delta + (int)NL_HK_COMBO_COUNT) % (int)NL_HK_COMBO_COUNT;
+    state->settings.hotkey_combo = nxt;
+    nl_hotkey_sync_live_combo(state);
+    state->anim.val_pulse_fp = 256;
+    state->anim.val_pulse_dir = (delta < 0) ? -1 : 1;
+    state->sui.config_dirty = true;
+    char msg[NL_MAX_TOAST_LEN];
+    snprintf(msg, sizeof(msg), "Touche : %s", nl_hk_combo_label((nl_hk_combo_t)nxt));
+    nl_show_toast(state, msg, 55);
 }
 
 static void request_calculator_poweroff(nl_state_t *state) {
@@ -1790,10 +2236,82 @@ const char *nl_cursor_style_label(nl_cursor_style_t style) {
     }
 }
 
+const char *nl_cursor_size_to_str(nl_cursor_size_t size) {
+    switch (size) {
+        case NL_CURSOR_SIZE_SMALL:  return "small";
+        case NL_CURSOR_SIZE_LARGE:  return "large";
+        case NL_CURSOR_SIZE_MEDIUM:
+        default:                    return "medium";
+    }
+}
+
+nl_cursor_size_t nl_str_to_cursor_size(const char *s) {
+    if (!s) return NL_CURSOR_SIZE_DEFAULT;
+    if (str_icmp_u(s, "small") == 0 || str_icmp_u(s, "petite") == 0 || strcmp(s, "0") == 0) {
+        return NL_CURSOR_SIZE_SMALL;
+    }
+    if (str_icmp_u(s, "large") == 0 || str_icmp_u(s, "grande") == 0 || strcmp(s, "2") == 0) {
+        return NL_CURSOR_SIZE_LARGE;
+    }
+    return NL_CURSOR_SIZE_MEDIUM;
+}
+
+const char *nl_cursor_size_label(nl_cursor_size_t size) {
+    switch (size) {
+        case NL_CURSOR_SIZE_SMALL:  return "Petite";
+        case NL_CURSOR_SIZE_LARGE:  return "Grande";
+        case NL_CURSOR_SIZE_MEDIUM:
+        default:                    return "Moyenne";
+    }
+}
+
+void nl_cursor_get_size_metrics(
+    nl_cursor_style_t style,
+    nl_cursor_size_t size,
+    int *out_w,
+    int *out_h,
+    int *out_hx,
+    int *out_hy
+) {
+    /* Exact proportional dimensions & aligned hotspots for all 3 models x 3 sizes:
+     *   ARROW   (src 28x28, hx=6, hy=2):  Small 15x15 (3,1),  Medium 21x21 (5,2),  Large 28x28 (6,2)
+     *   CIRCLE  (src 28x28, hx=13,hy=13): Small 15x15 (7,7),  Medium 21x21 (10,10),Large 28x28 (13,13)
+     *   POINTER (src 22x28, hx=7, hy=1):  Small 13x16 (4,1),  Medium 17x22 (5,1),  Large 22x28 (7,1) */
+    int sz = (int)size;
+    if (sz < 0) sz = 0;
+    if (sz >= (int)NL_CURSOR_SIZE_COUNT) sz = (int)NL_CURSOR_SIZE_LARGE;
+
+    int w = 21, h = 21, hx = 5, hy = 2;
+    if (style == NL_CURSOR_STYLE_CIRCLE) {
+        static const int k_w[3]  = { 15, 21, 28 };
+        static const int k_h[3]  = { 15, 21, 28 };
+        static const int k_hx[3] = {  7, 10, 13 };
+        static const int k_hy[3] = {  7, 10, 13 };
+        w = k_w[sz]; h = k_h[sz]; hx = k_hx[sz]; hy = k_hy[sz];
+    } else if (style == NL_CURSOR_STYLE_POINTER) {
+        static const int k_w[3]  = { 13, 17, 22 };
+        static const int k_h[3]  = { 16, 22, 28 };
+        static const int k_hx[3] = {  4,  5,  7 };
+        static const int k_hy[3] = {  1,  1,  1 };
+        w = k_w[sz]; h = k_h[sz]; hx = k_hx[sz]; hy = k_hy[sz];
+    } else {
+        static const int k_w[3]  = { 15, 21, 28 };
+        static const int k_h[3]  = { 15, 21, 28 };
+        static const int k_hx[3] = {  3,  5,  6 };
+        static const int k_hy[3] = {  1,  2,  2 };
+        w = k_w[sz]; h = k_h[sz]; hx = k_hx[sz]; hy = k_hy[sz];
+    }
+
+    if (out_w)  *out_w  = w;
+    if (out_h)  *out_h  = h;
+    if (out_hx) *out_hx = hx;
+    if (out_hy) *out_hy = hy;
+}
+
 const char *nl_cursor_speed_label(int speed_level) {
     static const char *const k_speed_labels[NL_CURSOR_SPEED_COUNT] = {
-        "1/5 Lente",
-        "2/5 Douce",
+        "1/5 Tres lente",
+        "2/5 Lente",
         "3/5 Normale",
         "4/5 Rapide",
         "5/5 Tres rap."
@@ -1801,6 +2319,21 @@ const char *nl_cursor_speed_label(int speed_level) {
     if (speed_level < 0) speed_level = 0;
     if (speed_level >= NL_CURSOR_SPEED_COUNT) speed_level = NL_CURSOR_SPEED_COUNT - 1;
     return k_speed_labels[speed_level];
+}
+
+static bool tp_tab0_row_rect(int row, int scroll, int *out_y, int *out_h) {
+    static const int k_row_h[7] = { 26, 25, 37, 37, 26, 26, 28 };
+    if (row < 0 || row >= 7) return false;
+    if (scroll < 0) scroll = 0;
+    if (scroll > 2) scroll = 2;
+    if (row < scroll || row >= scroll + 5) return false;
+    int y = 47;
+    for (int i = scroll; i < row; i++) {
+        y += k_row_h[i] + 2;
+    }
+    if (out_y) *out_y = y;
+    if (out_h) *out_h = k_row_h[row];
+    return true;
 }
 
 bool nl_mouse_is_active(const nl_state_t *state) {
@@ -1834,64 +2367,78 @@ void nl_cursor_compute_target(const nl_state_t *state, int *out_x, int *out_y) {
     }
 
     if (state->sui.screen == NL_UI_LIBRARY) {
-        if (state->sui.qp_open) {
+        if (state->sui.qp_pick_open) {
+            int cat = state->sui.qp_pick_cat;
+            if (cat < 0 || cat >= NL_AVATAR_CAT_COUNT) cat = 0;
+            int cols = (cat == 0) ? 8 : 5;
+            int diam = (cat == 0) ? 28 : 34;
+            int dx_step = (cat == 0) ? 34 : 48;
+            int dy_step = (cat == 0) ? 46 : 50;
+            int grid_w = (cols - 1) * dx_step + diam;
+            int start_x = (NL_SCREEN_W - grid_w) / 2;
+            int start_y = (cat == 0) ? 74 : 70;
+            int col = state->sui.qp_pick_cursor % cols;
+            int row = state->sui.qp_pick_cursor / cols;
+            tx = start_x + col * dx_step + diam / 2;
+            ty = start_y + row * dy_step + diam / 2;
+        } else if (state->sui.qp_open) {
             tx = compute_qp_slot_center_x(state, state->sui.qp_cursor);
-            ty = 114;
+            ty = 120;
         } else if (state->filtered_count > 0) {
             int sel = state->selected_pos;
             if (sel < 0) sel = 0;
             if (sel >= state->filtered_count) sel = state->filtered_count - 1;
 
             nl_layout_metrics_t lm;
-            nl_get_layout_metrics_for_count(
+            nl_get_layout_metrics_full(
                 state->settings.layout,
+                state->settings.scroll_dir,
                 state->settings.show_names,
                 state->settings.show_shortcuts,
                 state->filtered_count,
                 &lm
             );
-            int per_page = (lm.per_page > 0) ? lm.per_page : 1;
-            int page_idx = sel / per_page;
-            int idx_in_page = sel % per_page;
-            int page_start = page_idx * per_page;
-            int page_items = state->filtered_count - page_start;
-            if (page_items > per_page) page_items = per_page;
-
             int cx = 0, cy = 0;
-            nl_compute_grid_slot_pos(&lm, page_items, idx_in_page, &cx, &cy);
-            tx = cx + lm.card_w / 2;
-            ty = cy + lm.card_h / 2;
+            nl_compute_grid_slot_pos(&lm, state->filtered_count, sel, &cx, &cy);
+            tx = cx - (state->anim.scroll_x_fp >> 4) + lm.card_w / 2;
+            ty = cy - (state->anim.scroll_y_fp >> 4) + lm.card_h / 2;
         }
     } else if (state->sui.screen == NL_UI_SETTINGS_TOUCHPAD) {
         if (state->sui.tp_tab == 1) {
-            int sc = state->sui.tp_style_cursor;
-            if (sc < 0) sc = 0;
-            if (sc > 2) sc = 2;
-            tx = 14 + sc * 101 + 45;
-            ty = 108;
+            if (state->sui.tp_custom_row == 1) {
+                int szc = state->sui.tp_size_cursor;
+                if (szc < 0) szc = 0;
+                if (szc > 2) szc = 2;
+                tx = 14 + szc * 101 + 45;
+                ty = 178;
+            } else {
+                int sc = state->sui.tp_style_cursor;
+                if (sc < 0) sc = 0;
+                if (sc > 2) sc = 2;
+                tx = 14 + sc * 101 + 45;
+                ty = 92;
+            }
         } else {
             int r = state->sui.tp_cursor;
-            if (r == 0) {
-                tx = 240;
-                ty = 61;
-            } else if (r == 1) {
-                tx = 266;
-                ty = 90;
-            } else if (r == 2) {
+            int ry = 47, rh = 26;
+            if (!tp_tab0_row_rect(r, state->sui.tp_scroll, &ry, &rh)) {
+                ry = 47; rh = 26;
+            }
+            if (r == 2) {
                 int sens = state->settings.touchpad_sensitivity;
                 if (sens < 0) sens = 0;
                 if (sens >= NL_TP_SENS_COUNT) sens = NL_TP_SENS_COUNT - 1;
                 tx = 34 + sens * 63;
-                ty = 131;
+                ty = ry + 25;
             } else if (r == 3) {
                 int cspd = state->settings.cursor_speed;
                 if (cspd < 0) cspd = 0;
                 if (cspd >= NL_CURSOR_SPEED_COUNT) cspd = NL_CURSOR_SPEED_COUNT - 1;
                 tx = 34 + cspd * 63;
-                ty = 171;
+                ty = ry + 25;
             } else {
                 tx = 250;
-                ty = 201;
+                ty = ry + rh / 2;
             }
         }
     } else if (state->sui.screen == NL_UI_SETTINGS_PROFILES) {
@@ -2041,7 +2588,8 @@ bool nl_mouse_feed_touchpad(
         return false;
     }
 
-    if (abs(dx_norm) < 3 && abs(dy_norm) < 3) {
+    /* Gentle micro-deadzone prevents finger landing/tapping wobble from nudging pointer off buttons */
+    if (abs(dx_norm) < 5 && abs(dy_norm) < 5) {
         state->anim.mouse_vx_fp = 0;
         state->anim.mouse_vy_fp = 0;
         return false;
@@ -2054,8 +2602,8 @@ bool nl_mouse_feed_touchpad(
 
     int dx_fp = (int)((dx_norm * scale * 16) / 64);
     int dy_fp = (int)((dy_norm * scale * 12) / 64);
-    if (dx_fp == 0 && abs(dx_norm) >= 3) dx_fp = (dx_norm > 0) ? 4 : -4;
-    if (dy_fp == 0 && abs(dy_norm) >= 3) dy_fp = (dy_norm > 0) ? 4 : -4;
+    if (dx_fp == 0 && abs(dx_norm) >= 5) dx_fp = (dx_norm > 0) ? 4 : -4;
+    if (dy_fp == 0 && abs(dy_norm) >= 5) dy_fp = (dy_norm > 0) ? 4 : -4;
 
     int prev_x_fp = state->anim.mouse_x_fp;
     int prev_y_fp = state->anim.mouse_y_fp;
@@ -2172,9 +2720,10 @@ static void compute_pagination_row_metrics(
 static const char *settings_screen_title_for_chrome(const nl_state_t *state, nl_ui_screen_t scr) {
     switch (scr) {
         case NL_UI_SETTINGS_MAIN:          return "PARAMETRES";
-        case NL_UI_SETTINGS_AUTOSTART:     return "DEMARRAGE AUTOMATIQUE";
+        case NL_UI_SETTINGS_DIAG:          return "DIAGNOSTICS & JOURNAUX";
         case NL_UI_SETTINGS_HOTKEY:        return "RACCOURCI GLOBAL TI-OS";
         case NL_UI_SETTINGS_DISPLAY:       return "AFFICHAGE";
+        case NL_UI_SETTINGS_ANIMATIONS:    return "ANIMATIONS";
         case NL_UI_SETTINGS_TOUCHPAD:      return (state->sui.tp_tab == 1) ? "PERSONNALISER LE CURSEUR" : "NAVIGATION TACTILE";
         case NL_UI_SETTINGS_SHORTCUTS:     return "TOUCHES DE LANCEMENT";
         case NL_UI_SETTINGS_KEY_HELP:      return "COMMANDES DU LAUNCHER";
@@ -2185,6 +2734,7 @@ static const char *settings_screen_title_for_chrome(const nl_state_t *state, nl_
         case NL_UI_SETTINGS_RESET:         return "REINITIALISER LES REGLAGES";
         case NL_UI_SETTINGS_INFO:          return "INFORMATIONS SYSTEME";
         case NL_UI_SETTINGS_CREDITS:       return "A PROPOS ET CREDITS";
+        case NL_UI_SETTINGS_RESCAN:        return "RESCANNER LES JEUX";
         case NL_UI_SETTINGS_PROFILES:
             if (state->sui.prof_mode == NL_PROF_MODE_DETAIL || state->sui.prof_mode == NL_PROF_MODE_CONFIRM_DELETE) {
                 return "GESTION DU PROFIL";
@@ -2218,6 +2768,51 @@ void nl_mouse_update_hover(nl_state_t *state) {
     if (my >= NL_SCREEN_H) my = NL_SCREEN_H - 1;
 
     if (sui->screen == NL_UI_LIBRARY) {
+        if (sui->qp_pick_open) {
+            /* Compact floating Avatar Picker modal over dimmed Library: mx=14, my=32, mw=292, mh=176 */
+            if (mx < 14 || mx >= 306 || my < 32 || my >= 208) {
+                sui->hover_kind = NL_HOVER_QP_PICK_CLOSE;
+                sui->hover_valid = true;
+                return;
+            }
+            if (my >= 40 && my <= 56) {
+                for (int c = 0; c < NL_AVATAR_CAT_COUNT; c++) {
+                    int tx = 22 + c * 69;
+                    if (mx >= tx && mx < tx + 66) {
+                        sui->hover_kind = NL_HOVER_QP_PICK_TAB;
+                        sui->hover_index = c;
+                        sui->hover_valid = true;
+                        return;
+                    }
+                }
+            }
+            int cat = sui->qp_pick_cat;
+            if (cat < 0 || cat >= NL_AVATAR_CAT_COUNT) cat = 0;
+            int cstart = 0, ccnt = 0;
+            nl_avatar_category_range(cat, &cstart, &ccnt);
+            int cols = (cat == 0) ? 8 : 5;
+            int diam = (cat == 0) ? 28 : 34;
+            int dx_step = (cat == 0) ? 34 : 48;
+            int dy_step = (cat == 0) ? 46 : 50;
+            int grid_w = (cols - 1) * dx_step + diam;
+            int start_x = (NL_SCREEN_W - grid_w) / 2;
+            int start_y = (cat == 0) ? 74 : 70;
+            for (int i = 0; i < ccnt; i++) {
+                int r = i / cols;
+                int col_idx = i % cols;
+                int ax = start_x + col_idx * dx_step;
+                int ay = start_y + r * dy_step;
+                if (mx >= ax - 2 && mx < ax + diam + 2 &&
+                    my >= ay - 2 && my < ay + diam + 2) {
+                    sui->hover_kind = NL_HOVER_QP_PICK_CELL;
+                    sui->hover_index = i;
+                    sui->hover_valid = true;
+                    return;
+                }
+            }
+            return;
+        }
+
         if (sui->qp_open) {
             int pcount = (state->profiles.count > 0) ? state->profiles.count : 1;
             int total_slots = pcount + 1;
@@ -2237,16 +2832,16 @@ void nl_mouse_update_hover(nl_state_t *state) {
             int strip_w = shown * diam + (shown - 1) * (stride - diam);
             int start_x = 160 - strip_w / 2;
 
-            if (win_start > 0 && mx >= 12 && mx <= 26 && my >= 102 && my <= 126) {
+            if (win_start > 0 && mx >= 12 && mx <= 26 && my >= 106 && my <= 134) {
                 sui->hover_kind = NL_HOVER_QP_PREV;
-            } else if (win_start + shown < total_slots && mx >= 294 && mx <= 308 && my >= 102 && my <= 126) {
+            } else if (win_start + shown < total_slots && mx >= 294 && mx <= 308 && my >= 106 && my <= 134) {
                 sui->hover_kind = NL_HOVER_QP_NEXT;
-            } else if (mx < 10 || mx >= 310 || my < 52 || my >= 188) {
+            } else if (mx < 12 || mx >= 308 || my < 74 || my >= 166) {
                 sui->hover_kind = NL_HOVER_QP_OUTSIDE;
             } else {
                 for (int v = 0; v < shown; v++) {
                     int scx = start_x + v * stride + diam / 2;
-                    if (mx >= scx - 19 && mx <= scx + 19 && my >= 90 && my <= 140) {
+                    if (mx >= scx - 19 && mx <= scx + 19 && my >= 98 && my <= 142) {
                         sui->hover_kind = NL_HOVER_QP_SLOT;
                         sui->hover_index = win_start + v;
                         break;
@@ -2289,8 +2884,9 @@ void nl_mouse_update_hover(nl_state_t *state) {
         }
 
         nl_layout_metrics_t lm;
-        nl_get_layout_metrics_for_count(
+        nl_get_layout_metrics_full(
             state->settings.layout,
+            state->settings.scroll_dir,
             state->settings.show_names,
             state->settings.show_shortcuts,
             state->filtered_count,
@@ -2329,25 +2925,31 @@ void nl_mouse_update_hover(nl_state_t *state) {
         else if (!sui->search_active && search_fp == 256) search_fp = 0;
         int search_h = (28 * search_fp + 128) >> 8;
         int grid_clip_top = NL_VIEW_TOP + search_h;
-        if (state->filtered_count > 0 && my >= grid_clip_top && my < lm.view_bottom) {
+        int grid_clip_bot = lm.view_bottom;
+        if (state->filtered_count > 0 && my >= grid_clip_top && my < grid_clip_bot) {
+            int scroll_x = state->anim.scroll_x_fp >> 4;
             int scroll_y = state->anim.scroll_y_fp >> 4;
-            int s_diff = state->anim.target_scroll_y_fp - state->anim.scroll_y_fp;
-            if (s_diff < 0) s_diff = -s_diff;
-            bool v_settled = (s_diff <= 16);
 
             for (int f_idx = 0; f_idx < state->filtered_count; f_idx++) {
-                int row = f_idx / lm.cols;
                 int slot_x = 0, slot_y = 0;
                 nl_compute_grid_slot_pos(&lm, state->filtered_count, f_idx, &slot_x, &slot_y);
+                int bx = slot_x - scroll_x;
                 int by = slot_y + search_h - scroll_y;
-                if (v_settled && search_h == 0 && by < NL_VIEW_TOP && row == state->current_page * lm.rows) {
-                    by = NL_VIEW_TOP + 1;
-                }
-                if (by + lm.card_h + lm.label_h <= grid_clip_top || by >= lm.view_bottom) continue;
-                if (mx >= slot_x && mx < slot_x + lm.card_w &&
-                    my >= by && my < by + lm.card_h + lm.label_h) {
-                    sui->hover_kind = NL_HOVER_GAME_CARD;
-                    sui->hover_index = f_idx;
+                if (bx + lm.card_w <= 0 || bx >= NL_SCREEN_W) continue;
+                if (by + lm.card_h + lm.label_h <= grid_clip_top || by >= grid_clip_bot) continue;
+                if (mx >= bx - 2 && mx < bx + lm.card_w + 2 &&
+                    my >= by - 2 && my < by + lm.card_h + lm.label_h + 2) {
+                    int card_page = (lm.per_page > 0) ? (f_idx / lm.per_page) : state->current_page;
+                    if (card_page != state->current_page) {
+                        /* Peeking adjacent-page icon (Horizontal left/right OR Vertical top/bottom):
+                         * clicking navigates to that page cleanly WITHOUT launching a game. */
+                        sui->hover_kind = (card_page > state->current_page)
+                            ? NL_HOVER_PAGE_NEXT : NL_HOVER_PAGE_PREV;
+                        sui->hover_index = card_page;
+                    } else {
+                        sui->hover_kind = NL_HOVER_GAME_CARD;
+                        sui->hover_index = f_idx;
+                    }
                     sui->hover_valid = true;
                     return;
                 }
@@ -2365,7 +2967,8 @@ void nl_mouse_update_hover(nl_state_t *state) {
         }
         if (sui->screen != NL_UI_SETTINGS_SHORTCUTS &&
             sui->screen != NL_UI_SETTINGS_ICONS &&
-            sui->screen != NL_UI_SETTINGS_PROFILES) {
+            sui->screen != NL_UI_SETTINGS_PROFILES &&
+            sui->screen != NL_UI_SETTINGS_DIAG) {
             const char *t = settings_screen_title_for_chrome(state, sui->screen);
             int t_len = (int)strlen(t);
             if (t_len > 26) t_len = 26;
@@ -2458,6 +3061,28 @@ void nl_mouse_update_hover(nl_state_t *state) {
         }
         return;
     }
+    if (sui->screen == NL_UI_SETTINGS_DIAG && sui->diag_confirm_modal) {
+        if (my >= 152 && my <= 176) {
+            if (mx >= 42 && mx <= 150) {
+                sui->hover_kind = NL_HOVER_MODAL_BTN;
+                sui->hover_index = 0;
+                sui->hover_valid = true;
+            } else if (mx >= 170 && mx <= 278) {
+                sui->hover_kind = NL_HOVER_MODAL_BTN;
+                sui->hover_index = 1;
+                sui->hover_valid = true;
+            }
+        }
+        return;
+    }
+    if (sui->screen == NL_UI_SETTINGS_DIAG && sui->diag_detail_open) {
+        if (mx >= 12 && mx <= 308 && my >= 30 && my <= 214) {
+            sui->hover_kind = NL_HOVER_DIAG_DETAIL_CLOSE;
+            sui->hover_index = 0;
+            sui->hover_valid = true;
+        }
+        return;
+    }
 
     int list_scroll_px = (state->anim.set_target_scroll_fp == state->anim.set_list_scroll_fp ||
                           sui->screen == state->anim.set_last_screen)
@@ -2483,9 +3108,13 @@ void nl_mouse_update_hover(nl_state_t *state) {
             break;
 
         case NL_UI_SETTINGS_HOTKEY:
-            if (mx >= 14 && mx < 306 && my >= 34 && my < 88) {
+            if (mx >= 14 && mx < 306 && my >= 32 && my < 76) {
                 sui->hover_kind = NL_HOVER_SET_ROW;
                 sui->hover_index = 0;
+                sui->hover_valid = true;
+            } else if (mx >= 14 && mx < 306 && my >= 80 && my < 112) {
+                sui->hover_kind = NL_HOVER_SET_ROW;
+                sui->hover_index = 1;
                 sui->hover_valid = true;
             }
             break;
@@ -2498,6 +3127,20 @@ void nl_mouse_update_hover(nl_state_t *state) {
                     int ry = 30 + r * 31 - spx;
                     if (ry + 28 <= 28 || ry >= 122) continue;
                     if (my >= ry && my < ry + 28) {
+                        sui->hover_kind = NL_HOVER_SET_ROW;
+                        sui->hover_index = r;
+                        sui->hover_valid = true;
+                        return;
+                    }
+                }
+            }
+            break;
+
+        case NL_UI_SETTINGS_ANIMATIONS:
+            if (mx >= 12 && mx < 308 && my >= 42 && my < 176) {
+                for (int r = 0; r < NL_ANIM_CAT_COUNT; r++) {
+                    int ry = 44 + r * 32;
+                    if (my >= ry && my < ry + 29) {
                         sui->hover_kind = NL_HOVER_SET_ROW;
                         sui->hover_index = r;
                         sui->hover_valid = true;
@@ -2523,7 +3166,7 @@ void nl_mouse_update_hover(nl_state_t *state) {
                 }
             }
             if (sui->tp_tab == 1) {
-                if (my >= 50 && my <= 166) {
+                if (my >= 50 && my <= 134) {
                     for (int c = 0; c < 3; c++) {
                         int cx = 14 + c * 101;
                         if (mx >= cx && mx < cx + 90) {
@@ -2533,51 +3176,40 @@ void nl_mouse_update_hover(nl_state_t *state) {
                             return;
                         }
                     }
+                } else if (my >= 142 && my <= 214) {
+                    for (int s = 0; s < 3; s++) {
+                        int cx = 14 + s * 101;
+                        if (mx >= cx && mx < cx + 90) {
+                            sui->hover_kind = NL_HOVER_SET_SIZE_CARD;
+                            sui->hover_index = s;
+                            sui->hover_valid = true;
+                            return;
+                        }
+                    }
                 }
             } else {
                 if (mx >= 14 && mx < 306) {
-                    if (my >= 47 && my < 75) {
-                        sui->hover_kind = NL_HOVER_SET_ROW;
-                        sui->hover_index = 0;
-                        sui->hover_valid = true;
-                    } else if (my >= 77 && my < 104) {
-                        sui->hover_kind = NL_HOVER_SET_ROW;
-                        sui->hover_index = 1;
-                        sui->hover_valid = true;
-                    } else if (my >= 106 && my < 144) {
-                        if (my >= 122 && mx >= 22 && mx <= 298) {
-                            int best_n = 0, best_d = 9999;
-                            for (int n = 0; n < NL_TP_SENS_COUNT; n++) {
-                                int d = abs(mx - (34 + n * 63));
-                                if (d < best_d) { best_d = d; best_n = n; }
+                    for (int r = sui->tp_scroll; r < sui->tp_scroll + 5 && r < 7; r++) {
+                        int ry = 0, rh = 0;
+                        if (!tp_tab0_row_rect(r, sui->tp_scroll, &ry, &rh)) continue;
+                        if (my >= ry && my < ry + rh) {
+                            if ((r == 2 || r == 3) && my >= ry + 15 && mx >= 22 && mx <= 298) {
+                                int cnt = (r == 2) ? NL_TP_SENS_COUNT : NL_CURSOR_SPEED_COUNT;
+                                int best_n = 0, best_d = 9999;
+                                for (int n = 0; n < cnt; n++) {
+                                    int d = abs(mx - (34 + n * 63));
+                                    if (d < best_d) { best_d = d; best_n = n; }
+                                }
+                                sui->hover_kind = NL_HOVER_SET_SLIDER_NOTCH;
+                                sui->hover_index = r;
+                                sui->hover_sub = best_n;
+                            } else {
+                                sui->hover_kind = NL_HOVER_SET_ROW;
+                                sui->hover_index = r;
                             }
-                            sui->hover_kind = NL_HOVER_SET_SLIDER_NOTCH;
-                            sui->hover_index = 2;
-                            sui->hover_sub = best_n;
-                        } else {
-                            sui->hover_kind = NL_HOVER_SET_ROW;
-                            sui->hover_index = 2;
+                            sui->hover_valid = true;
+                            return;
                         }
-                        sui->hover_valid = true;
-                    } else if (my >= 146 && my < 184) {
-                        if (my >= 162 && mx >= 22 && mx <= 298) {
-                            int best_n = 0, best_d = 9999;
-                            for (int n = 0; n < NL_CURSOR_SPEED_COUNT; n++) {
-                                int d = abs(mx - (34 + n * 63));
-                                if (d < best_d) { best_d = d; best_n = n; }
-                            }
-                            sui->hover_kind = NL_HOVER_SET_SLIDER_NOTCH;
-                            sui->hover_index = 3;
-                            sui->hover_sub = best_n;
-                        } else {
-                            sui->hover_kind = NL_HOVER_SET_ROW;
-                            sui->hover_index = 3;
-                        }
-                        sui->hover_valid = true;
-                    } else if (my >= 186 && my <= 217) {
-                        sui->hover_kind = NL_HOVER_SET_ROW;
-                        sui->hover_index = 4;
-                        sui->hover_valid = true;
                     }
                 }
             }
@@ -2676,7 +3308,7 @@ void nl_mouse_update_hover(nl_state_t *state) {
 
         case NL_UI_SETTINGS_PROFILES:
             if (sui->prof_mode == NL_PROF_MODE_LIST) {
-                int total_rows = state->profiles.count + 1;
+                int total_rows = state->profiles.count + 2; /* row 0=padlock toggle, row 1=create, 2..=profiles */
                 if (mx >= 12 && mx < 304 && my >= 28 && my < 218) {
                     int spx = (state->anim.set_last_screen == NL_UI_SETTINGS_PROFILES)
                         ? list_scroll_px : (sui->prof_scroll * 30);
@@ -2693,9 +3325,9 @@ void nl_mouse_update_hover(nl_state_t *state) {
                 }
             } else if (sui->prof_mode == NL_PROF_MODE_DETAIL) {
                 if (mx >= 13 && mx < 307) {
-                    for (int r = 0; r < 4; r++) {
-                        int ry = 83 + r * 32;
-                        if (my >= ry && my < ry + 28) {
+                    for (int r = 0; r < 5; r++) {
+                        int ry = 80 + r * 26;
+                        if (my >= ry && my < ry + 24) {
                             sui->hover_kind = NL_HOVER_PROF_DETAIL_ROW;
                             sui->hover_index = r;
                             sui->hover_valid = true;
@@ -2745,6 +3377,87 @@ void nl_mouse_update_hover(nl_state_t *state) {
             }
             break;
 
+        case NL_UI_SETTINGS_DIAG:
+            if (my >= 28 && my <= 44) {
+                if (mx >= 14 && mx <= 155) {
+                    sui->hover_kind = NL_HOVER_DIAG_TAB;
+                    sui->hover_index = 0;
+                    sui->hover_valid = true;
+                    return;
+                }
+                if (mx >= 160 && mx <= 305) {
+                    sui->hover_kind = NL_HOVER_DIAG_TAB;
+                    sui->hover_index = 1;
+                    sui->hover_valid = true;
+                    return;
+                }
+            }
+            if (sui->diag_tab == 0) {
+                if (mx >= 14 && mx <= 306 && my >= 193 && my <= 215) {
+                    sui->hover_kind = NL_HOVER_DIAG_CLEAR_BTN;
+                    sui->hover_index = 0;
+                    sui->hover_valid = true;
+                    return;
+                }
+                if (state->diag.count > 0 && mx >= 14 && mx <= 306 && my >= 66 && my <= 190) {
+                    for (int i = 0; i < state->diag.count; i++) {
+                        int ry = 67 + (i - sui->diag_scroll) * 30;
+                        if (ry + 28 <= 66 || ry >= 190) continue;
+                        if (my >= ry && my < ry + 28) {
+                            sui->hover_kind = NL_HOVER_DIAG_ROW;
+                            sui->hover_index = i;
+                            sui->hover_valid = true;
+                            return;
+                        }
+                    }
+                }
+            }
+            break;
+
+        case NL_UI_SETTINGS_RESCAN:
+            if (state->scan.active) {
+                /* Interactive "Annuler (ESC)" button during non-blocking scan */
+                if (my >= 188 && my <= 212 && mx >= 96 && mx <= 224) {
+                    sui->hover_kind = NL_HOVER_MODAL_BTN;
+                    sui->hover_index = 0;
+                    sui->hover_valid = true;
+                    return;
+                }
+            } else {
+                if (state->scan.empty_confirm_pending) {
+                    if (my >= 174 && my <= 198) {
+                        if (mx >= 34 && mx <= 152) {
+                            sui->hover_kind = NL_HOVER_MODAL_BTN;
+                            sui->hover_index = 0;
+                            sui->hover_valid = true;
+                            return;
+                        }
+                        if (mx >= 168 && mx <= 286) {
+                            sui->hover_kind = NL_HOVER_MODAL_BTN;
+                            sui->hover_index = 1;
+                            sui->hover_valid = true;
+                            return;
+                        }
+                    }
+                } else if (state->scan.finished) {
+                    if (my >= 184 && my <= 206) {
+                        if (mx >= 34 && mx <= 152) {
+                            sui->hover_kind = NL_HOVER_MODAL_BTN;
+                            sui->hover_index = 0;
+                            sui->hover_valid = true;
+                            return;
+                        }
+                        if (mx >= 168 && mx <= 286) {
+                            sui->hover_kind = NL_HOVER_MODAL_BTN;
+                            sui->hover_index = 1;
+                            sui->hover_valid = true;
+                            return;
+                        }
+                    }
+                }
+            }
+            break;
+
         default:
             break;
     }
@@ -2752,6 +3465,7 @@ void nl_mouse_update_hover(nl_state_t *state) {
 
 static void trigger_profile_switch_anim(
     nl_state_t *state,
+    int from_avatar_id,
     int avatar_id,
     int origin_x,
     int origin_y,
@@ -2759,11 +3473,14 @@ static void trigger_profile_switch_anim(
 ) {
     state->anim.prof_switch_active = true;
     state->anim.prof_switch_tick = 0;
-    state->anim.prof_switch_max = 16;
+    state->anim.prof_switch_max = 20;
+    state->anim.prof_switch_from_avatar_id = from_avatar_id;
     state->anim.prof_switch_avatar_id = avatar_id;
     state->anim.prof_switch_origin_x = origin_x;
     state->anim.prof_switch_origin_y = origin_y;
     state->anim.prof_switch_origin_d = (origin_d >= 12) ? origin_d : 36;
+    state->anim.launch_holding = false;
+    state->sui.consume_exe_release = true;
 }
 
 static bool begin_profile_create_avatar_flow(nl_state_t *state, bool from_quick, int orig_x, int orig_y) {
@@ -2825,13 +3542,19 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
         return true;
     }
     if (key == NL_KEY_SETTINGS) {
+        if (sui->screen == NL_UI_SETTINGS_RESCAN && state->scan.active) {
+            state->scan.cancel_requested = true;
+            return true;
+        }
         settings_close_to_library(state);
         return true;
     }
     if (key == NL_KEY_RESCAN &&
         sui->screen != NL_UI_SETTINGS_SHORTCUTS &&
         sui->screen != NL_UI_SETTINGS_ICONS &&
-        sui->screen != NL_UI_SETTINGS_PROFILES) {
+        sui->screen != NL_UI_SETTINGS_PROFILES &&
+        sui->screen != NL_UI_SETTINGS_DIAG &&
+        sui->screen != NL_UI_SETTINGS_RESCAN) {
         request_calculator_poweroff(state);
         return true;
     }
@@ -2864,11 +3587,22 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
                         sui->display_cursor = 0;
                         sui->display_scroll = 0;
                         break;
+                    case NL_SET_MENU_ANIMATIONS:
+                        next_scr = NL_UI_SETTINGS_ANIMATIONS;
+                        sui->anim_cursor = ((unsigned)state->settings.launch_anim_mode < (unsigned)NL_LAUNCH_ANIM_COUNT)
+                            ? (int)state->settings.launch_anim_mode : 0;
+                        break;
                     case NL_SET_MENU_TOUCHPAD:
                         next_scr = NL_UI_SETTINGS_TOUCHPAD;
                         sui->tp_cursor = 0;
+                        sui->tp_scroll = 0;
                         sui->tp_tab = 0;
+                        sui->tp_custom_row = 0;
                         sui->tp_style_cursor = clamp_cursor_style_to_card(state->settings.touchpad_cursor_style);
+                        sui->tp_size_cursor = (int)state->settings.cursor_size;
+                        if (sui->tp_size_cursor < 0 || sui->tp_size_cursor >= (int)NL_CURSOR_SIZE_COUNT) {
+                            sui->tp_size_cursor = (int)NL_CURSOR_SIZE_DEFAULT;
+                        }
                         state->anim.tp_tab_trans_fp = 256;
                         state->anim.tp_style_glow_fp = 256;
                         state->anim.tp_slider_pos_fp = state->settings.touchpad_sensitivity * 256;
@@ -2877,6 +3611,7 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
                         state->anim.tp_speed_slider_pos_fp = state->settings.cursor_speed * 256;
                         state->anim.tp_speed_slider_vel_fp = 0;
                         state->anim.tp_speed_notch_last = state->settings.cursor_speed;
+                        state->anim.switch_tap_click_fp = state->settings.tap_to_click ? 256 : 0;
                         break;
                     case NL_SET_MENU_SHORTCUTS:
                         next_scr = NL_UI_SETTINGS_SHORTCUTS;
@@ -2912,22 +3647,39 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
                         sui->icon_confirm_yes = false;
                         break;
                     case NL_SET_MENU_REFRESH_LIB:
+                        next_scr = NL_UI_SETTINGS_RESCAN;
                         sui->rescan_req = true;
+                        state->scan.active = false;
+                        state->scan.finished = false;
+                        state->scan.empty_confirm_pending = false;
+                        state->scan.empty_confirm_replace = false;
+                        state->scan.commit_empty_req = false;
+                        state->scan.cancelled_or_error = false;
                         state->anim.val_pulse_fp = 256;
                         state->anim.val_pulse_dir = 1;
                         nl_rebuild_filter(state);
                         nl_show_toast(state, "BIBLIOTHEQUE ACTUALISEE", 55);
-                        return true;
+                        break;
                     case NL_SET_MENU_HOTKEY:
+                        sui->hotkey_cursor = 0;
                         next_scr = NL_UI_SETTINGS_HOTKEY;
                         break;
                     case NL_SET_MENU_PROFILES:
                         next_scr = NL_UI_SETTINGS_PROFILES;
                         sui->prof_mode = NL_PROF_MODE_LIST;
-                        sui->prof_cursor = (state->profiles.active_index >= 0) ? (state->profiles.active_index + 1) : 0;
+                        sui->prof_cursor = (state->profiles.active_index >= 0) ? (state->profiles.active_index + 2) : 0;
                         sui->prof_scroll = 0;
                         adjust_list_scroll(sui->prof_cursor, &sui->prof_scroll, 6);
                         sui->prof_from_quick = false;
+                        break;
+                    case NL_SET_MENU_DIAG:
+                        next_scr = NL_UI_SETTINGS_DIAG;
+                        sui->diag_tab = 0;
+                        sui->diag_cursor = 0;
+                        sui->diag_scroll = 0;
+                        sui->diag_detail_open = false;
+                        sui->diag_confirm_modal = false;
+                        sui->diag_confirm_yes = false;
                         break;
                     case NL_SET_MENU_RESET:
                         next_scr = NL_UI_SETTINGS_RESET;
@@ -2948,24 +3700,131 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
             }
             break;
 
-        case NL_UI_SETTINGS_AUTOSTART:
+        case NL_UI_SETTINGS_DIAG: {
+            if (sui->diag_confirm_modal) {
+                if (key == NL_KEY_ESC) {
+                    sui->diag_confirm_modal = false;
+                    sui->diag_confirm_yes = false;
+                    state->anim.modal_fp = 0;
+                    return true;
+                }
+                if (key == NL_KEY_LEFT || key == NL_KEY_RIGHT || key == NL_KEY_UP || key == NL_KEY_DOWN) {
+                    sui->diag_confirm_yes = !sui->diag_confirm_yes;
+                    return true;
+                }
+                if (key == NL_KEY_EXE) {
+                    if (sui->diag_confirm_yes) {
+                        (void)nl_diag_clear_logs(state);
+                        sui->diag_clear_req = true;
+                        sui->diag_cursor = 0;
+                        sui->diag_scroll = 0;
+                        sui->diag_detail_open = false;
+                        nl_show_toast(state, "Journaux diagnostiques effaces", 60);
+                    }
+                    sui->diag_confirm_modal = false;
+                    sui->diag_confirm_yes = false;
+                    state->anim.modal_fp = 0;
+                    return true;
+                }
+                break;
+            }
+            if (sui->diag_detail_open) {
+                if (key == NL_KEY_ESC || key == NL_KEY_EXE) {
+                    sui->diag_detail_open = false;
+                    return true;
+                }
+                if (key == NL_KEY_LEFT || key == NL_KEY_UP) {
+                    if (state->diag.count > 0 && sui->diag_cursor > 0) {
+                        sui->diag_cursor--;
+                        adjust_list_scroll(sui->diag_cursor, &sui->diag_scroll, 4);
+                    }
+                    return true;
+                }
+                if (key == NL_KEY_RIGHT || key == NL_KEY_DOWN) {
+                    if (state->diag.count > 0 && sui->diag_cursor + 1 < state->diag.count) {
+                        sui->diag_cursor++;
+                        adjust_list_scroll(sui->diag_cursor, &sui->diag_scroll, 4);
+                    }
+                    return true;
+                }
+                break;
+            }
             if (key == NL_KEY_ESC) {
                 settings_transition_screen(state, NL_UI_SETTINGS_MAIN, -1);
                 return true;
             }
-            if (key == NL_KEY_EXE || key == NL_KEY_LEFT || key == NL_KEY_RIGHT) {
-                execute_autostart_toggle(state);
+            if (key == NL_KEY_TAB || key == NL_KEY_LEFT || key == NL_KEY_RIGHT) {
+                sui->diag_tab = (sui->diag_tab == 0) ? 1 : 0;
+                sui->diag_cursor = 0;
+                sui->diag_scroll = 0;
+                sui->diag_detail_open = false;
+                settings_sync_cursor_targets(state, true, -1);
                 return true;
             }
+            if (sui->diag_tab == 0) {
+                int max_idx = state->diag.count; /* 0..count-1 = entries, count = Clear button */
+                if (key == NL_KEY_RESCAN || key == NL_KEY_BACKSPACE) {
+                    sui->diag_confirm_modal = true;
+                    sui->diag_confirm_yes = false; /* Safe Annuler by default */
+                    state->anim.modal_fp = 32;
+                    state->anim.modal_btn_fp = 0;
+                    return true;
+                }
+                if (key == NL_KEY_UP) {
+                    int prev = sui->diag_cursor;
+                    sui->diag_cursor = (sui->diag_cursor > 0) ? (sui->diag_cursor - 1) : max_idx;
+                    int list_c = (sui->diag_cursor < state->diag.count) ? sui->diag_cursor : (state->diag.count > 0 ? state->diag.count - 1 : 0);
+                    adjust_list_scroll(list_c, &sui->diag_scroll, 4);
+                    settings_sync_cursor_targets(state, false, prev);
+                    return true;
+                }
+                if (key == NL_KEY_DOWN) {
+                    int prev = sui->diag_cursor;
+                    sui->diag_cursor = (sui->diag_cursor + 1) % (max_idx + 1);
+                    int list_c = (sui->diag_cursor < state->diag.count) ? sui->diag_cursor : (state->diag.count > 0 ? state->diag.count - 1 : 0);
+                    adjust_list_scroll(list_c, &sui->diag_scroll, 4);
+                    settings_sync_cursor_targets(state, false, prev);
+                    return true;
+                }
+                if (key == NL_KEY_EXE) {
+                    if (sui->diag_cursor >= 0 && sui->diag_cursor < state->diag.count) {
+                        sui->diag_detail_open = true;
+                    } else {
+                        sui->diag_confirm_modal = true;
+                        sui->diag_confirm_yes = false;
+                        state->anim.modal_fp = 32;
+                        state->anim.modal_btn_fp = 0;
+                    }
+                    return true;
+                }
+            } else {
+                if (key == NL_KEY_UP && sui->diag_scroll > 0) {
+                    sui->diag_scroll--;
+                    return true;
+                }
+                if (key == NL_KEY_DOWN && sui->diag_scroll < 6) {
+                    sui->diag_scroll++;
+                    return true;
+                }
+            }
             break;
+        }
 
         case NL_UI_SETTINGS_HOTKEY:
             if (key == NL_KEY_ESC) {
                 settings_transition_screen(state, NL_UI_SETTINGS_MAIN, -1);
                 return true;
             }
+            if (key == NL_KEY_UP || key == NL_KEY_DOWN) {
+                sui->hotkey_cursor = (sui->hotkey_cursor == 0) ? 1 : 0;
+                return true;
+            }
             if (key == NL_KEY_EXE || key == NL_KEY_LEFT || key == NL_KEY_RIGHT) {
-                execute_hotkey_toggle(state);
+                if (sui->hotkey_cursor == 1) {
+                    cycle_hotkey_combo(state, (key == NL_KEY_LEFT) ? -1 : +1);
+                } else {
+                    execute_hotkey_toggle(state);
+                }
                 return true;
             }
             break;
@@ -2998,18 +3857,81 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
                     state->anim.val_pulse_fp = 256;
                     state->anim.val_pulse_dir = (key == NL_KEY_LEFT) ? -1 : 1;
                     nl_rebuild_filter(state);
+                    sync_scroll_targets(state, true);
                     sui->config_dirty = true;
+                    sui->profiles_dirty = true;
                 } else if (sui->display_cursor == 1) {
+                    state->settings.scroll_dir = (state->settings.scroll_dir == NL_SCROLL_HORIZONTAL)
+                        ? NL_SCROLL_VERTICAL
+                        : NL_SCROLL_HORIZONTAL;
+                    state->anim.val_pulse_fp = 256;
+                    state->anim.val_pulse_dir = (key == NL_KEY_LEFT) ? -1 : 1;
+                    nl_rebuild_filter(state);
+                    sync_scroll_targets(state, true);
+                    sui->config_dirty = true;
+                    sui->profiles_dirty = true;
+                    nl_show_toast(state,
+                        (state->settings.scroll_dir == NL_SCROLL_HORIZONTAL)
+                            ? "Defilement : Horizontal"
+                            : "Defilement : Vertical",
+                        50);
+                } else if (sui->display_cursor == 2) {
                     state->settings.show_names = !state->settings.show_names;
                     nl_rebuild_filter(state);
                     sui->config_dirty = true;
-                } else if (sui->display_cursor == 2) {
+                } else if (sui->display_cursor == 3) {
                     state->settings.show_shortcuts = !state->settings.show_shortcuts;
                     nl_rebuild_filter(state);
                     sui->config_dirty = true;
-                } else if (sui->display_cursor == 3 && key == NL_KEY_EXE) {
+                } else if (sui->display_cursor == 4 && key == NL_KEY_EXE) {
                     request_calculator_poweroff(state);
                 }
+                return true;
+            }
+            break;
+
+        case NL_UI_SETTINGS_ANIMATIONS:
+            if (key == NL_KEY_ESC) {
+                settings_transition_screen(state, NL_UI_SETTINGS_MAIN, -1);
+                return true;
+            }
+            if (key == NL_KEY_UP) {
+                int prev = sui->anim_cursor;
+                sui->anim_cursor = (sui->anim_cursor > 0) ? (sui->anim_cursor - 1) : (NL_ANIM_CAT_COUNT - 1);
+                settings_sync_cursor_targets(state, false, prev);
+                return true;
+            }
+            if (key == NL_KEY_DOWN) {
+                int prev = sui->anim_cursor;
+                sui->anim_cursor = (sui->anim_cursor + 1) % NL_ANIM_CAT_COUNT;
+                settings_sync_cursor_targets(state, false, prev);
+                return true;
+            }
+            if (key == NL_KEY_LEFT || key == NL_KEY_RIGHT || key == NL_KEY_EXE) {
+                int delta = (key == NL_KEY_LEFT) ? -1 : 1;
+                char msg[NL_MAX_TOAST_LEN];
+                if (sui->anim_cursor == 0) {
+                    int next = ((int)state->settings.app_open_anim + delta + NL_OPEN_ANIM_COUNT) % NL_OPEN_ANIM_COUNT;
+                    state->settings.app_open_anim = (nl_app_open_anim_t)next;
+                    snprintf(msg, sizeof(msg), "Ouverture : %s", nl_app_open_anim_short_label(state->settings.app_open_anim));
+                } else if (sui->anim_cursor == 1) {
+                    int next = ((int)state->settings.app_close_anim + delta + NL_CLOSE_ANIM_COUNT) % NL_CLOSE_ANIM_COUNT;
+                    state->settings.app_close_anim = (nl_app_close_anim_t)next;
+                    snprintf(msg, sizeof(msg), "Fermeture : %s", nl_app_close_anim_short_label(state->settings.app_close_anim));
+                } else if (sui->anim_cursor == 2) {
+                    int next = ((int)state->settings.launch_anim_mode + delta + NL_LAUNCH_ANIM_COUNT) % NL_LAUNCH_ANIM_COUNT;
+                    state->settings.launch_anim_mode = (nl_launch_anim_t)next;
+                    snprintf(msg, sizeof(msg), "Lancement : %s", nl_launch_anim_short_label(state->settings.launch_anim_mode));
+                } else {
+                    int next = ((int)state->settings.return_anim_mode + delta + NL_RETURN_ANIM_COUNT) % NL_RETURN_ANIM_COUNT;
+                    state->settings.return_anim_mode = (nl_return_anim_t)next;
+                    snprintf(msg, sizeof(msg), "Retour jeu : %s", nl_return_anim_short_label(state->settings.return_anim_mode));
+                }
+                state->anim.val_pulse_fp = 256;
+                state->anim.val_pulse_dir = delta;
+                sui->config_dirty = true;
+                sui->profiles_dirty = true;
+                nl_show_toast(state, msg, 55);
                 return true;
             }
             break;
@@ -3018,49 +3940,83 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
             if (key == NL_KEY_TAB) {
                 sui->tp_tab = (sui->tp_tab == 0) ? 1 : 0;
                 sui->tp_style_cursor = clamp_cursor_style_to_card(state->settings.touchpad_cursor_style);
+                sui->tp_size_cursor = (int)state->settings.cursor_size;
+                if (sui->tp_size_cursor < 0 || sui->tp_size_cursor >= (int)NL_CURSOR_SIZE_COUNT) {
+                    sui->tp_size_cursor = (int)NL_CURSOR_SIZE_DEFAULT;
+                }
                 state->anim.tp_tab_trans_fp = 32;
                 state->anim.tp_style_glow_fp = 64;
                 nl_cursor_wake(state);
                 return true;
             }
             if (sui->tp_tab == 1) {
-                /* Tab 1: « Apparence du curseur » (0=Fleche, 1=Cercle, 2=Pointeur) */
+                /* Tab 1: « Personnaliser le curseur »
+                 *   Row 0: Modele (0=Fleche, 1=Cercle, 2=Pointeur)
+                 *   Row 1: Taille (0=Petite, 1=Moyenne, 2=Grande) */
                 if (key == NL_KEY_ESC) {
                     sui->tp_tab = 0;
                     state->anim.tp_tab_trans_fp = 32;
                     nl_cursor_wake(state);
                     return true;
                 }
-                if (key == NL_KEY_LEFT || key == NL_KEY_UP || key == NL_KEY_RIGHT || key == NL_KEY_DOWN) {
-                    int delta = (key == NL_KEY_RIGHT || key == NL_KEY_DOWN) ? 1 : -1;
-                    int next_c = (sui->tp_style_cursor + delta + 3) % 3;
-                    sui->tp_style_cursor = next_c;
-                    state->settings.touchpad_cursor_style = card_to_cursor_style(next_c);
-                    state->anim.tp_style_glow_fp = 32;
-                    state->anim.val_pulse_fp = 256;
-                    state->anim.val_pulse_dir = delta;
-                    sui->config_dirty = true;
+                if (key == NL_KEY_UP || key == NL_KEY_DOWN) {
+                    sui->tp_custom_row = (sui->tp_custom_row == 0) ? 1 : 0;
+                    state->anim.tp_style_glow_fp = 48;
                     nl_cursor_wake(state);
-                    char msg[40];
-                    snprintf(msg, sizeof(msg), "Style : %s", nl_cursor_style_label(state->settings.touchpad_cursor_style));
-                    nl_show_toast(state, msg, 50);
+                    return true;
+                }
+                if (key == NL_KEY_LEFT || key == NL_KEY_RIGHT) {
+                    int delta = (key == NL_KEY_RIGHT) ? 1 : -1;
+                    if (sui->tp_custom_row == 0) {
+                        int next_c = (sui->tp_style_cursor + delta + 3) % 3;
+                        sui->tp_style_cursor = next_c;
+                        state->settings.touchpad_cursor_style = card_to_cursor_style(next_c);
+                        state->anim.tp_style_glow_fp = 32;
+                        state->anim.val_pulse_fp = 256;
+                        state->anim.val_pulse_dir = delta;
+                        sui->config_dirty = true;
+                        sui->profiles_dirty = true;
+                        nl_cursor_wake(state);
+                        char msg[40];
+                        snprintf(msg, sizeof(msg), "Modele : %s", nl_cursor_style_label(state->settings.touchpad_cursor_style));
+                        nl_show_toast(state, msg, 50);
+                    } else {
+                        int next_s = (sui->tp_size_cursor + delta + 3) % 3;
+                        sui->tp_size_cursor = next_s;
+                        state->settings.cursor_size = (nl_cursor_size_t)next_s;
+                        state->anim.tp_style_glow_fp = 32;
+                        state->anim.val_pulse_fp = 256;
+                        state->anim.val_pulse_dir = delta;
+                        sui->config_dirty = true;
+                        sui->profiles_dirty = true;
+                        nl_cursor_wake(state);
+                        char msg[40];
+                        snprintf(msg, sizeof(msg), "Taille curseur : %s", nl_cursor_size_label(state->settings.cursor_size));
+                        nl_show_toast(state, msg, 50);
+                    }
                     return true;
                 }
                 if (key == NL_KEY_EXE) {
                     state->settings.touchpad_cursor_style = card_to_cursor_style(sui->tp_style_cursor);
+                    state->settings.cursor_size = (nl_cursor_size_t)sui->tp_size_cursor;
                     state->anim.tp_style_glow_fp = 32;
                     state->anim.val_pulse_fp = 256;
                     sui->config_dirty = true;
+                    sui->profiles_dirty = true;
                     nl_cursor_wake(state);
                     char msg[40];
-                    snprintf(msg, sizeof(msg), "Curseur : %s", nl_cursor_style_label(state->settings.touchpad_cursor_style));
+                    snprintf(msg, sizeof(msg), "%s (%s)",
+                             nl_cursor_style_label(state->settings.touchpad_cursor_style),
+                             nl_cursor_size_label(state->settings.cursor_size));
                     nl_show_toast(state, msg, 55);
                     return true;
                 }
                 break;
             }
 
-            /* Tab 0: « Navigation tactile » (5 rows: 0=Mode, 1=Glissement, 2=Sensibilite pave, 3=Vitesse souris, 4=Apparence curseur) */
+            /* Tab 0: « Navigation tactile » (7 scrollable rows):
+             * 0=Mode, 1=Glissement pave, 2=Sensibilite pave, 3=Vitesse curseur,
+             * 4=Tapotement pour cliquer, 5=Taille du curseur, 6=Personnaliser le curseur */
             if (key == NL_KEY_ESC) {
                 settings_transition_screen(state, NL_UI_SETTINGS_MAIN, -1);
                 return true;
@@ -3068,10 +4024,12 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
             if (key == NL_KEY_UP || key == NL_KEY_DOWN) {
                 int prev = sui->tp_cursor;
                 if (key == NL_KEY_DOWN) {
-                    sui->tp_cursor = (sui->tp_cursor + 1) % 5;
+                    sui->tp_cursor = (sui->tp_cursor + 1) % 7;
                 } else {
-                    sui->tp_cursor = (sui->tp_cursor + 4) % 5;
+                    sui->tp_cursor = (sui->tp_cursor + 6) % 7;
                 }
+                adjust_list_scroll(sui->tp_cursor, &sui->tp_scroll, 5);
+                if (sui->tp_scroll > 2) sui->tp_scroll = 2;
                 settings_sync_cursor_targets(state, false, prev);
                 nl_cursor_wake(state);
                 return true;
@@ -3170,9 +4128,40 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
                     return true;
                 }
             } else if (sui->tp_cursor == 4) {
+                if (key == NL_KEY_EXE || key == NL_KEY_LEFT || key == NL_KEY_RIGHT) {
+                    state->settings.tap_to_click = !state->settings.tap_to_click;
+                    state->anim.val_pulse_fp = 256;
+                    state->anim.val_pulse_dir = state->settings.tap_to_click ? 1 : -1;
+                    sui->config_dirty = true;
+                    sui->profiles_dirty = true;
+                    nl_cursor_wake(state);
+                    nl_show_toast(state,
+                                  state->settings.tap_to_click ? "Tapotement pour cliquer : OUI" : "Tapotement pour cliquer : NON",
+                                  55);
+                    return true;
+                }
+            } else if (sui->tp_cursor == 5) {
+                if (key == NL_KEY_EXE || key == NL_KEY_LEFT || key == NL_KEY_RIGHT) {
+                    int delta = (key == NL_KEY_LEFT) ? -1 : 1;
+                    int next_sz = ((int)state->settings.cursor_size + delta + (int)NL_CURSOR_SIZE_COUNT) % (int)NL_CURSOR_SIZE_COUNT;
+                    state->settings.cursor_size = (nl_cursor_size_t)next_sz;
+                    sui->tp_size_cursor = next_sz;
+                    state->anim.val_pulse_fp = 256;
+                    state->anim.val_pulse_dir = delta;
+                    sui->config_dirty = true;
+                    sui->profiles_dirty = true;
+                    nl_cursor_wake(state);
+                    char msg[40];
+                    snprintf(msg, sizeof(msg), "Taille curseur : %s", nl_cursor_size_label(state->settings.cursor_size));
+                    nl_show_toast(state, msg, 50);
+                    return true;
+                }
+            } else if (sui->tp_cursor == 6) {
                 if (key == NL_KEY_EXE || key == NL_KEY_RIGHT) {
                     sui->tp_tab = 1;
+                    sui->tp_custom_row = 0;
                     sui->tp_style_cursor = clamp_cursor_style_to_card(state->settings.touchpad_cursor_style);
+                    sui->tp_size_cursor = (int)state->settings.cursor_size;
                     state->anim.tp_tab_trans_fp = 32;
                     state->anim.tp_style_glow_fp = 64;
                     nl_cursor_wake(state);
@@ -3220,6 +4209,10 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
                     return true;
                 }
                 if (key == NL_KEY_BACKSPACE) {
+                    if (nl_profile_is_protected(state, state->profiles.active_index)) {
+                        nl_show_toast(state, "Profil verrouille", 50);
+                        return true;
+                    }
                     if (sui->sc_game_cursor >= 0 && sui->sc_game_cursor < state->total_games) {
                         state->games[sui->sc_game_cursor].shortcut_key = 0;
                         sui->sc_picking_key = false;
@@ -3231,6 +4224,10 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
                 if (key == NL_KEY_EXE) {
                     if (sui->sc_game_cursor >= 0 && sui->sc_game_cursor < state->total_games) {
                         if (sui->sc_key_cursor == 0) {
+                            if (nl_profile_is_protected(state, state->profiles.active_index)) {
+                                nl_show_toast(state, "Profil verrouille", 50);
+                                return true;
+                            }
                             state->games[sui->sc_game_cursor].shortcut_key = 0;
                             sui->sc_picking_key = false;
                             sui->config_dirty = true;
@@ -3264,6 +4261,10 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
                     return true;
                 }
                 if (key == NL_KEY_BACKSPACE || key == NL_KEY_RESCAN) {
+                    if (nl_profile_is_protected(state, state->profiles.active_index)) {
+                        nl_show_toast(state, "Profil verrouille", 50);
+                        return true;
+                    }
                     if (state->games[sui->sc_game_cursor].shortcut_key != 0) {
                         state->games[sui->sc_game_cursor].shortcut_key = 0;
                         sui->config_dirty = true;
@@ -3272,6 +4273,10 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
                     }
                 }
                 if (key == NL_KEY_EXE) {
+                    if (nl_profile_is_protected(state, state->profiles.active_index)) {
+                        nl_show_toast(state, "Profil verrouille", 50);
+                        return true;
+                    }
                     const char *keys_str = NULL;
                     int n_keys = nl_get_assignable_keys(&keys_str);
                     sui->sc_picking_key = true;
@@ -3500,11 +4505,55 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
             }
             break;
 
+        case NL_UI_SETTINGS_RESCAN:
+            /* Non-blocking scan: ESC or EXE immediately requests safe cancellation */
+            if (state->scan.active) {
+                if (key == NL_KEY_ESC || key == NL_KEY_EXE) {
+                    state->scan.cancel_requested = true;
+                }
+                return true;
+            }
+            if (state->scan.empty_confirm_pending) {
+                if (key == NL_KEY_LEFT || key == NL_KEY_RIGHT ||
+                    key == NL_KEY_UP || key == NL_KEY_DOWN) {
+                    state->scan.empty_confirm_replace = !state->scan.empty_confirm_replace;
+                    return true;
+                }
+                if (key == NL_KEY_ESC) {
+                    nl_rescan_apply_empty_confirm(state, false);
+                    nl_show_toast(state, "BIBLIOTHEQUE CONSERVEE", 60);
+                    return true;
+                }
+                if (key == NL_KEY_EXE) {
+                    bool replace_now = state->scan.empty_confirm_replace;
+                    nl_rescan_apply_empty_confirm(state, replace_now);
+                    sui->config_dirty = true;
+                    nl_show_toast(state,
+                                  replace_now ? "BIBLIOTHEQUE VIDEE" : "BIBLIOTHEQUE CONSERVEE",
+                                  60);
+                    return true;
+                }
+                return true;
+            }
+            if (key == NL_KEY_ESC || key == NL_KEY_EXE) {
+                settings_transition_screen(state, NL_UI_SETTINGS_MAIN, -1);
+                return true;
+            }
+            if (key == NL_KEY_RESCAN) {
+                sui->rescan_req = true;
+                state->scan.finished = false;
+                state->scan.empty_confirm_pending = false;
+                state->scan.empty_confirm_replace = false;
+                state->scan.commit_empty_req = false;
+                return true;
+            }
+            break;
+
         case NL_UI_SETTINGS_PROFILES: {
             int pcount = state->profiles.count;
             switch (sui->prof_mode) {
                 case NL_PROF_MODE_LIST: {
-                    int total_rows = pcount + 1; /* row 0 = '+ Creer un profil' */
+                    int total_rows = pcount + 2; /* row 0 = Cadenas toggle, row 1 = '+ Creer un profil' */
                     if (key == NL_KEY_ESC) {
                         settings_transition_screen(state, NL_UI_SETTINGS_MAIN, -1);
                         return true;
@@ -3523,12 +4572,22 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
                         settings_sync_cursor_targets(state, false, prev);
                         return true;
                     }
+                    if (sui->prof_cursor == 0 && (key == NL_KEY_EXE || key == NL_KEY_LEFT || key == NL_KEY_RIGHT)) {
+                        state->settings.profile_lock_enabled = !state->settings.profile_lock_enabled;
+                        sui->config_dirty = true;
+                        nl_show_toast(state,
+                            state->settings.profile_lock_enabled
+                                ? "Cadenas de profils active"
+                                : "Cadenas de profils desactive",
+                            50);
+                        return true;
+                    }
                     if (key == NL_KEY_EXE || key == NL_KEY_RIGHT) {
-                        if (sui->prof_cursor == 0) {
+                        if (sui->prof_cursor == 1) {
                             (void)begin_profile_create_avatar_flow(state, false, 160, 56);
                             return true;
-                        } else {
-                            int target = sui->prof_cursor - 1;
+                        } else if (sui->prof_cursor >= 2) {
+                            int target = sui->prof_cursor - 2;
                             if (target >= 0 && target < pcount) {
                                 sui->prof_detail_idx = target;
                                 sui->prof_detail_cursor = 0;
@@ -3554,23 +4613,31 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
                     }
                     if (key == NL_KEY_UP) {
                         int prev = sui->prof_detail_cursor;
-                        sui->prof_detail_cursor = (sui->prof_detail_cursor > 0) ? (sui->prof_detail_cursor - 1) : 3;
+                        sui->prof_detail_cursor = (sui->prof_detail_cursor > 0) ? (sui->prof_detail_cursor - 1) : 4;
                         settings_sync_cursor_targets(state, false, prev);
                         return true;
                     }
                     if (key == NL_KEY_DOWN) {
                         int prev = sui->prof_detail_cursor;
-                        sui->prof_detail_cursor = (sui->prof_detail_cursor + 1) % 4;
+                        sui->prof_detail_cursor = (sui->prof_detail_cursor + 1) % 5;
                         settings_sync_cursor_targets(state, false, prev);
                         return true;
                     }
                     if (key == NL_KEY_EXE || key == NL_KEY_RIGHT) {
                         if (sui->prof_detail_cursor == 0) {
+                            if (nl_profile_is_protected(state, sui->prof_detail_idx)) {
+                                nl_show_toast(state, "Profil verrouille", 55);
+                                return true;
+                            }
                             snprintf(sui->prof_edit_name, sizeof(sui->prof_edit_name), "%s", dp->name);
                             sui->prof_edit_len = (int)strlen(sui->prof_edit_name);
                             sui->prof_mode = NL_PROF_MODE_EDIT_NAME;
                             return true;
                         } else if (sui->prof_detail_cursor == 1) {
+                            if (nl_profile_is_protected(state, sui->prof_detail_idx)) {
+                                nl_show_toast(state, "Profil verrouille", 55);
+                                return true;
+                            }
                             int cat = nl_avatar_category_of(dp->avatar_id);
                             int cstart = 0, ccnt = 0;
                             nl_avatar_category_range(cat, &cstart, &ccnt);
@@ -3586,13 +4653,29 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
                             if (sui->prof_detail_idx == state->profiles.active_index) {
                                 nl_show_toast(state, "Profil deja actif", 45);
                             } else {
+                                int from_av = (state->profiles.active_index >= 0 &&
+                                               state->profiles.active_index < state->profiles.count)
+                                    ? state->profiles.items[state->profiles.active_index].avatar_id : 0;
                                 int av_id = dp->avatar_id;
                                 nl_profile_switch_to(state, sui->prof_detail_idx);
-                                trigger_profile_switch_anim(state, av_id, 37, 54, 34);
+                                trigger_profile_switch_anim(state, from_av, av_id, 37, 54, 34);
                             }
                             return true;
                         } else if (sui->prof_detail_cursor == 3) {
-                            if (dp->is_primary || state->profiles.count <= 1) {
+                            if (!state->settings.profile_lock_enabled) {
+                                nl_show_toast(state, "Activez le cadenas d'abord", 55);
+                            } else if (nl_profile_toggle_lock(state, sui->prof_detail_idx)) {
+                                nl_show_toast(state,
+                                    state->profiles.items[sui->prof_detail_idx].is_locked
+                                        ? "Profil verrouille"
+                                        : "Profil deverrouille",
+                                    50);
+                            }
+                            return true;
+                        } else if (sui->prof_detail_cursor == 4) {
+                            if (nl_profile_is_protected(state, sui->prof_detail_idx)) {
+                                nl_show_toast(state, "Profil verrouille", 55);
+                            } else if (dp->is_primary || state->profiles.count <= 1) {
                                 nl_show_toast(state, "Profil principal protege", 60);
                             } else {
                                 sui->prof_delete_yes = false;
@@ -3792,7 +4875,7 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
                                     state->anim.qp_sel_bounce_fp = 256;
                                 } else {
                                     sui->prof_mode = NL_PROF_MODE_LIST;
-                                    sui->prof_cursor = new_idx + 1;
+                                    sui->prof_cursor = new_idx + 2;
                                     adjust_list_scroll(sui->prof_cursor, &sui->prof_scroll, 6);
                                     settings_sync_cursor_targets(state, true, -1);
                                 }
@@ -3829,7 +4912,7 @@ static bool handle_settings_key(nl_state_t *state, nl_key_t key) {
                         if (sui->prof_delete_yes) {
                             if (nl_profile_delete(state, sui->prof_detail_idx)) {
                                 nl_show_toast(state, "Profil supprime", 55);
-                                sui->prof_cursor = (state->profiles.active_index >= 0) ? (state->profiles.active_index + 1) : 1;
+                                sui->prof_cursor = (state->profiles.active_index >= 0) ? (state->profiles.active_index + 2) : 2;
                                 sui->prof_scroll = 0;
                                 adjust_list_scroll(sui->prof_cursor, &sui->prof_scroll, 6);
                                 sui->prof_mode = NL_PROF_MODE_LIST;
@@ -3894,15 +4977,12 @@ bool nl_handle_char_input(nl_state_t *state, char ch) {
     }
 
     if (state->sui.screen == NL_UI_LIBRARY) {
+        if (state->sui.qp_pick_open) {
+            return false;
+        }
         if (state->sui.qp_open) {
             if (ch == '.') {
                 return nl_handle_key(state, NL_KEY_PROFILE_QUICK);
-            }
-            if (ch == '0') {
-                return nl_handle_key(state, NL_KEY_PROFILE_PREV);
-            }
-            if (ch == '-') {
-                return nl_handle_key(state, NL_KEY_PROFILE_NEXT);
             }
             return false;
         }
@@ -3929,11 +5009,12 @@ bool nl_handle_char_input(nl_state_t *state, char ch) {
         if (ch == '.') {
             return nl_handle_key(state, NL_KEY_PROFILE_QUICK);
         }
+        /* R15: 0 and - navigate game pages (never profile switching) */
         if (ch == '0') {
-            return nl_handle_key(state, NL_KEY_PROFILE_PREV);
+            return nl_handle_key(state, NL_KEY_PAGE_PREV);
         }
         if (ch == '-') {
-            return nl_handle_key(state, NL_KEY_PROFILE_NEXT);
+            return nl_handle_key(state, NL_KEY_PAGE_NEXT);
         }
 
         char u = (char)toupper((unsigned char)ch);
@@ -3969,16 +5050,152 @@ static bool handle_key_inner(nl_state_t *state, nl_key_t key) {
     }
 
     if (state->sui.screen != NL_UI_LIBRARY) {
-        return handle_settings_key(state, key);
+        bool sh = handle_settings_key(state, key);
+        if (sh && (key == NL_KEY_EXE || state->sui.screen == NL_UI_LIBRARY)) {
+            state->sui.consume_exe_release = true;
+            state->anim.launch_holding = false;
+        }
+        return sh;
     }
 
-    /* Quick Profile Selector modal overlay on Library (STRICTLY browse/switch/'+' only — NO edit/delete) */
+    /* R16: Block stray/buffered EXE from launching a game in Library while a profile transition is playing */
+    if (key == NL_KEY_EXE && !state->sui.qp_open && !state->sui.qp_pick_open &&
+        (state->anim.prof_switch_active || state->anim.prof_plus_active || state->anim.prof_birth_active)) {
+        state->sui.consume_exe_release = true;
+        state->anim.launch_holding = false;
+        return false;
+    }
+
+    /* Compact floating Avatar Picker modal over dimmed Library (opened from Quick Profile '+') */
+    if (state->sui.qp_pick_open) {
+        int cat = state->sui.qp_pick_cat;
+        if (cat < 0 || cat >= NL_AVATAR_CAT_COUNT) cat = 0;
+        int cstart = 0, ccnt = 0;
+        nl_avatar_category_range(cat, &cstart, &ccnt);
+        int cols = (cat == 0) ? 8 : 5;
+
+        switch (key) {
+            case NL_KEY_ESC:
+            case NL_KEY_PROFILE_QUICK:
+                state->sui.qp_pick_open = false;
+                state->sui.qp_open = true;
+                state->anim.qp_opening = true;
+                state->anim.qp_open_fp = 256;
+                state->sui.consume_exe_release = true;
+                state->anim.launch_holding = false;
+                return true;
+            case NL_KEY_TAB:
+            case NL_KEY_PAGE_NEXT:
+                state->sui.qp_pick_cat = (cat + 1) % NL_AVATAR_CAT_COUNT;
+                state->sui.qp_pick_cursor = 0;
+                state->anim.prof_cat_dir = 1;
+                state->anim.prof_cat_trans_fp = 48;
+                return true;
+            case NL_KEY_PAGE_PREV:
+                state->sui.qp_pick_cat = (cat + NL_AVATAR_CAT_COUNT - 1) % NL_AVATAR_CAT_COUNT;
+                state->sui.qp_pick_cursor = 0;
+                state->anim.prof_cat_dir = -1;
+                state->anim.prof_cat_trans_fp = 48;
+                return true;
+            case NL_KEY_LEFT:
+                if (state->sui.qp_pick_cursor > 0) {
+                    state->sui.qp_pick_cursor--;
+                } else {
+                    state->sui.qp_pick_cat = (cat + NL_AVATAR_CAT_COUNT - 1) % NL_AVATAR_CAT_COUNT;
+                    int nc_start = 0, nc_cnt = 1;
+                    nl_avatar_category_range(state->sui.qp_pick_cat, &nc_start, &nc_cnt);
+                    state->sui.qp_pick_cursor = nc_cnt - 1;
+                    state->anim.prof_cat_dir = -1;
+                    state->anim.prof_cat_trans_fp = 48;
+                }
+                return true;
+            case NL_KEY_RIGHT:
+                if (state->sui.qp_pick_cursor + 1 < ccnt) {
+                    state->sui.qp_pick_cursor++;
+                } else {
+                    state->sui.qp_pick_cat = (cat + 1) % NL_AVATAR_CAT_COUNT;
+                    state->sui.qp_pick_cursor = 0;
+                    state->anim.prof_cat_dir = 1;
+                    state->anim.prof_cat_trans_fp = 48;
+                }
+                return true;
+            case NL_KEY_UP:
+                if (state->sui.qp_pick_cursor >= cols) {
+                    state->sui.qp_pick_cursor -= cols;
+                } else {
+                    state->sui.qp_pick_cat = (cat + NL_AVATAR_CAT_COUNT - 1) % NL_AVATAR_CAT_COUNT;
+                    state->sui.qp_pick_cursor = 0;
+                    state->anim.prof_cat_dir = -1;
+                    state->anim.prof_cat_trans_fp = 48;
+                }
+                return true;
+            case NL_KEY_DOWN:
+                if (state->sui.qp_pick_cursor + cols < ccnt) {
+                    state->sui.qp_pick_cursor += cols;
+                } else if ((state->sui.qp_pick_cursor / cols) < ((ccnt - 1) / cols)) {
+                    state->sui.qp_pick_cursor = ccnt - 1;
+                } else {
+                    state->sui.qp_pick_cat = (cat + 1) % NL_AVATAR_CAT_COUNT;
+                    state->sui.qp_pick_cursor = 0;
+                    state->anim.prof_cat_dir = 1;
+                    state->anim.prof_cat_trans_fp = 48;
+                }
+                return true;
+            case NL_KEY_EXE: {
+                state->sui.consume_exe_release = true;
+                state->anim.launch_holding = false;
+                int avatar_id = cstart + state->sui.qp_pick_cursor;
+                if (nl_avatar_find_owner(state, avatar_id, -1) >= 0) {
+                    nl_show_toast(state, "Icone deja utilisee", 55);
+                    return true;
+                }
+                int new_idx = nl_profile_create(state, "", avatar_id);
+                if (new_idx >= 0) {
+                    state->sui.qp_pick_open = false;
+                    state->sui.qp_open = true;
+                    state->anim.qp_opening = true;
+                    state->sui.qp_cursor = new_idx;
+                    state->anim.qp_open_fp = 256;
+                    state->anim.qp_sel_bounce_fp = 256;
+                    state->anim.prof_birth_active = true;
+                    state->anim.prof_birth_tick = 0;
+                    state->anim.prof_birth_max = 16;
+                    state->anim.prof_birth_avatar_id = avatar_id;
+                    state->anim.prof_birth_slot = new_idx;
+                } else {
+                    nl_show_toast(state, "43/43 profils utilises", 55);
+                }
+                return true;
+            }
+            case NL_KEY_DOC:
+                state->display_mode = (nl_display_mode_t)(((unsigned)state->display_mode + 1U) % NL_DISPLAY_COUNT);
+                state->anim.ink_active = true;
+                state->anim.ink_tick = 0;
+                state->anim.ink_max = NL_INK_TRANS_TICKS;
+                state->anim.ink_seq++;
+                return true;
+            case NL_KEY_MENU:
+                state->accent_color = (nl_accent_color_t)(((unsigned)state->accent_color + 1U) % NL_ACCENT_COUNT);
+                state->anim.ink_active = true;
+                state->anim.ink_tick = 0;
+                state->anim.ink_max = NL_INK_TRANS_TICKS;
+                state->anim.ink_seq++;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /* Quick Profile Selector modal overlay on Library (minimalist visual browse/switch/'+' + optional lock) */
     if (state->sui.qp_open) {
         int total_slots = (state->profiles.count > 0 ? state->profiles.count : 1) + 1;
         switch (key) {
             case NL_KEY_ESC:
             case NL_KEY_PROFILE_QUICK:
                 state->sui.qp_open = false;
+                state->anim.qp_opening = false;
+                state->sui.consume_exe_release = true;
+                state->anim.launch_holding = false;
                 return true;
             case NL_KEY_LEFT:
                 state->sui.qp_cursor = (state->sui.qp_cursor > 0) ? (state->sui.qp_cursor - 1) : (total_slots - 1);
@@ -3988,35 +5205,58 @@ static bool handle_key_inner(nl_state_t *state, nl_key_t key) {
                 state->sui.qp_cursor = (state->sui.qp_cursor + 1) % total_slots;
                 state->anim.qp_sel_bounce_fp = 256;
                 return true;
-            case NL_KEY_PROFILE_PREV:
-                if (nl_profile_step(state, -1)) {
-                    state->sui.qp_cursor = state->profiles.active_index;
-                    state->anim.qp_sel_bounce_fp = 256;
-                    return true;
-                }
-                return false;
-            case NL_KEY_PROFILE_NEXT:
-                if (nl_profile_step(state, +1)) {
-                    state->sui.qp_cursor = state->profiles.active_index;
-                    state->anim.qp_sel_bounce_fp = 256;
-                    return true;
+            case NL_KEY_FAV:
+                if (state->settings.profile_lock_enabled &&
+                    state->sui.qp_cursor >= 0 &&
+                    state->sui.qp_cursor < state->profiles.count) {
+                    if (nl_profile_toggle_lock(state, state->sui.qp_cursor)) {
+                        nl_show_toast(state,
+                            state->profiles.items[state->sui.qp_cursor].is_locked
+                                ? "Profil verrouille"
+                                : "Profil deverrouille",
+                            45);
+                        return true;
+                    }
                 }
                 return false;
             case NL_KEY_EXE:
+                /* Strictly consume ENTER/EXE inside Quick Profile — NEVER propagate to Library behind it */
+                state->sui.consume_exe_release = true;
+                state->anim.launch_holding = false;
                 if (state->sui.qp_cursor < state->profiles.count) {
                     int sel_slot = state->sui.qp_cursor;
                     int orig_x = compute_qp_slot_center_x(state, sel_slot);
+                    int from_av = (state->profiles.active_index >= 0 &&
+                                   state->profiles.active_index < state->profiles.count)
+                        ? state->profiles.items[state->profiles.active_index].avatar_id : 0;
                     int av_id = state->profiles.items[sel_slot].avatar_id;
                     if (sel_slot != state->profiles.active_index) {
                         nl_profile_switch_to(state, sel_slot);
                     }
                     state->sui.qp_open = false;
+                    state->anim.qp_opening = false;
                     state->anim.qp_open_fp = 0;
-                    trigger_profile_switch_anim(state, av_id, orig_x, 114, 38);
+                    trigger_profile_switch_anim(state, from_av, av_id, orig_x, 120, 38);
                     return true;
                 } else {
+                    int first_free = nl_avatar_first_free(state);
+                    if (first_free < 0 || state->profiles.count >= NL_MAX_PROFILES) {
+                        nl_show_toast(state, "43/43 icones deja utilisees", 65);
+                        return true;
+                    }
                     int plus_x = compute_qp_slot_center_x(state, state->sui.qp_cursor);
-                    (void)begin_profile_create_avatar_flow(state, true, plus_x, 114);
+                    int cat = nl_avatar_category_of(first_free);
+                    int cstart = 0, ccnt = 0;
+                    nl_avatar_category_range(cat, &cstart, &ccnt);
+                    state->sui.qp_pick_cat = cat;
+                    state->sui.qp_pick_cursor = first_free - cstart;
+                    state->sui.qp_pick_pending = true;
+                    state->anim.prof_cat_trans_fp = 256;
+                    state->anim.prof_plus_active = true;
+                    state->anim.prof_plus_tick = 0;
+                    state->anim.prof_plus_max = 14;
+                    state->anim.prof_plus_origin_x = plus_x;
+                    state->anim.prof_plus_origin_y = 120;
                     return true;
                 }
             case NL_KEY_DOC:
@@ -4039,29 +5279,43 @@ static bool handle_key_inner(nl_state_t *state, nl_key_t key) {
     }
 
     nl_layout_metrics_t m;
-    nl_get_layout_metrics_for_count(state->settings.layout, state->settings.show_names, state->settings.show_shortcuts, state->filtered_count, &m);
+    nl_get_layout_metrics_full(
+        state->settings.layout,
+        state->settings.scroll_dir,
+        state->settings.show_names,
+        state->settings.show_shortcuts,
+        state->filtered_count,
+        &m
+    );
 
     switch (key) {
         case NL_KEY_PROFILE_QUICK:
             if (!state->sui.search_active) {
                 state->sui.qp_open = true;
+                state->anim.qp_opening = true;
                 state->sui.qp_cursor = (state->profiles.active_index >= 0 &&
                                         state->profiles.active_index < state->profiles.count)
                     ? state->profiles.active_index : 0;
-                state->anim.qp_open_fp = 24;
+                state->anim.qp_open_fp = 20;
                 state->anim.qp_glow_x_fp = 0;
+                state->anim.qp_glow_vx_fp = 0;
                 state->anim.qp_glow_y_fp = 0;
                 state->anim.qp_trail_x_fp = 0;
                 state->anim.qp_sel_bounce_fp = 256;
+                state->sui.consume_exe_release = true;
+                state->anim.launch_holding = false;
                 return true;
             }
             break;
 
         case NL_KEY_PROFILE_PREV:
             if (!state->sui.search_active) {
+                int from_av = (state->profiles.active_index >= 0 &&
+                               state->profiles.active_index < state->profiles.count)
+                    ? state->profiles.items[state->profiles.active_index].avatar_id : 0;
                 if (nl_profile_step(state, -1)) {
                     const nl_profile_t *ap = nl_profile_get_active(state);
-                    trigger_profile_switch_anim(state, ap ? ap->avatar_id : 0, 17, 12, 18);
+                    trigger_profile_switch_anim(state, from_av, ap ? ap->avatar_id : 0, 17, 12, 18);
                     return true;
                 }
             }
@@ -4069,9 +5323,12 @@ static bool handle_key_inner(nl_state_t *state, nl_key_t key) {
 
         case NL_KEY_PROFILE_NEXT:
             if (!state->sui.search_active) {
+                int from_av = (state->profiles.active_index >= 0 &&
+                               state->profiles.active_index < state->profiles.count)
+                    ? state->profiles.items[state->profiles.active_index].avatar_id : 0;
                 if (nl_profile_step(state, +1)) {
                     const nl_profile_t *ap = nl_profile_get_active(state);
-                    trigger_profile_switch_anim(state, ap ? ap->avatar_id : 0, 17, 12, 18);
+                    trigger_profile_switch_anim(state, from_av, ap ? ap->avatar_id : 0, 17, 12, 18);
                     return true;
                 }
             }
@@ -4084,16 +5341,37 @@ static bool handle_key_inner(nl_state_t *state, nl_key_t key) {
             state->anim.set_last_screen = NL_UI_SETTINGS_MAIN;
             state->anim.set_prev_screen = NL_UI_LIBRARY;
             state->anim.set_sec_fp = 256;
-            state->anim.set_open_fp = (state->anim.set_open_fp > 48) ? state->anim.set_open_fp : 48;
+            state->anim.set_open_fp = (state->anim.set_open_fp > 8) ? state->anim.set_open_fp : 8;
             settings_sync_cursor_targets(state, true, -1);
             return true;
 
         case NL_KEY_LEFT:
             if (state->filtered_count > 0) {
-                if (state->selected_pos > 0) {
-                    state->selected_pos--;
+                if (m.is_horizontal) {
+                    int page = state->selected_pos / m.per_page;
+                    int slot = state->selected_pos % m.per_page;
+                    int r = slot / m.cols;
+                    int c = slot % m.cols;
+                    if (c > 0) {
+                        state->selected_pos--;
+                    } else if (state->total_pages > 1) {
+                        int prev_page = (page > 0) ? (page - 1) : (state->total_pages - 1);
+                        int target = prev_page * m.per_page + r * m.cols + (m.cols - 1);
+                        if (target >= state->filtered_count) {
+                            target = state->filtered_count - 1;
+                        }
+                        state->selected_pos = target;
+                    } else if (state->selected_pos > 0) {
+                        state->selected_pos--;
+                    } else {
+                        state->selected_pos = state->filtered_count - 1;
+                    }
                 } else {
-                    state->selected_pos = state->filtered_count - 1;
+                    if (state->selected_pos > 0) {
+                        state->selected_pos--;
+                    } else {
+                        state->selected_pos = state->filtered_count - 1;
+                    }
                 }
                 on_selection_changed(state);
                 return true;
@@ -4102,10 +5380,32 @@ static bool handle_key_inner(nl_state_t *state, nl_key_t key) {
 
         case NL_KEY_RIGHT:
             if (state->filtered_count > 0) {
-                if (state->selected_pos + 1 < state->filtered_count) {
-                    state->selected_pos++;
+                if (m.is_horizontal) {
+                    int page = state->selected_pos / m.per_page;
+                    int slot = state->selected_pos % m.per_page;
+                    int r = slot / m.cols;
+                    int c = slot % m.cols;
+                    if (c + 1 < m.cols && state->selected_pos + 1 < state->filtered_count) {
+                        state->selected_pos++;
+                    } else if (state->total_pages > 1) {
+                        int next_page = (page + 1 < state->total_pages) ? (page + 1) : 0;
+                        int target = next_page * m.per_page + r * m.cols;
+                        if (target >= state->filtered_count) {
+                            int page_start = next_page * m.per_page;
+                            target = (page_start < state->filtered_count) ? (state->filtered_count - 1) : 0;
+                        }
+                        state->selected_pos = target;
+                    } else if (state->selected_pos + 1 < state->filtered_count) {
+                        state->selected_pos++;
+                    } else {
+                        state->selected_pos = 0;
+                    }
                 } else {
-                    state->selected_pos = 0;
+                    if (state->selected_pos + 1 < state->filtered_count) {
+                        state->selected_pos++;
+                    } else {
+                        state->selected_pos = 0;
+                    }
                 }
                 on_selection_changed(state);
                 return true;
@@ -4114,7 +5414,15 @@ static bool handle_key_inner(nl_state_t *state, nl_key_t key) {
 
         case NL_KEY_UP:
             if (state->filtered_count > 0) {
-                if (state->selected_pos >= m.cols) {
+                if (m.is_horizontal) {
+                    int page = state->selected_pos / m.per_page;
+                    int slot = state->selected_pos % m.per_page;
+                    if (slot >= m.cols) {
+                        state->selected_pos = page * m.per_page + (slot - m.cols);
+                        on_selection_changed(state);
+                        return true;
+                    }
+                } else if (state->selected_pos >= m.cols) {
                     state->selected_pos -= m.cols;
                     on_selection_changed(state);
                     return true;
@@ -4124,19 +5432,39 @@ static bool handle_key_inner(nl_state_t *state, nl_key_t key) {
 
         case NL_KEY_DOWN:
             if (state->filtered_count > 0) {
-                if (state->selected_pos + m.cols < state->filtered_count) {
-                    state->selected_pos += m.cols;
-                } else {
-                    int row_cur = state->selected_pos / m.cols;
-                    int last_row = (state->filtered_count - 1) / m.cols;
-                    if (row_cur < last_row) {
-                        state->selected_pos = state->filtered_count - 1;
-                    } else {
-                        break;
+                if (m.is_horizontal) {
+                    int page = state->selected_pos / m.per_page;
+                    int slot = state->selected_pos % m.per_page;
+                    int r = slot / m.cols;
+                    if (r + 1 < m.rows) {
+                        int target = page * m.per_page + slot + m.cols;
+                        int page_end = (page + 1) * m.per_page - 1;
+                        if (page_end >= state->filtered_count) page_end = state->filtered_count - 1;
+                        if (target <= page_end) {
+                            state->selected_pos = target;
+                            on_selection_changed(state);
+                            return true;
+                        } else if ((page_end % m.per_page) / m.cols > r) {
+                            state->selected_pos = page_end;
+                            on_selection_changed(state);
+                            return true;
+                        }
                     }
+                } else {
+                    if (state->selected_pos + m.cols < state->filtered_count) {
+                        state->selected_pos += m.cols;
+                    } else {
+                        int row_cur = state->selected_pos / m.cols;
+                        int last_row = (state->filtered_count - 1) / m.cols;
+                        if (row_cur < last_row) {
+                            state->selected_pos = state->filtered_count - 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    on_selection_changed(state);
+                    return true;
                 }
-                on_selection_changed(state);
-                return true;
             }
             break;
 
@@ -4172,6 +5500,7 @@ static bool handle_key_inner(nl_state_t *state, nl_key_t key) {
             state->selected_pos = 0;
             nl_rebuild_filter(state);
             state->anim.scroll_y_fp = 0;
+            state->anim.scroll_x_fp = 0;
             sync_scroll_targets(state, true);
             return true;
 
@@ -4265,6 +5594,14 @@ static bool handle_key_inner(nl_state_t *state, nl_key_t key) {
 bool nl_handle_key(nl_state_t *state, nl_key_t key) {
     bool handled = handle_key_inner(state, key);
     if (handled && state) {
+        if (state->anim.return_drop_active &&
+            (state->sui.screen != NL_UI_LIBRARY ||
+             state->sui.qp_open ||
+             state->sui.qp_pick_open ||
+             state->launch_requested)) {
+            state->anim.return_drop_active = false;
+            state->anim.return_drop_tick = 0;
+        }
         nl_mouse_update_hover(state);
         nl_cursor_wake(state);
     }
@@ -4298,6 +5635,7 @@ bool nl_mouse_click(nl_state_t *state) {
                 state->selected_pos = 0;
                 nl_rebuild_filter(state);
                 state->anim.scroll_y_fp = 0;
+                state->anim.scroll_x_fp = 0;
                 sync_scroll_targets(state, true);
                 ok = true;
             }
@@ -4335,9 +5673,10 @@ bool nl_mouse_click(nl_state_t *state) {
         case NL_HOVER_PAGE_DOT:
             if (state->filtered_count > 0 && state->total_pages > 1 && hi >= 0 && hi < state->total_pages) {
                 nl_layout_metrics_t lm;
-                nl_get_layout_metrics_for_count(
-                    state->settings.layout, state->settings.show_names,
-                    state->settings.show_shortcuts, state->filtered_count, &lm
+                nl_get_layout_metrics_full(
+                    state->settings.layout, state->settings.scroll_dir,
+                    state->settings.show_names, state->settings.show_shortcuts,
+                    state->filtered_count, &lm
                 );
                 int new_pos = hi * lm.per_page;
                 if (new_pos >= state->filtered_count) new_pos = state->filtered_count - 1;
@@ -4348,29 +5687,51 @@ bool nl_mouse_click(nl_state_t *state) {
             break;
 
         case NL_HOVER_GAME_CARD:
+            if (state->anim.prof_switch_active || state->anim.prof_plus_active || state->anim.prof_birth_active) {
+                ok = false;
+                break;
+            }
             if (hi >= 0 && hi < state->filtered_count) {
-                state->selected_pos = hi;
-                on_selection_changed(state);
-                trigger_game_launch(state, state->filtered_indices[state->selected_pos]);
-                ok = true;
+                nl_layout_metrics_t lm;
+                nl_get_layout_metrics_full(
+                    state->settings.layout, state->settings.scroll_dir,
+                    state->settings.show_names, state->settings.show_shortcuts,
+                    state->filtered_count, &lm
+                );
+                if (lm.per_page > 0 && (hi / lm.per_page) != state->current_page) {
+                    /* Peeking card from adjacent page (horizontal OR vertical): scroll smoothly to that page first */
+                    state->selected_pos = hi;
+                    on_selection_changed(state);
+                    ok = true;
+                } else {
+                    state->selected_pos = hi;
+                    on_selection_changed(state);
+                    trigger_game_launch(state, state->filtered_indices[state->selected_pos]);
+                    ok = true;
+                }
             }
             break;
 
         case NL_HOVER_QP_PREV:
             if (sui->qp_open) {
                 ok = handle_key_inner(state, NL_KEY_LEFT);
+                sui->consume_exe_release = true;
             }
             break;
 
         case NL_HOVER_QP_NEXT:
             if (sui->qp_open) {
                 ok = handle_key_inner(state, NL_KEY_RIGHT);
+                sui->consume_exe_release = true;
             }
             break;
 
         case NL_HOVER_QP_OUTSIDE:
             if (sui->qp_open) {
                 sui->qp_open = false;
+                state->anim.qp_opening = false;
+                sui->consume_exe_release = true;
+                state->anim.launch_holding = false;
                 ok = true;
             }
             break;
@@ -4382,7 +5743,32 @@ bool nl_mouse_click(nl_state_t *state) {
                 if (hi >= 0 && hi < total_slots) {
                     sui->qp_cursor = hi;
                     ok = handle_key_inner(state, NL_KEY_EXE);
+                    sui->consume_exe_release = true;
+                    state->anim.launch_holding = false;
                 }
+            }
+            break;
+
+        case NL_HOVER_QP_PICK_TAB:
+            if (sui->qp_pick_open && hi >= 0 && hi < NL_AVATAR_CAT_COUNT) {
+                state->anim.prof_cat_dir = (hi >= sui->qp_pick_cat) ? 1 : -1;
+                sui->qp_pick_cat = hi;
+                sui->qp_pick_cursor = 0;
+                state->anim.prof_cat_trans_fp = 48;
+                ok = true;
+            }
+            break;
+
+        case NL_HOVER_QP_PICK_CELL:
+            if (sui->qp_pick_open) {
+                sui->qp_pick_cursor = hi;
+                ok = handle_key_inner(state, NL_KEY_EXE);
+            }
+            break;
+
+        case NL_HOVER_QP_PICK_CLOSE:
+            if (sui->qp_pick_open) {
+                ok = handle_key_inner(state, NL_KEY_ESC);
             }
             break;
 
@@ -4394,7 +5780,9 @@ bool nl_mouse_click(nl_state_t *state) {
             if (sui->screen != NL_UI_LIBRARY &&
                 sui->screen != NL_UI_SETTINGS_SHORTCUTS &&
                 sui->screen != NL_UI_SETTINGS_ICONS &&
-                sui->screen != NL_UI_SETTINGS_PROFILES) {
+                sui->screen != NL_UI_SETTINGS_PROFILES &&
+                sui->screen != NL_UI_SETTINGS_DIAG &&
+                sui->screen != NL_UI_SETTINGS_RESCAN) {
                 request_calculator_poweroff(state);
                 ok = true;
             }
@@ -4404,6 +5792,7 @@ bool nl_mouse_click(nl_state_t *state) {
             if (sui->screen == NL_UI_SETTINGS_TOUCHPAD && (hi == 0 || hi == 1) && sui->tp_tab != hi) {
                 sui->tp_tab = hi;
                 sui->tp_style_cursor = clamp_cursor_style_to_card(state->settings.touchpad_cursor_style);
+                sui->tp_size_cursor = (int)state->settings.cursor_size;
                 state->anim.tp_tab_trans_fp = 32;
                 state->anim.tp_style_glow_fp = 64;
                 ok = true;
@@ -4441,8 +5830,33 @@ bool nl_mouse_click(nl_state_t *state) {
 
         case NL_HOVER_SET_STYLE_CARD:
             if (sui->screen == NL_UI_SETTINGS_TOUCHPAD && sui->tp_tab == 1 && hi >= 0 && hi < 3) {
+                sui->tp_custom_row = 0;
                 sui->tp_style_cursor = hi;
-                ok = handle_key_inner(state, NL_KEY_EXE);
+                state->settings.touchpad_cursor_style = card_to_cursor_style(hi);
+                state->anim.tp_style_glow_fp = 32;
+                state->anim.val_pulse_fp = 256;
+                sui->config_dirty = true;
+                sui->profiles_dirty = true;
+                char msg[40];
+                snprintf(msg, sizeof(msg), "Modele : %s", nl_cursor_style_label(state->settings.touchpad_cursor_style));
+                nl_show_toast(state, msg, 50);
+                ok = true;
+            }
+            break;
+
+        case NL_HOVER_SET_SIZE_CARD:
+            if (sui->screen == NL_UI_SETTINGS_TOUCHPAD && sui->tp_tab == 1 && hi >= 0 && hi < 3) {
+                sui->tp_custom_row = 1;
+                sui->tp_size_cursor = hi;
+                state->settings.cursor_size = (nl_cursor_size_t)hi;
+                state->anim.tp_style_glow_fp = 32;
+                state->anim.val_pulse_fp = 256;
+                sui->config_dirty = true;
+                sui->profiles_dirty = true;
+                char msg[40];
+                snprintf(msg, sizeof(msg), "Taille curseur : %s", nl_cursor_size_label(state->settings.cursor_size));
+                nl_show_toast(state, msg, 50);
+                ok = true;
             }
             break;
 
@@ -4452,14 +5866,28 @@ bool nl_mouse_click(nl_state_t *state) {
                 adjust_list_scroll(sui->menu_cursor, &sui->menu_scroll, 6);
                 ok = handle_key_inner(state, NL_KEY_EXE);
             } else if (sui->screen == NL_UI_SETTINGS_HOTKEY) {
-                ok = handle_key_inner(state, NL_KEY_EXE);
+                if (hi == 1) {
+                    sui->hotkey_cursor = 1;
+                    cycle_hotkey_combo(state, +1);
+                    ok = true;
+                } else {
+                    sui->hotkey_cursor = 0;
+                    ok = handle_key_inner(state, NL_KEY_EXE);
+                }
             } else if (sui->screen == NL_UI_SETTINGS_DISPLAY && hi >= 0 && hi < NL_DISPLAY_OPT_COUNT) {
                 sui->display_cursor = hi;
                 adjust_list_scroll(sui->display_cursor, &sui->display_scroll, 3);
                 ok = handle_key_inner(state, NL_KEY_EXE);
-            } else if (sui->screen == NL_UI_SETTINGS_TOUCHPAD && sui->tp_tab == 0 && hi >= 0 && hi < 5) {
+            } else if (sui->screen == NL_UI_SETTINGS_ANIMATIONS && hi >= 0 && hi < NL_ANIM_CAT_COUNT) {
+                int prev_c = sui->anim_cursor;
+                sui->anim_cursor = hi;
+                settings_sync_cursor_targets(state, false, prev_c);
+                ok = handle_key_inner(state, NL_KEY_EXE);
+            } else if (sui->screen == NL_UI_SETTINGS_TOUCHPAD && sui->tp_tab == 0 && hi >= 0 && hi < 7) {
                 int prev_c = sui->tp_cursor;
                 sui->tp_cursor = hi;
+                adjust_list_scroll(sui->tp_cursor, &sui->tp_scroll, 5);
+                if (sui->tp_scroll > 2) sui->tp_scroll = 2;
                 settings_sync_cursor_targets(state, false, prev_c);
                 if (hi == 2) {
                     int next_s = (state->settings.touchpad_sensitivity + 1) % NL_TP_SENS_COUNT;
@@ -4528,7 +5956,7 @@ bool nl_mouse_click(nl_state_t *state) {
             break;
 
         case NL_HOVER_PROF_DETAIL_ROW:
-            if (sui->screen == NL_UI_SETTINGS_PROFILES && sui->prof_mode == NL_PROF_MODE_DETAIL && hi >= 0 && hi < 4) {
+            if (sui->screen == NL_UI_SETTINGS_PROFILES && sui->prof_mode == NL_PROF_MODE_DETAIL && hi >= 0 && hi < 5) {
                 sui->prof_detail_cursor = hi;
                 ok = handle_key_inner(state, NL_KEY_EXE);
             }
@@ -4554,6 +5982,44 @@ bool nl_mouse_click(nl_state_t *state) {
             }
             break;
 
+        case NL_HOVER_DIAG_TAB:
+            if (sui->screen == NL_UI_SETTINGS_DIAG && (hi == 0 || hi == 1)) {
+                sui->diag_tab = hi;
+                sui->diag_cursor = 0;
+                sui->diag_scroll = 0;
+                sui->diag_detail_open = false;
+                settings_sync_cursor_targets(state, true, -1);
+                ok = true;
+            }
+            break;
+
+        case NL_HOVER_DIAG_ROW:
+            if (sui->screen == NL_UI_SETTINGS_DIAG && sui->diag_tab == 0 &&
+                hi >= 0 && hi < state->diag.count) {
+                sui->diag_cursor = hi;
+                sui->diag_detail_open = true;
+                ok = true;
+            }
+            break;
+
+        case NL_HOVER_DIAG_CLEAR_BTN:
+            if (sui->screen == NL_UI_SETTINGS_DIAG && sui->diag_tab == 0) {
+                sui->diag_cursor = state->diag.count;
+                sui->diag_confirm_modal = true;
+                sui->diag_confirm_yes = false;
+                state->anim.modal_fp = 32;
+                state->anim.modal_btn_fp = 0;
+                ok = true;
+            }
+            break;
+
+        case NL_HOVER_DIAG_DETAIL_CLOSE:
+            if (sui->screen == NL_UI_SETTINGS_DIAG && sui->diag_detail_open) {
+                sui->diag_detail_open = false;
+                ok = true;
+            }
+            break;
+
         case NL_HOVER_MODAL_BTN:
             if (sui->screen == NL_UI_SETTINGS_RESET) {
                 sui->reset_confirm_yes = (hi == 1);
@@ -4561,12 +6027,27 @@ bool nl_mouse_click(nl_state_t *state) {
             } else if (sui->screen == NL_UI_SETTINGS_ICONS && sui->icon_confirm_modal) {
                 sui->icon_confirm_yes = (hi == 1);
                 ok = handle_key_inner(state, NL_KEY_EXE);
+            } else if (sui->screen == NL_UI_SETTINGS_DIAG && sui->diag_confirm_modal) {
+                sui->diag_confirm_yes = (hi == 1);
+                ok = handle_key_inner(state, NL_KEY_EXE);
             } else if (sui->screen == NL_UI_SETTINGS_SHORTCUTS && sui->sc_conflict_prompt) {
                 sui->sc_conflict_confirm_yes = (hi == 1);
                 ok = handle_key_inner(state, NL_KEY_EXE);
             } else if (sui->screen == NL_UI_SETTINGS_PROFILES && sui->prof_mode == NL_PROF_MODE_CONFIRM_DELETE) {
                 sui->prof_delete_yes = (hi == 1);
                 ok = handle_key_inner(state, NL_KEY_EXE);
+            } else if (sui->screen == NL_UI_SETTINGS_RESCAN) {
+                if (state->scan.active) {
+                    if (hi == 0) {
+                        state->scan.cancel_requested = true;
+                        ok = true;
+                    }
+                } else if (state->scan.empty_confirm_pending) {
+                    state->scan.empty_confirm_replace = (hi == 1);
+                    ok = handle_key_inner(state, NL_KEY_EXE);
+                } else if (state->scan.finished) {
+                    ok = handle_key_inner(state, (hi == 1) ? NL_KEY_RESCAN : NL_KEY_EXE);
+                }
             }
             break;
 
@@ -4575,6 +6056,7 @@ bool nl_mouse_click(nl_state_t *state) {
     }
 
     if (ok) {
+        state->anim.cur_click_pulse_fp = 256;
         nl_mouse_update_hover(state);
         nl_cursor_wake(state);
     }

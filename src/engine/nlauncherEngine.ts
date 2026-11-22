@@ -12,7 +12,7 @@ export const NL_SCREEN_W = 320;
 export const NL_SCREEN_H = 240;
 export const NL_ICON_W = 94;
 export const NL_ICON_H = 68;
-export const NL_ICON_MAX_DIM = 128;
+export const NL_ICON_MAX_DIM = 84;
 export const NL_GRID_CARD_W = 84;
 export const NL_GRID_CARD_H = 84;
 export const NL_COVER_RADIUS = 11;
@@ -44,10 +44,12 @@ export const NL_BAT_IND_Y = 7;
 export const NL_BAT_IND_W = 24;
 export const NL_BAT_IND_H = 11;
 export const NL_BATTERY_REFRESH_INTERVAL_SEC = 3600;
-export const NL_DISPLAY_OPT_COUNT = 4;
+export const NL_DISPLAY_OPT_COUNT = 5;
 export const NL_BOOT_STABILIZE_FRAMES = 30;
 export const NL_LAUNCHER_VERSION_STR = '3.1';
-export const NL_BUILD_STAMP_STR = 'Build 2026-11-17 #R8';
+export const NL_BUILD_STAMP_STR = 'Build 2026-11-18 #R23';
+export const NL_DIAG_MAX_ENTRIES = 24;
+export const NL_BOOT_STAGE_COUNT = 12;
 
 export type BootRecoveryReason =
   | 'none'
@@ -140,6 +142,179 @@ export const LAYOUT_LABELS: Record<LayoutMode, string> = {
   '4x4': '4 x 4',
 };
 
+export type ScrollDir = 'vertical' | 'horizontal';
+
+export const SCROLL_DIR_ORDER: readonly ScrollDir[] = ['vertical', 'horizontal'];
+
+export const SCROLL_DIR_LABELS: Record<ScrollDir, string> = {
+  vertical: 'Vertical',
+  horizontal: 'Horizontal',
+};
+
+export type LaunchAnimMode = 'current' | 'theme_drop' | 'spinner' | 'loading_bar';
+
+export const LAUNCH_ANIM_ORDER: readonly LaunchAnimMode[] = [
+  'current',
+  'theme_drop',
+  'spinner',
+  'loading_bar',
+];
+
+export const NL_LAUNCH_ANIM_COUNT = 4;
+
+export const LAUNCH_ANIM_LABELS: Record<LaunchAnimMode, string> = {
+  current: 'Actuelle (Capture)',
+  theme_drop: 'Theme Drop',
+  spinner: 'Spinner',
+  loading_bar: 'Loading Bar',
+};
+
+export const LAUNCH_ANIM_SHORT_LABELS: Record<LaunchAnimMode, string> = {
+  current: 'CAPTURE',
+  theme_drop: 'LIQUIDE',
+  spinner: 'SPINNER',
+  loading_bar: 'BARRE',
+};
+
+export const LAUNCH_ANIM_SUBTITLES: Record<LaunchAnimMode, string> = {
+  current: 'Zoom + halos + capture',
+  theme_drop: '4 propagations liquides',
+  spinner: 'Icone + spinner central',
+  loading_bar: 'Centrage + barre reelle',
+};
+
+export function clampLaunchAnimMode(v: unknown): LaunchAnimMode {
+  return v === 'theme_drop' || v === 'spinner' || v === 'loading_bar' ? v : 'current';
+}
+
+export type AppOpenAnimMode = 'current' | 'liquid' | 'zoom' | 'instant';
+
+export const APP_OPEN_ANIM_ORDER: readonly AppOpenAnimMode[] = [
+  'current',
+  'liquid',
+  'zoom',
+  'instant',
+];
+
+export const NL_OPEN_ANIM_COUNT = 4;
+
+export const APP_OPEN_ANIM_LABELS: Record<AppOpenAnimMode, string> = {
+  current: 'Actuelle (Logo)',
+  liquid: 'Liquide Organique',
+  zoom: 'Zoom Fluide',
+  instant: 'Instantane',
+};
+
+export const APP_OPEN_ANIM_SHORT_LABELS: Record<AppOpenAnimMode, string> = {
+  current: 'LOGO',
+  liquid: 'LIQUIDE',
+  zoom: 'ZOOM',
+  instant: 'DIRECT',
+};
+
+export const APP_OPEN_ANIM_SUBTITLES: Record<AppOpenAnimMode, string> = {
+  current: 'Logo N-Launcher + fondu fluide',
+  liquid: '4 propagations liquides organiques',
+  zoom: 'Ouverture zoom fluide de la grille',
+  instant: 'Acces immediat sans transition',
+};
+
+export function clampAppOpenAnimMode(v: unknown): AppOpenAnimMode {
+  return v === 'liquid' || v === 'zoom' || v === 'instant' ? v : 'current';
+}
+
+export type AppCloseAnimMode = 'liquid' | 'fade' | 'zoom' | 'instant';
+
+export const APP_CLOSE_ANIM_ORDER: readonly AppCloseAnimMode[] = [
+  'liquid',
+  'fade',
+  'zoom',
+  'instant',
+];
+
+export const NL_CLOSE_ANIM_COUNT = 4;
+
+export const APP_CLOSE_ANIM_LABELS: Record<AppCloseAnimMode, string> = {
+  liquid: 'Liquide Organique',
+  fade: 'Fondu Fluide',
+  zoom: 'Zoom Arriere',
+  instant: 'Instantane',
+};
+
+export const APP_CLOSE_ANIM_SHORT_LABELS: Record<AppCloseAnimMode, string> = {
+  liquid: 'LIQUIDE',
+  fade: 'FONDU',
+  zoom: 'ZOOM',
+  instant: 'DIRECT',
+};
+
+export const APP_CLOSE_ANIM_SUBTITLES: Record<AppCloseAnimMode, string> = {
+  liquid: 'Fermeture liquide en 4 ondes',
+  fade: 'Extinction douce vers le theme',
+  zoom: 'Retrait fluide vers le centre',
+  instant: 'Sortie immediate vers TI-OS',
+};
+
+export function clampAppCloseAnimMode(v: unknown): AppCloseAnimMode {
+  return v === 'fade' || v === 'zoom' || v === 'instant' ? v : 'liquid';
+}
+
+export type ReturnAnimMode = 'liquid' | 'zoom' | 'fade' | 'instant';
+
+export const RETURN_ANIM_ORDER: readonly ReturnAnimMode[] = [
+  'liquid',
+  'zoom',
+  'fade',
+  'instant',
+];
+
+export const NL_RETURN_ANIM_COUNT = 4;
+
+export const RETURN_ANIM_LABELS: Record<ReturnAnimMode, string> = {
+  liquid: 'Liquide Inverse',
+  zoom: 'Zoom Inverse',
+  fade: 'Fondu Rapide',
+  instant: 'Instantane',
+};
+
+export const RETURN_ANIM_SHORT_LABELS: Record<ReturnAnimMode, string> = {
+  liquid: 'LIQUIDE',
+  zoom: 'ZOOM',
+  fade: 'FONDU',
+  instant: 'DIRECT',
+};
+
+export const RETURN_ANIM_SUBTITLES: Record<ReturnAnimMode, string> = {
+  liquid: '4 ondes liquides non bloquantes',
+  zoom: 'Dezoom rapide sur la bibliotheque',
+  fade: 'Voile doux immediatement interactif',
+  instant: 'Retour brut sans animation',
+};
+
+export function clampReturnAnimMode(v: unknown): ReturnAnimMode {
+  return v === 'zoom' || v === 'fade' || v === 'instant' ? v : 'liquid';
+}
+
+export const NL_ANIM_CAT_COUNT = 4;
+
+export const ANIM_CATEGORY_LABELS: readonly string[] = [
+  "Ouverture de l'app",
+  "Fermeture de l'app",
+  'Lancement des jeux',
+  'Retour des jeux',
+];
+
+/**
+ * #R23 Fast Return optimization (exact 1:1 mirror of native nl_return_needs_filter_rebuild):
+ * Skip O(N log N) filter/sort rebuild on game return unless the active category or sort order
+ * depends on play stats (REC category or last_used / most_launched / play_time sort).
+ */
+export function returnNeedsFilterRebuild(state: LauncherState): boolean {
+  if (state.activeCategory === 'RECENT') return true;
+  const sort = state.settings.sortOrder;
+  return sort === 'last_used' || sort === 'most_launched' || sort === 'play_time';
+}
+
 export type SortOrder =
   | 'alpha_asc'
   | 'alpha_desc'
@@ -174,6 +349,7 @@ export type UiScreen =
   | 'SETTINGS_MAIN'
   | 'SETTINGS_AUTOSTART'
   | 'SETTINGS_DISPLAY'
+  | 'SETTINGS_ANIMATIONS'
   | 'SETTINGS_TOUCHPAD'
   | 'SETTINGS_SHORTCUTS'
   | 'SETTINGS_KEY_HELP'
@@ -182,8 +358,10 @@ export type UiScreen =
   | 'SETTINGS_CAPTURE_BATCH'
   | 'SETTINGS_ICONS'
   | 'SETTINGS_REFRESH_LIB'
+  | 'SETTINGS_RESCAN'
   | 'SETTINGS_HOTKEY'
   | 'SETTINGS_PROFILES'
+  | 'SETTINGS_DIAG'
   | 'SETTINGS_RESET'
   | 'SETTINGS_INFO'
   | 'SETTINGS_CREDITS';
@@ -208,7 +386,9 @@ export type SettingsIconId =
   | 'CAPTURE'
   | 'ICONS'
   | 'HOTKEY'
-  | 'PROFILES';
+  | 'PROFILES'
+  | 'DIAG'
+  | 'ANIM';
 
 export const NL_AVATAR_COUNT = 43;
 export const NL_AVATAR_CAT_COUNT = 4;
@@ -273,7 +453,13 @@ export interface UserProfile {
   name: string;
   avatarId: number;
   isPrimary: boolean;
+  isLocked?: boolean;
   layout: LayoutMode;
+  scrollDir?: ScrollDir;
+  appOpenAnim?: AppOpenAnimMode;
+  appCloseAnim?: AppCloseAnimMode;
+  launchAnimMode?: LaunchAnimMode;
+  returnAnimMode?: ReturnAnimMode;
   showNames: boolean;
   showShortcuts: boolean;
   sortOrder: SortOrder;
@@ -302,6 +488,12 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItemDef[] = [
     label: 'Affichage',
     subtitle: "Grille, titres et barre d'aide",
     icon: 'SCREEN',
+  },
+  {
+    id: 'SETTINGS_ANIMATIONS',
+    label: 'Animations',
+    subtitle: 'Animation de lancement des jeux',
+    icon: 'ANIM',
   },
   {
     id: 'SETTINGS_TOUCHPAD',
@@ -347,14 +539,14 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItemDef[] = [
   },
   {
     id: 'SETTINGS_REFRESH_LIB',
-    label: 'Actualiser la bibliotheque',
-    subtitle: 'Rescanner jeux et reconstruire cache',
+    label: 'Rescanner les jeux',
+    subtitle: 'Verifier dossiers et actualiser',
     icon: 'REFRESH',
   },
   {
     id: 'SETTINGS_HOTKEY',
     label: 'Raccourci global TI-OS',
-    subtitle: 'Ouvrir depuis les menus TI-OS',
+    subtitle: 'Ouvrir depuis menus TI-OS (manuel)',
     icon: 'HOTKEY',
   },
   {
@@ -362,6 +554,12 @@ export const SETTINGS_MENU_ITEMS: SettingsMenuItemDef[] = [
     label: 'Profils utilisateurs',
     subtitle: 'Comptes, avatars et donnees',
     icon: 'PROFILES',
+  },
+  {
+    id: 'SETTINGS_DIAG',
+    label: 'Diagnostics & Journaux',
+    subtitle: 'Erreurs, boot et journaux',
+    icon: 'DIAG',
   },
   {
     id: 'SETTINGS_RESET',
@@ -401,12 +599,32 @@ export const NL_CURSOR_SPEED_COUNT = 5;
 export const NL_CURSOR_SPEED_DEFAULT = 2;
 export const NL_CURSOR_SPEED_SCALES: readonly number[] = [8, 12, 17, 23, 30];
 export const CURSOR_SPEED_LABELS: readonly string[] = [
-  '1/5 Lente',
-  '2/5 Douce',
+  '1/5 Tres lente',
+  '2/5 Lente',
   '3/5 Normale',
   '4/5 Rapide',
   '5/5 Tres rap.',
 ];
+
+export type HotkeyCombo = 'ctrl_menu' | 'shift_menu' | 'ctrl_shift_menu';
+
+export const HOTKEY_COMBO_ORDER: readonly HotkeyCombo[] = [
+  'ctrl_menu',
+  'shift_menu',
+  'ctrl_shift_menu',
+];
+
+export const HOTKEY_COMBO_LABELS: Record<HotkeyCombo, string> = {
+  ctrl_menu: 'Ctrl + Menu',
+  shift_menu: 'Shift + Menu',
+  ctrl_shift_menu: 'Ctrl + Shift + Menu',
+};
+
+export const HOTKEY_COMBO_SHORT_TAGS: Record<HotkeyCombo, string> = {
+  ctrl_menu: 'CTRL+MENU',
+  shift_menu: 'SHFT+MENU',
+  ctrl_shift_menu: 'C+S+MENU',
+};
 
 export type TouchpadMode = 'touchpad' | 'mouse';
 
@@ -425,6 +643,75 @@ export const CURSOR_STYLE_LABELS: Record<CursorStyle, string> = {
   circle: 'Cercle',
   pointer: 'Pointeur',
 };
+
+export type CursorSize = 'small' | 'medium' | 'large';
+
+export const CURSOR_SIZE_ORDER: readonly CursorSize[] = ['small', 'medium', 'large'];
+
+export const CURSOR_SIZE_LABELS: Record<CursorSize, string> = {
+  small: 'Petite',
+  medium: 'Moyenne',
+  large: 'Grande',
+};
+
+export const NL_CURSOR_SIZE_DEFAULT: CursorSize = 'medium';
+
+export function clampCursorSize(size: unknown): CursorSize {
+  if (size === 'small' || size === 'medium' || size === 'large') {
+    return size;
+  }
+  return NL_CURSOR_SIZE_DEFAULT;
+}
+
+export function cursorSizeToIndex(size: CursorSize): 0 | 1 | 2 {
+  if (size === 'small') return 0;
+  if (size === 'large') return 2;
+  return 1;
+}
+
+export function indexToCursorSize(idx: number): CursorSize {
+  if (idx === 0) return 'small';
+  if (idx === 2) return 'large';
+  return 'medium';
+}
+
+export function getCursorSizeMetrics(
+  style: CursorStyle,
+  size: CursorSize
+): { width: number; height: number; hotX: number; hotY: number; scale: number } {
+  const s = clampCursorSize(size);
+  if (style === 'pointer') {
+    if (s === 'small') return { width: 13, height: 16, hotX: 4, hotY: 1, scale: 16 / 28 };
+    if (s === 'large') return { width: 22, height: 28, hotX: 7, hotY: 2, scale: 1.0 };
+    return { width: 17, height: 22, hotX: 5, hotY: 1, scale: 22 / 28 };
+  }
+  if (style === 'circle') {
+    if (s === 'small') return { width: 15, height: 15, hotX: 7, hotY: 7, scale: 15 / 28 };
+    if (s === 'large') return { width: 28, height: 28, hotX: 14, hotY: 14, scale: 1.0 };
+    return { width: 21, height: 21, hotX: 10, hotY: 10, scale: 21 / 28 };
+  }
+  if (s === 'small') return { width: 15, height: 15, hotX: 1, hotY: 1, scale: 15 / 28 };
+  if (s === 'large') return { width: 28, height: 28, hotX: 2, hotY: 2, scale: 1.0 };
+  return { width: 21, height: 21, hotX: 2, hotY: 2, scale: 21 / 28 };
+}
+
+export const NL_TP_TAB0_ROW_COUNT = 7;
+export const NL_TP_TAB0_VISIBLE_ROWS = 5;
+export const NL_TP_TAB0_ROW_HEIGHTS: readonly number[] = [26, 25, 37, 37, 26, 26, 28];
+
+export function getTouchpadTab0RowRects(tpScroll: number): Array<{ row: number; y: number; h: number }> {
+  const clampedScroll = Math.max(0, Math.min(NL_TP_TAB0_ROW_COUNT - NL_TP_TAB0_VISIBLE_ROWS, Math.trunc(tpScroll)));
+  const rects: Array<{ row: number; y: number; h: number }> = [];
+  let y = 47;
+  for (let vis = 0; vis < NL_TP_TAB0_VISIBLE_ROWS; vis++) {
+    const row = clampedScroll + vis;
+    if (row >= NL_TP_TAB0_ROW_COUNT) break;
+    const h = NL_TP_TAB0_ROW_HEIGHTS[row];
+    rects.push({ row, y, h });
+    y += h + 2;
+  }
+  return rects;
+}
 
 export type HoverTargetKind =
   | 'NONE'
@@ -448,12 +735,17 @@ export type HoverTargetKind =
   | 'SET_ROW'
   | 'SET_SLIDER_NOTCH'
   | 'SET_STYLE_CARD'
+  | 'SET_SIZE_CARD'
   | 'SC_KEY_CELL'
   | 'ICON_CARD'
   | 'PROF_ROW'
   | 'PROF_DETAIL_ROW'
   | 'PROF_AV_TAB'
   | 'PROF_AV_CELL'
+  | 'DIAG_TAB'
+  | 'DIAG_ROW'
+  | 'DIAG_CLEAR_BTN'
+  | 'DIAG_DETAIL_CLOSE'
   | 'MODAL_BTN';
 
 export function clampCursorStyle(style: unknown): CursorStyle {
@@ -757,6 +1049,8 @@ export interface LayoutMetrics {
   labelH: number;
   rowStrideY: number;
   pageStrideY: number;
+  pageStrideX: number;
+  isHorizontal: boolean;
   viewBottom: number;
   paginationY: number;
 }
@@ -764,17 +1058,63 @@ export interface LayoutMetrics {
 export interface LauncherSettings {
   autostart: boolean;
   globalHotkey: boolean;
+  hotkeyCombo: HotkeyCombo;
   layout: LayoutMode;
+  scrollDir?: ScrollDir;
+  appOpenAnim?: AppOpenAnimMode;
+  appCloseAnim?: AppCloseAnimMode;
+  launchAnimMode?: LaunchAnimMode;
+  returnAnimMode?: ReturnAnimMode;
   showNames: boolean;
   showShortcuts: boolean;
   showBattery: boolean;
+  profileLockEnabled?: boolean;
   touchpadMode: TouchpadMode;
   touchpadNav: boolean;
   touchpadSensitivity: number;
   cursorSpeed: number;
   touchpadCursorShow: boolean;
   touchpadCursorStyle: CursorStyle;
+  cursorSize: CursorSize;
+  tapToClick: boolean;
   sortOrder: SortOrder;
+}
+
+export type DiagCode =
+  | 'E102'
+  | 'E103'
+  | 'E104'
+  | 'E201'
+  | 'E301'
+  | 'E401'
+  | 'E501'
+  | 'E601'
+  | 'E801'
+  | 'E901';
+
+export type HardwarePresetId = 'CX2T_620' | 'CXCAS_450';
+
+export interface DiagEntry {
+  code: DiagCode;
+  stage: number;
+  count: number;
+  resolved: boolean;
+  category: string;
+  title: string;
+  target: string;
+  path: string;
+  operation: string;
+  reason: string;
+  impact: string;
+  recovery: string;
+}
+
+export interface DiagStore {
+  entries: DiagEntry[];
+  currentStage: number;
+  stageReached: boolean[];
+  warningSummaryShown: boolean;
+  logBytes: number;
 }
 
 export interface SysEnvSim {
@@ -786,9 +1126,15 @@ export interface SysEnvSim {
   autostartActive: boolean;
   autostartDiag: string;
   hotkeyActive: boolean;
+  hotkeyRamActive: boolean;
   hotkeyDiag: string;
   cacheValid: boolean;
   cacheCrc32: number;
+  cacheLoadedAtBoot: boolean;
+  oomRecoveries: number;
+  priorIncompleteBoot: boolean;
+  lastCrashStage: number;
+  lastCrashMode: string;
   bootRecoveryTriggered: boolean;
   bootRecoveryReason: BootRecoveryReason;
   batteryLevel: BatteryLevel;
@@ -797,15 +1143,55 @@ export interface SysEnvSim {
   batteryReadCount: number;
 }
 
+export interface RescanSummary {
+  dirsScanned: number;
+  filesExamined: number;
+  gamesFound: number;
+  gamesAdded: number;
+  gamesKept: number;
+  gamesRemoved: number;
+  iconsLoaded: number;
+  iconsFallback: number;
+  memorizedFolders: number;
+  emptyConfirmPending: boolean;
+  emptyConfirmReplace: boolean;
+  finished: boolean;
+  rescanCount: number;
+}
+
+export function createDefaultRescanSummary(): RescanSummary {
+  return {
+    dirsScanned: 0,
+    filesExamined: 0,
+    gamesFound: 0,
+    gamesAdded: 0,
+    gamesKept: 0,
+    gamesRemoved: 0,
+    iconsLoaded: 0,
+    iconsFallback: 0,
+    memorizedFolders: 0,
+    emptyConfirmPending: false,
+    emptyConfirmReplace: false,
+    finished: false,
+    rescanCount: 0,
+  };
+}
+
 export interface SettingsUiState {
   screen: UiScreen;
   menuCursor: number;
   menuScroll: number;
   displayCursor: number;
   displayScroll: number;
+  animCursor: number;
+  hotkeyCursor: 0 | 1;
+  rescan: RescanSummary;
   tpCursor: number;
+  tpScroll: number;
   tpTab: 0 | 1;
+  tpCustomRow: 0 | 1;
   tpStyleCursor: number;
+  tpSizeCursor: number;
   scGameCursor: number;
   scGameScroll: number;
   scPickingKey: boolean;
@@ -845,6 +1231,13 @@ export interface SettingsUiState {
   profAvatarCursor: number;
   profDeleteYes: boolean;
   profFromQuick: boolean;
+  diagTab: 0 | 1;
+  diagCursor: number;
+  diagScroll: number;
+  diagDetailOpen: boolean;
+  diagConfirmModal: boolean;
+  diagConfirmYes: boolean;
+  diagClearReq: boolean;
   ctrlMouseActive: boolean;
   mouseX: number;
   mouseY: number;
@@ -943,6 +1336,7 @@ export interface LauncherState {
   toastMessage: string | null;
   toastSeq: number;
   profSwitchSeq?: number;
+  profSwitchFromAvatarId?: number;
   profSwitchAvatarId?: number;
   profSwitchOriginX?: number;
   profSwitchOriginY?: number;
@@ -953,6 +1347,9 @@ export interface LauncherState {
   profBirthSeq?: number;
   profBirthAvatarId?: number;
   profBirthSlot?: number;
+  returnDropSeq?: number;
+  returnDropGameIdx?: number;
+  diag: DiagStore;
   diagnostics: ScannedFileDiagnostic[];
   stats: {
     scannedFiles: number;
@@ -1294,6 +1691,7 @@ export function isSystemOrSelfFile(
     base.endsWith('.cache.tns') ||
     base.endsWith('.profiles.tns') ||
     base.endsWith('.lock.tns') ||
+    base.endsWith('.bak.tns') ||
     base.endsWith('.ico.tns') ||
     base.endsWith('.scr.tns') ||
     base.endsWith('.bmp.tns') ||
@@ -1837,13 +2235,15 @@ export interface ScanPreferences {
   sys?: Partial<SysEnvSim>;
   gamePrefs?: Record<string, SavedGamePref>;
   profiles?: Partial<ProfileSystemState>;
+  diagEntries?: DiagEntry[];
 }
 
 export function getLayoutMetrics(
   layout: LayoutMode,
   showNames: boolean,
   showShortcuts = true,
-  itemCount = 0
+  itemCount = 0,
+  scrollDir: ScrollDir = 'vertical'
 ): LayoutMetrics {
   let cols = NL_GRID_COLS;
   let rows = NL_GRID_ROWS;
@@ -2092,8 +2492,66 @@ export function getLayoutMetrics(
     }
   }
 
+  const isHorizontal = scrollDir === 'horizontal';
+
+  /* R15 Horizontal mode (exact reference): guarantee >= 28 px side margin for 12 px left & right icon peeks.
+   * R17 Vertical mode (exact mirror of R15 horizontal): guarantee >= 20 px top & bottom margin in multi-page mode
+   * so neighboring pages' real icons peek naturally by 12 px at top & bottom with >= 8 px inter-page gap. */
+  if (isHorizontal) {
+    if (marginX < 28 && cols > 1) {
+      const maxCw = NL_SCREEN_W - 56;
+      let contentW = cols * cardW + (cols - 1) * gapX;
+      while (contentW > maxCw && gapX > 6) {
+        gapX--;
+        contentW = cols * cardW + (cols - 1) * gapX;
+      }
+      while (contentW > maxCw && cardW > 24) {
+        cardW--;
+        cardH = cardW;
+        contentW = cols * cardW + (cols - 1) * gapX;
+      }
+      marginX = Math.floor((NL_SCREEN_W - contentW) / 2);
+    }
+  } else if (itemCount <= 0 || itemCount > perPage) {
+    const availH = viewBottom - NL_VIEW_TOP;
+    const maxCh = availH - 40; /* 20 px top + 20 px bottom => 12 px peek + 8 px inter-page gap */
+    const minGapY =
+      rows <= 2 ? (showNames ? 3 : 5) : rows === 3 ? (showNames ? 2 : 4) : 2;
+    let contentH = rows * (cardH + labelH) + (rows - 1) * gapY;
+    while (contentH > maxCh && gapY > minGapY) {
+      gapY--;
+      contentH = rows * (cardH + labelH) + (rows - 1) * gapY;
+    }
+    while (contentH > maxCh && cardH > 24) {
+      cardH--;
+      cardW = cardH;
+      contentH = rows * (cardH + labelH) + (rows - 1) * gapY;
+    }
+    if (cols > 1) {
+      const contentW = cols * cardW + (cols - 1) * gapX;
+      marginX = Math.floor((NL_SCREEN_W - contentW) / 2);
+    } else {
+      marginX = Math.floor((NL_SCREEN_W - cardW) / 2);
+    }
+    topY = NL_VIEW_TOP + Math.floor((availH - contentH) / 2);
+  }
+
   const rowStrideY = cardH + labelH + gapY;
-  const pageStrideY = rowStrideY * rows;
+  let pageStrideY: number;
+  let pageStrideX: number;
+  if (isHorizontal) {
+    pageStrideY = rowStrideY * rows;
+    const contentW = cols * cardW + (cols - 1) * gapX;
+    pageStrideX = Math.max(contentW + 16, NL_SCREEN_W - 12 - marginX);
+  } else {
+    if (itemCount <= 0 || itemCount > perPage) {
+      const contentH = rows * (cardH + labelH) + (rows - 1) * gapY;
+      pageStrideY = Math.max(contentH + 8, viewBottom - 12 - topY);
+    } else {
+      pageStrideY = rowStrideY * rows;
+    }
+    pageStrideX = NL_SCREEN_W;
+  }
 
   return {
     cols,
@@ -2109,6 +2567,8 @@ export function getLayoutMetrics(
     labelH,
     rowStrideY,
     pageStrideY,
+    pageStrideX,
+    isHorizontal,
     viewBottom,
     paginationY,
   };
@@ -2139,21 +2599,26 @@ export function computeGridSlotPos(
     x = m.marginX + col * (m.cardW + m.gapX);
   }
 
-  let pageTopY = m.topY;
-  if (filteredCount > perPage) {
-    const pageItems = Math.max(1, Math.min(perPage, filteredCount - page * perPage));
-    const rowsOnPage = Math.floor((pageItems + cols - 1) / cols);
-    if (rowsOnPage < m.rows) {
-      const availH = m.viewBottom - NL_VIEW_TOP;
-      const contentH = rowsOnPage * (m.cardH + m.labelH) + (rowsOnPage - 1) * m.gapY;
-      const centeredY = NL_VIEW_TOP + Math.floor((availH - contentH) / 2);
-      if (centeredY > pageTopY) {
-        pageTopY = centeredY;
+  if (m.isHorizontal) {
+    x += page * m.pageStrideX;
+    let pageTopY = m.topY;
+    if (filteredCount > perPage) {
+      const pageItems = Math.max(1, Math.min(perPage, filteredCount - page * perPage));
+      const rowsOnPage = Math.floor((pageItems + cols - 1) / cols);
+      if (rowsOnPage < m.rows) {
+        const availH = m.viewBottom - NL_VIEW_TOP;
+        const contentH = rowsOnPage * (m.cardH + m.labelH) + (rowsOnPage - 1) * m.gapY;
+        const centeredY = NL_VIEW_TOP + Math.floor((availH - contentH) / 2);
+        if (centeredY > pageTopY) {
+          pageTopY = centeredY;
+        }
       }
     }
+    return { x, y: pageTopY + rowInPage * m.rowStrideY };
   }
 
-  const y = pageTopY + page * m.pageStrideY + rowInPage * m.rowStrideY;
+  /* Vertical mode: align every page cleanly to m.topY so even partial final pages peek cleanly at bottom */
+  const y = m.topY + page * m.pageStrideY + rowInPage * m.rowStrideY;
   return { x, y };
 }
 
@@ -3745,9 +4210,14 @@ export function getShortcutDefs(state: LauncherState): ShortcutDef[] {
     { keyLabel: 'MENU', actionLabel: 'Changer couleur accent' },
     { keyLabel: 'SAVE', actionLabel: 'Ouvrir Parametres' },
     { keyLabel: '.', actionLabel: 'Selecteur rapide de profils' },
-    { keyLabel: '0 / -', actionLabel: 'Profil prec. / suivant' },
+    { keyLabel: '0 / -', actionLabel: 'Page prec. / suiv.' },
     { keyLabel: 'DEL (Param.)', actionLabel: 'Eteindre la calculatrice' },
-    { keyLabel: 'CTRL+MENU', actionLabel: 'Ouvrir depuis TI-OS (exp.)' },
+    {
+      keyLabel: HOTKEY_COMBO_SHORT_TAGS[state.settings.hotkeyCombo ?? 'ctrl_menu'],
+      actionLabel: state.settings.globalHotkey
+        ? 'Ouvrir depuis TI-OS (ON)'
+        : 'Ouvrir depuis TI-OS (OFF)',
+    },
     {
       keyLabel: 'TACTILE',
       actionLabel: isMouseModeActive(state)
@@ -3975,6 +4445,9 @@ export function scanVirtualFilesystem(
   const defaultNdlessPersistent = prefs?.sys?.ndlessPersistent ?? true;
   const defaultAutostart = false;
   const defaultGlobalHotkey = Boolean(prefs?.settings?.globalHotkey) && (prefs?.sys?.hasNdless ?? true);
+  const rawCombo = prefs?.settings?.hotkeyCombo;
+  const defaultHotkeyCombo: HotkeyCombo =
+    rawCombo && HOTKEY_COMBO_ORDER.includes(rawCombo) ? rawCombo : 'ctrl_menu';
   const defaultShowBattery = false;
   const initialCacheCrc = computeLibraryCacheCrc32(games);
 
@@ -3987,8 +4460,11 @@ export function scanVirtualFilesystem(
     typeof prefs?.settings?.cursorSpeed === 'number'
       ? clampCursorSpeed(prefs.settings.cursorSpeed)
       : NL_CURSOR_SPEED_DEFAULT;
+  const resolvedCursorSize = clampCursorSize(prefs?.settings?.cursorSize);
+  const resolvedTapToClick = Boolean(prefs?.settings?.tapToClick);
+  const hwIsCx2 = prefs?.sys?.hwIsCx2 ?? true;
 
-  const state: LauncherState = {
+  let state: LauncherState = {
     games,
     filteredIndices: [],
     selectedPos: 0,
@@ -4006,10 +4482,17 @@ export function scanVirtualFilesystem(
     settings: {
       autostart: defaultAutostart,
       globalHotkey: defaultGlobalHotkey,
+      hotkeyCombo: defaultHotkeyCombo,
       layout: defaultLayout,
+      scrollDir: prefs?.settings?.scrollDir === 'horizontal' ? 'horizontal' : 'vertical',
+      appOpenAnim: clampAppOpenAnimMode(prefs?.settings?.appOpenAnim),
+      appCloseAnim: clampAppCloseAnimMode(prefs?.settings?.appCloseAnim),
+      launchAnimMode: clampLaunchAnimMode(prefs?.settings?.launchAnimMode),
+      returnAnimMode: clampReturnAnimMode(prefs?.settings?.returnAnimMode),
       showNames: Boolean(prefs?.settings?.showNames),
       showShortcuts: prefs?.settings?.showShortcuts ?? true,
       showBattery: defaultShowBattery,
+      profileLockEnabled: Boolean(prefs?.settings?.profileLockEnabled),
       touchpadMode: resolvedTouchpadMode,
       touchpadNav: Boolean(prefs?.settings?.touchpadNav),
       touchpadSensitivity:
@@ -4019,22 +4502,31 @@ export function scanVirtualFilesystem(
       cursorSpeed: resolvedCursorSpeed,
       touchpadCursorShow: resolvedTouchpadMode === 'mouse',
       touchpadCursorStyle: resolvedCursorStyle,
+      cursorSize: resolvedCursorSize,
+      tapToClick: resolvedTapToClick,
       sortOrder: defaultSort,
     },
     sys: {
       hasNdless: prefs?.sys?.hasNdless ?? true,
       ndlessPersistent: defaultNdlessPersistent,
       ndlessRev: prefs?.sys?.ndlessRev ?? 2026,
-      hwIsCx2: prefs?.sys?.hwIsCx2 ?? true,
-      osVersion: prefs?.sys?.osVersion ?? '6.4.0.74 (CX II-T)',
+      hwIsCx2,
+      osVersion:
+        prefs?.sys?.osVersion ?? (hwIsCx2 ? '6.2.0.333 (CX II-T)' : '4.5.0.1180 (CX CAS)'),
       autostartActive: false,
       autostartDiag: 'Demarrage automatique supprime',
       hotkeyActive: defaultGlobalHotkey,
+      hotkeyRamActive: prefs?.sys?.hotkeyRamActive ?? defaultGlobalHotkey,
       hotkeyDiag: defaultGlobalHotkey
-        ? 'Raccourci Ctrl+Menu actif (nl_hotkey.tns)'
+        ? `RAM + startup : ${HOTKEY_COMBO_LABELS[defaultHotkeyCombo]}`
         : 'Raccourci global desactive',
       cacheValid: prefs?.sys?.cacheValid ?? true,
       cacheCrc32: prefs?.sys?.cacheCrc32 ?? initialCacheCrc,
+      cacheLoadedAtBoot: prefs?.sys?.cacheLoadedAtBoot ?? true,
+      oomRecoveries: prefs?.sys?.oomRecoveries ?? 0,
+      priorIncompleteBoot: prefs?.sys?.priorIncompleteBoot ?? false,
+      lastCrashStage: prefs?.sys?.lastCrashStage ?? 0,
+      lastCrashMode: prefs?.sys?.lastCrashMode ?? '',
       bootRecoveryTriggered: false,
       bootRecoveryReason: 'none',
       batteryLevel: 'UNAVAILABLE',
@@ -4048,9 +4540,15 @@ export function scanVirtualFilesystem(
       menuScroll: 0,
       displayCursor: 0,
       displayScroll: 0,
+      animCursor: 0,
+      hotkeyCursor: 0,
+      rescan: createDefaultRescanSummary(),
       tpCursor: 0,
+      tpScroll: 0,
       tpTab: 0,
+      tpCustomRow: 0,
       tpStyleCursor: clampCursorStyleToCard(resolvedCursorStyle),
+      tpSizeCursor: cursorSizeToIndex(resolvedCursorSize),
       scGameCursor: 0,
       scGameScroll: 0,
       scPickingKey: false,
@@ -4090,6 +4588,13 @@ export function scanVirtualFilesystem(
       profAvatarCursor: 0,
       profDeleteYes: false,
       profFromQuick: false,
+      diagTab: 0,
+      diagCursor: 0,
+      diagScroll: 0,
+      diagDetailOpen: false,
+      diagConfirmModal: false,
+      diagConfirmYes: false,
+      diagClearReq: false,
       ctrlMouseActive: false,
       mouseX: 160,
       mouseY: 120,
@@ -4116,6 +4621,7 @@ export function scanVirtualFilesystem(
     mouseSeq: 0,
     toastMessage: null,
     toastSeq: 0,
+    diag: createInitialDiagStore(prefs?.diagEntries),
     diagnostics,
     stats: {
       scannedFiles: files.length,
@@ -4126,7 +4632,490 @@ export function scanVirtualFilesystem(
     },
   };
 
+  /* Fault isolation diagnostics for invalid binaries & corrupt custom icons during scan */
+  for (const d of diagnostics) {
+    if (d.status === 'REJECTED_INVALID') {
+      state = reportDiagError(
+        state,
+        'E201',
+        d.filename,
+        d.path,
+        'Analyse binaire .tns',
+        d.inspection.reason || 'En-tete Zehn/PRG/bFLT invalide',
+        'Ce fichier est isole et exclu de la grille',
+        'Autres jeux conserves et lancables'
+      );
+    }
+  }
+  for (const file of files) {
+    const lower = file.path.toLowerCase();
+    if ((lower.endsWith('.ico.tns') || lower.endsWith('.ico')) && file.headerBytes) {
+      if (!decodeWindowsIcoBuffer(file.headerBytes)) {
+        state = reportDiagError(
+          state,
+          'E103',
+          getBasename(file.path),
+          file.path,
+          'Decodage icone ICO',
+          'En-tete ou masque ICO invalide',
+          'Jeu conserve avec icone par defaut',
+          'Icone de remplacement utilisee'
+        );
+      }
+    }
+  }
+
   return applyActiveProfile(state);
+}
+
+/* =========================================================================
+ * #R9 Centralized Diagnostic System, Boot Forensics & Fault Isolation
+ * ========================================================================= */
+
+const BOOT_STAGE_LABELS: readonly string[] = [
+  '0. Inconnu',
+  '1. Entree N Launcher',
+  '2. Args & dossiers',
+  '3. Init memoire & diag',
+  '4. Detection OS / Ndless',
+  '5. Chargement config',
+  '6. Verification cache',
+  '7. Init profils',
+  '8. Scan bibliotheque',
+  '9. Chargement icones',
+  '10. Init ecran & theme',
+  '11. Pret boucle UI',
+  '12. Sortie propre',
+];
+
+export function getBootStageLabel(stage: number): string {
+  if (stage >= 1 && stage <= NL_BOOT_STAGE_COUNT) {
+    return BOOT_STAGE_LABELS[stage];
+  }
+  return BOOT_STAGE_LABELS[0];
+}
+
+interface DiagDefaultTemplate {
+  category: string;
+  title: string;
+  reason: string;
+  impact: string;
+  recovery: string;
+  resolved: boolean;
+}
+
+const DIAG_DEFAULT_MAP: Record<DiagCode, DiagDefaultTemplate> = {
+  E102: {
+    category: 'Icone',
+    title: 'Icone introuvable',
+    reason: 'Fichier icone absent sur le stockage',
+    impact: 'Le jeu reste disponible et lancable',
+    recovery: 'Icone de remplacement par defaut',
+    resolved: true,
+  },
+  E103: {
+    category: 'Icone',
+    title: 'Icone corrompue',
+    reason: 'En-tete ou pixels icone invalides',
+    impact: 'Icone defectueuse ignoree sans crash',
+    recovery: 'Icone de remplacement affichee',
+    resolved: true,
+  },
+  E104: {
+    category: 'Capture',
+    title: 'Capture ecran absente',
+    reason: 'Fichier .scr.tns manquant',
+    impact: 'Aucun blocage au lancement du jeu',
+    recovery: 'Animation de zoom de remplacement',
+    resolved: true,
+  },
+  E201: {
+    category: 'Jeu',
+    title: 'Jeu mal configure / invalide',
+    reason: 'En-tete Zehn/PRG/bFLT invalide ou illisible',
+    impact: 'Ce fichier est isole et exclu seul',
+    recovery: 'Autres jeux conserves et disponibles',
+    resolved: true,
+  },
+  E301: {
+    category: 'Configuration',
+    title: 'Configuration illisible',
+    reason: 'Fichier nlauncher.cfg.tns corrompu',
+    impact: 'Reglages par defaut appliques',
+    recovery: 'Configuration sure chargee',
+    resolved: true,
+  },
+  E401: {
+    category: 'Dossier',
+    title: 'Dossier systeme manquant',
+    reason: 'Repertoire requis introuvable',
+    impact: 'Stockage secondaire incomplet',
+    recovery: 'Dossier recree sans perte de donnees',
+    resolved: true,
+  },
+  E501: {
+    category: 'Graphique',
+    title: 'Ressource graphique invalide',
+    reason: 'Tampon ou sprite graphique invalide',
+    impact: 'Ressource defectueuse ignoree',
+    recovery: 'Interface graphique maintenue',
+    resolved: true,
+  },
+  E601: {
+    category: 'Profil',
+    title: 'Fichier de profil corrompu',
+    reason: 'Checksum ou structure profil invalide',
+    impact: 'Original preserve (.bak.tns)',
+    recovery: 'Chargement de recuperation tente',
+    resolved: true,
+  },
+  E801: {
+    category: 'Memoire',
+    title: 'Memoire insuffisante',
+    reason: 'Echec allocation tampon VRAM ou image',
+    impact: 'Effets lourds ou captures reduits',
+    recovery: 'Tampons non critiques liberes',
+    resolved: true,
+  },
+  E901: {
+    category: 'Demarrage',
+    title: 'Arret anormal detecte',
+    reason: 'Session precedente interrompue avant fin',
+    impact: 'Derniere etape tracee au boot',
+    recovery: 'Journaux et donnees preserves',
+    resolved: true,
+  },
+};
+
+export function getDiagDefaults(code: DiagCode): DiagDefaultTemplate {
+  return DIAG_DEFAULT_MAP[code];
+}
+
+function estimateDiagLogBytes(entries: DiagEntry[]): number {
+  return entries.reduce((acc, e) => acc + 180 + e.path.length + e.reason.length, 0);
+}
+
+export function createInitialDiagStore(seedEntries?: DiagEntry[]): DiagStore {
+  const stageReached = Array.from({ length: NL_BOOT_STAGE_COUNT + 1 }, (_, i) => i >= 1 && i <= 11);
+  const entries = Array.isArray(seedEntries) ? seedEntries.slice(0, NL_DIAG_MAX_ENTRIES) : [];
+  return {
+    entries,
+    currentStage: 11,
+    stageReached,
+    warningSummaryShown: false,
+    logBytes: estimateDiagLogBytes(entries),
+  };
+}
+
+export function recordBootStage(
+  state: LauncherState,
+  stage: number,
+  cleanExit = false
+): LauncherState {
+  if (stage < 1 || stage > NL_BOOT_STAGE_COUNT) return state;
+  const stageReached = [...state.diag.stageReached];
+  stageReached[stage] = true;
+  return {
+    ...state,
+    diag: {
+      ...state.diag,
+      currentStage: stage,
+      stageReached,
+    },
+    sys: cleanExit
+      ? {
+          ...state.sys,
+          priorIncompleteBoot: false,
+        }
+      : state.sys,
+  };
+}
+
+export function reportDiagError(
+  state: LauncherState,
+  code: DiagCode,
+  target: string,
+  path: string,
+  operation: string,
+  reason?: string,
+  impact?: string,
+  recovery?: string
+): LauncherState {
+  const tpl = getDiagDefaults(code);
+  const normTarget = target || path || 'N-Launcher';
+  const normPath = path || '/documents/ndless/';
+  const existingIdx = state.diag.entries.findIndex(
+    (e) => e.code === code && e.path.toLowerCase() === normPath.toLowerCase()
+  );
+
+  let nextEntries: DiagEntry[];
+  if (existingIdx >= 0) {
+    nextEntries = state.diag.entries.map((e, i) =>
+      i === existingIdx ? { ...e, count: e.count + 1 } : e
+    );
+  } else {
+    const newEntry: DiagEntry = {
+      code,
+      stage: state.diag.currentStage || 8,
+      count: 1,
+      resolved: tpl.resolved,
+      category: tpl.category,
+      title: tpl.title,
+      target: normTarget,
+      path: normPath,
+      operation: operation || 'Operation launcher',
+      reason: reason || tpl.reason,
+      impact: impact || tpl.impact,
+      recovery: recovery || tpl.recovery,
+    };
+    if (state.diag.entries.length >= NL_DIAG_MAX_ENTRIES) {
+      nextEntries = [...state.diag.entries.slice(1), newEntry];
+    } else {
+      nextEntries = [...state.diag.entries, newEntry];
+    }
+  }
+
+  return {
+    ...state,
+    diag: {
+      ...state.diag,
+      entries: nextEntries,
+      logBytes: estimateDiagLogBytes(nextEntries),
+    },
+  };
+}
+
+export function clearDiagLogs(state: LauncherState): LauncherState {
+  /* Safe log clearing: preserves games, saves, profiles, icons, settings, and active stage markers */
+  return {
+    ...state,
+    diag: {
+      ...state.diag,
+      entries: [],
+      warningSummaryShown: false,
+      logBytes: 0,
+    },
+    sys: {
+      ...state.sys,
+      priorIncompleteBoot: false,
+      lastCrashStage: 0,
+      lastCrashMode: '',
+    },
+    sui: {
+      ...state.sui,
+      diagCursor: 0,
+      diagScroll: 0,
+      diagDetailOpen: false,
+      diagConfirmModal: false,
+      diagConfirmYes: false,
+      diagClearReq: true,
+    },
+    toastMessage: 'Journaux diagnostiques effaces',
+    toastSeq: state.toastSeq + 1,
+  };
+}
+
+export function recoverMemoryOnOom(
+  state: LauncherState,
+  context: string,
+  path = '/documents/ndless/N-Launcher.tns'
+): LauncherState {
+  const freedGames = state.games.map((g) => ({
+    ...g,
+    screenshotDataUrl: null,
+  }));
+  const updated: LauncherState = {
+    ...state,
+    games: freedGames,
+    sys: {
+      ...state.sys,
+      oomRecoveries: state.sys.oomRecoveries + 1,
+    },
+  };
+  return reportDiagError(
+    updated,
+    'E801',
+    context || 'Allocation memoire',
+    path,
+    context || 'Allocation tampon',
+    'Memoire libre insuffisante (CX II-T heap)',
+    'Captures non critiques liberees proprement',
+    'Interface maintenue sans plantage'
+  );
+}
+
+export function setHardwarePreset(
+  state: LauncherState,
+  preset: HardwarePresetId
+): LauncherState {
+  const isCx2 = preset === 'CX2T_620';
+  return {
+    ...state,
+    sys: {
+      ...state.sys,
+      hwIsCx2: isCx2,
+      osVersion: isCx2 ? '6.2.0.333 (CX II-T)' : '4.5.0.1180 (CX CAS)',
+      ndlessRev: isCx2 ? 2026 : 2005,
+    },
+    toastMessage: isCx2 ? 'Cible : CX II-T (OS 6.2.0)' : 'Cible : CX CAS (OS 4.5.0)',
+    toastSeq: state.toastSeq + 1,
+  };
+}
+
+export function simulateFaultInjection(
+  state: LauncherState,
+  kind:
+    | 'MISSING_ICON'
+    | 'CORRUPT_ICON'
+    | 'MISSING_SCREENSHOT'
+    | 'CORRUPT_GAME'
+    | 'CORRUPT_CONFIG'
+    | 'MISSING_DIR'
+    | 'CORRUPT_PROFILE'
+    | 'OOM'
+    | 'PREV_CRASH'
+): LauncherState {
+  const g0 = state.games[0];
+  const gStem = g0 ? extractGameStem(g0.filename).toLowerCase() : 'ndoom';
+  const gTitle = g0?.title || 'Minecraft';
+  switch (kind) {
+    case 'MISSING_ICON':
+      return {
+        ...reportDiagError(
+          state,
+          'E102',
+          gTitle,
+          `/documents/ndless/icons/${gStem}.ico.tns`,
+          'Chargement icone',
+          'Fichier icone introuvable',
+          'Le jeu reste disponible et lancable',
+          'Icone de remplacement utilisee'
+        ),
+        toastMessage: `E102 (${gTitle}) : icone de remplacement`,
+        toastSeq: state.toastSeq + 1,
+      };
+    case 'CORRUPT_ICON':
+      return {
+        ...reportDiagError(
+          state,
+          'E103',
+          gTitle,
+          `/documents/ndless/icons/${gStem}.ico.tns`,
+          'Decodage icone ICO',
+          'Donnees BMP/ICO corrompues',
+          'Jeu conserve sans icone perso',
+          'Icone par defaut affichee'
+        ),
+        toastMessage: `E103 (${gTitle}) : icone isolee`,
+        toastSeq: state.toastSeq + 1,
+      };
+    case 'MISSING_SCREENSHOT':
+      return {
+        ...reportDiagError(
+          state,
+          'E104',
+          gTitle,
+          `/documents/ndless/covers/${gStem}.scr.tns`,
+          'Chargement capture',
+          'Fichier capture .scr.tns absent',
+          'Le jeu se lance normalement',
+          'Animation de remplacement utilisee'
+        ),
+        toastMessage: `E104 (${gTitle}) : animation de secours`,
+        toastSeq: state.toastSeq + 1,
+      };
+    case 'CORRUPT_GAME':
+      return {
+        ...reportDiagError(
+          state,
+          'E201',
+          'corrupted_rom.tns',
+          '/documents/ndless/games/corrupted_rom.tns',
+          'Verification Zehn/PRG',
+          'Signature binaire invalide (00 00 FF FF)',
+          'Ce jeu seul est exclu',
+          'Bibliotheque intacte pour les autres jeux'
+        ),
+        toastMessage: 'E201 : jeu corrompu isole sans crash',
+        toastSeq: state.toastSeq + 1,
+      };
+    case 'CORRUPT_CONFIG': {
+      const cfgErr = reportDiagError(
+        state,
+        'E301',
+        'nlauncher.cfg.tns',
+        '/documents/ndless/nlauncher.cfg.tns',
+        'Lecture configuration',
+        'Config illisible / tronquee',
+        'Reglages par defaut charges',
+        'Original preserve (.bak.tns)'
+      );
+      return {
+        ...cfgErr,
+        toastMessage: 'E301 : config par defaut chargee',
+        toastSeq: state.toastSeq + 1,
+      };
+    }
+    case 'MISSING_DIR':
+      return {
+        ...reportDiagError(
+          state,
+          'E401',
+          'covers',
+          '/documents/ndless/covers',
+          'Verification dossiers',
+          'Dossier covers absent',
+          'Recree automatiquement',
+          'Aucune perte de donnees'
+        ),
+        toastMessage: 'E401 : dossier recree sans risque',
+        toastSeq: state.toastSeq + 1,
+      };
+    case 'CORRUPT_PROFILE':
+      return {
+        ...reportDiagError(
+          state,
+          'E601',
+          'nlauncher.profiles.tns',
+          '/documents/ndless/nlauncher.profiles.tns',
+          'Chargement profils',
+          'Header/CRC profils invalide',
+          'Original preserve en .bak.tns',
+          'Recuperation + Profil 1 par defaut'
+        ),
+        toastMessage: 'E601 : profils preserves (.bak.tns)',
+        toastSeq: state.toastSeq + 1,
+      };
+    case 'OOM':
+      return {
+        ...recoverMemoryOnOom(state, 'Buffer framebuffer/icones', '/documents/ndless/N-Launcher.tns'),
+        toastMessage: 'E801 : memoire liberee proprement',
+        toastSeq: state.toastSeq + 1,
+      };
+    case 'PREV_CRASH':
+      return {
+        ...reportDiagError(
+          {
+            ...state,
+            sys: {
+              ...state.sys,
+              priorIncompleteBoot: true,
+              lastCrashStage: 3,
+              lastCrashMode: state.sys.ndlessPersistent ? 'Ndless Persistant' : 'Ndless Classique',
+            },
+          },
+          'E901',
+          'nlauncher.stage.tns',
+          '/documents/ndless/nlauncher.stage.tns',
+          'Reprise apres arret',
+          'Arret a: 3. Init memoire & diag',
+          `Mode: ${state.sys.ndlessPersistent ? 'Persistant' : 'Classique'} | OS: ${state.sys.osVersion}`,
+          'Trace des 12 etapes preservee'
+        ),
+        toastMessage: 'E901 : trace de boot anterieur chargee',
+        toastSeq: state.toastSeq + 1,
+      };
+  }
 }
 
 /* =========================================================================
@@ -4204,7 +5193,13 @@ function buildInitialProfileSystem(
         name: sanitizeProfileName(src.name || '', i + 1),
         avatarId,
         isPrimary,
+        isLocked: Boolean(src.isLocked),
         layout: src.layout && LAYOUT_ORDER.includes(src.layout) ? src.layout : defaultLayout,
+        scrollDir: src.scrollDir === 'horizontal' ? 'horizontal' : 'vertical',
+        appOpenAnim: clampAppOpenAnimMode(src.appOpenAnim ?? prefs?.settings?.appOpenAnim),
+        appCloseAnim: clampAppCloseAnimMode(src.appCloseAnim ?? prefs?.settings?.appCloseAnim),
+        launchAnimMode: clampLaunchAnimMode(src.launchAnimMode ?? prefs?.settings?.launchAnimMode),
+        returnAnimMode: clampReturnAnimMode(src.returnAnimMode ?? prefs?.settings?.returnAnimMode),
         showNames: typeof src.showNames === 'boolean' ? src.showNames : defaultShowNames,
         showShortcuts:
           typeof src.showShortcuts === 'boolean' ? src.showShortcuts : defaultShowShortcuts,
@@ -4271,7 +5266,13 @@ function buildInitialProfileSystem(
         name: 'Profil 1',
         avatarId: 0,
         isPrimary: true,
+        isLocked: false,
         layout: defaultLayout,
+        scrollDir: prefs?.settings?.scrollDir === 'horizontal' ? 'horizontal' : 'vertical',
+        appOpenAnim: clampAppOpenAnimMode(prefs?.settings?.appOpenAnim),
+        appCloseAnim: clampAppCloseAnimMode(prefs?.settings?.appCloseAnim),
+        launchAnimMode: clampLaunchAnimMode(prefs?.settings?.launchAnimMode),
+        returnAnimMode: clampReturnAnimMode(prefs?.settings?.returnAnimMode),
         showNames: defaultShowNames,
         showShortcuts: defaultShowShortcuts,
         sortOrder: defaultSort,
@@ -4350,6 +5351,11 @@ export function snapshotActiveProfile(state: LauncherState): LauncherState {
   const updatedProfile: UserProfile = {
     ...prevProf,
     layout: state.settings.layout,
+    scrollDir: state.settings.scrollDir ?? 'vertical',
+    appOpenAnim: clampAppOpenAnimMode(state.settings.appOpenAnim),
+    appCloseAnim: clampAppCloseAnimMode(state.settings.appCloseAnim),
+    launchAnimMode: clampLaunchAnimMode(state.settings.launchAnimMode),
+    returnAnimMode: clampReturnAnimMode(state.settings.returnAnimMode),
     showNames: state.settings.showNames,
     showShortcuts: state.settings.showShortcuts,
     sortOrder: state.settings.sortOrder,
@@ -4407,6 +5413,11 @@ export function applyActiveProfile(state: LauncherState): LauncherState {
     settings: {
       ...state.settings,
       layout: prof.layout,
+      scrollDir: prof.scrollDir ?? state.settings.scrollDir ?? 'vertical',
+      appOpenAnim: clampAppOpenAnimMode(prof.appOpenAnim ?? state.settings.appOpenAnim),
+      appCloseAnim: clampAppCloseAnimMode(prof.appCloseAnim ?? state.settings.appCloseAnim),
+      launchAnimMode: clampLaunchAnimMode(prof.launchAnimMode ?? state.settings.launchAnimMode),
+      returnAnimMode: clampReturnAnimMode(prof.returnAnimMode ?? state.settings.returnAnimMode),
       showNames: prof.showNames,
       showShortcuts: prof.showShortcuts,
       sortOrder: prof.sortOrder,
@@ -4471,11 +5482,13 @@ export function switchProfileTo(
       activeIndex: targetIdx,
     },
   });
+  const prevAvatarId = state.profiles.items[state.profiles.activeIndex]?.avatarId ?? 0;
   const prof = applied.profiles.items[targetIdx];
   return {
     ...applied,
     navSeq: applied.navSeq + 1,
     profSwitchSeq: (state.profSwitchSeq ?? 0) + 1,
+    profSwitchFromAvatarId: prevAvatarId,
     profSwitchAvatarId: prof.avatarId,
     profSwitchOriginX: originX ?? defaultOrigin.x,
     profSwitchOriginY: originY ?? defaultOrigin.y,
@@ -4523,7 +5536,13 @@ export function createUserProfile(
     name: sanitizeProfileName(name, newIdx + 1),
     avatarId,
     isPrimary: false,
+    isLocked: false,
     layout: '3x2',
+    scrollDir: snapped.settings.scrollDir ?? 'vertical',
+    appOpenAnim: clampAppOpenAnimMode(snapped.settings.appOpenAnim),
+    appCloseAnim: clampAppCloseAnimMode(snapped.settings.appCloseAnim),
+    launchAnimMode: clampLaunchAnimMode(snapped.settings.launchAnimMode),
+    returnAnimMode: clampReturnAnimMode(snapped.settings.returnAnimMode),
     showNames: false,
     showShortcuts: false,
     sortOrder: 'alpha_asc',
@@ -4551,12 +5570,46 @@ export function createUserProfile(
   };
 }
 
+export function isProfileProtected(state: LauncherState, profIdx: number): boolean {
+  if (!state.settings.profileLockEnabled) return false;
+  if (profIdx < 0 || profIdx >= state.profiles.items.length) return false;
+  return Boolean(state.profiles.items[profIdx].isLocked);
+}
+
+export function toggleProfileLock(
+  state: LauncherState,
+  profIdx: number
+): { state: LauncherState; ok: boolean; isLocked: boolean } {
+  if (profIdx < 0 || profIdx >= state.profiles.items.length) {
+    return { state, ok: false, isLocked: false };
+  }
+  const nextLocked = !Boolean(state.profiles.items[profIdx].isLocked);
+  return {
+    state: {
+      ...state,
+      profiles: {
+        ...state.profiles,
+        items: state.profiles.items.map((p, i) =>
+          i === profIdx ? { ...p, isLocked: nextLocked } : p
+        ),
+      },
+      toastMessage: nextLocked ? 'Profil verrouille' : 'Profil deverrouille',
+      toastSeq: state.toastSeq + 1,
+    },
+    ok: true,
+    isLocked: nextLocked,
+  };
+}
+
 export function renameUserProfile(
   state: LauncherState,
   profIdx: number,
   newName: string
 ): { state: LauncherState; ok: boolean } {
   if (profIdx < 0 || profIdx >= state.profiles.items.length) {
+    return { state, ok: false };
+  }
+  if (isProfileProtected(state, profIdx)) {
     return { state, ok: false };
   }
   const cleaned = newName
@@ -4584,6 +5637,7 @@ export function setUserProfileAvatar(
   avatarId: number
 ): { state: LauncherState; ok: boolean } {
   if (profIdx < 0 || profIdx >= state.profiles.items.length) return { state, ok: false };
+  if (isProfileProtected(state, profIdx)) return { state, ok: false };
   if (avatarId < 0 || avatarId >= NL_AVATAR_COUNT) return { state, ok: false };
   if (findAvatarOwner(state, avatarId, profIdx) >= 0) return { state, ok: false };
 
@@ -4606,6 +5660,7 @@ export function deleteUserProfile(
   if (state.profiles.items.length <= 1) return { state, ok: false };
   if (profIdx < 0 || profIdx >= state.profiles.items.length) return { state, ok: false };
   if (state.profiles.items[profIdx].isPrimary) return { state, ok: false };
+  if (isProfileProtected(state, profIdx)) return { state, ok: false };
 
   const snapped = snapshotActiveProfile(state);
   const oldActiveId = snapped.profiles.items[snapped.profiles.activeIndex]?.id;
@@ -5094,16 +6149,25 @@ export function resetSettingsOnly(state: LauncherState): LauncherState {
     settings: {
       autostart: false,
       globalHotkey: false,
+      hotkeyCombo: 'ctrl_menu',
       layout: '3x2',
+      scrollDir: 'vertical',
+      appOpenAnim: 'current',
+      appCloseAnim: 'liquid',
+      launchAnimMode: 'current',
+      returnAnimMode: 'liquid',
       showNames: false,
       showShortcuts: true,
       showBattery: false,
+      profileLockEnabled: false,
       touchpadMode: 'touchpad',
       touchpadNav: false,
       touchpadSensitivity: NL_TP_SENS_DEFAULT,
       cursorSpeed: NL_CURSOR_SPEED_DEFAULT,
       touchpadCursorShow: false,
       touchpadCursorStyle: 'arrow',
+      cursorSize: NL_CURSOR_SIZE_DEFAULT,
+      tapToClick: false,
       sortOrder: 'alpha_asc',
     },
     sys: {
@@ -5111,6 +6175,7 @@ export function resetSettingsOnly(state: LauncherState): LauncherState {
       autostartActive: false,
       autostartDiag: 'Demarrage automatique supprime',
       hotkeyActive: false,
+      hotkeyRamActive: false,
       hotkeyDiag: 'Raccourci global desactive',
       bootRecoveryTriggered: false,
       bootRecoveryReason: 'none',
@@ -5119,9 +6184,13 @@ export function resetSettingsOnly(state: LauncherState): LauncherState {
     sui: {
       ...state.sui,
       screen: 'SETTINGS_MAIN',
+      hotkeyCursor: 0,
       tpCursor: 0,
+      tpScroll: 0,
       tpTab: 0,
+      tpCustomRow: 0,
       tpStyleCursor: 0,
+      tpSizeCursor: cursorSizeToIndex(NL_CURSOR_SIZE_DEFAULT),
       resetConfirmYes: false,
       resetPerformed: true,
       hoverValid: false,
@@ -5133,6 +6202,87 @@ export function resetSettingsOnly(state: LauncherState): LauncherState {
     toastSeq: state.toastSeq + 1,
   };
   return updateMouseHover(snapshotActiveProfile(rebuildFilter(next)));
+}
+
+export function runSimulatorRescan(
+  state: LauncherState,
+  options?: { simulatedEmpty?: boolean; addedCount?: number; removedCount?: number }
+): LauncherState {
+  const prevCount = state.games.length;
+  const folderSet = new Set<string>();
+  for (const g of state.games) {
+    const slash = g.path.lastIndexOf('/');
+    if (slash > 0) {
+      folderSet.add(g.path.slice(0, slash));
+    }
+  }
+  const iconsLoaded = state.games.filter(
+    (g) => g.iconSource !== 'NONE' && Boolean(g.capturedIconDataUrl)
+  ).length;
+  const iconsFallback = Math.max(0, prevCount - iconsLoaded);
+  const rescanCount = (state.sui.rescan?.rescanCount ?? 0) + 1;
+
+  if (options?.simulatedEmpty && prevCount > 0) {
+    return {
+      ...state,
+      sui: {
+        ...state.sui,
+        screen: 'SETTINGS_RESCAN',
+        rescan: {
+          dirsScanned: Math.max(1, folderSet.size + 1),
+          filesExamined: Math.max(1, state.stats.scannedFiles),
+          gamesFound: 0,
+          gamesAdded: 0,
+          gamesKept: prevCount,
+          gamesRemoved: 0,
+          iconsLoaded,
+          iconsFallback,
+          memorizedFolders: Math.max(1, folderSet.size),
+          emptyConfirmPending: true,
+          emptyConfirmReplace: false,
+          finished: false,
+          rescanCount,
+        },
+      },
+      toastMessage: '0 JEU DETECTE — CONFIRMATION',
+      toastSeq: state.toastSeq + 1,
+    };
+  }
+
+  const added = Math.max(0, options?.addedCount ?? 0);
+  const removed = Math.max(0, Math.min(prevCount, options?.removedCount ?? 0));
+  const kept = Math.max(0, prevCount - removed);
+  const found = kept + added;
+
+  return rebuildFilter({
+    ...state,
+    sui: {
+      ...state.sui,
+      screen: 'SETTINGS_RESCAN',
+      rescan: {
+        dirsScanned: Math.max(1, folderSet.size + 2),
+        filesExamined: Math.max(found, state.stats.scannedFiles),
+        gamesFound: found,
+        gamesAdded: added,
+        gamesKept: kept,
+        gamesRemoved: removed,
+        iconsLoaded,
+        iconsFallback,
+        memorizedFolders: Math.max(1, folderSet.size),
+        emptyConfirmPending: false,
+        emptyConfirmReplace: false,
+        finished: true,
+        rescanCount,
+      },
+    },
+    sys: {
+      ...state.sys,
+      cacheValid: true,
+      cacheCrc32: computeLibraryCacheCrc32(state.games),
+    },
+    toastMessage: `RESCAN OK : ${found} JEU(X)`,
+    toastSeq: state.toastSeq + 1,
+  });
 }
 
 function triggerGameLaunch(
@@ -5196,6 +6346,13 @@ function assignShortcutKeyToGame(
   forceReplace: boolean
 ): LauncherState {
   if (gameIdx < 0 || gameIdx >= state.games.length) return state;
+  if (isProfileProtected(state, state.profiles.activeIndex)) {
+    return {
+      ...state,
+      toastMessage: 'Profil verrouille',
+      toastSeq: state.toastSeq + 1,
+    };
+  }
   const u = keyChar.toUpperCase();
   if (isShortcutReserved(u)) {
     return {
@@ -5315,6 +6472,7 @@ function applyRecoveryDisableToState(
       autostartActive: false,
       autostartDiag: 'Mode securise actif (reprise OS)',
       hotkeyActive: false,
+      hotkeyRamActive: false,
       hotkeyDiag: 'Desactive par mode securise',
       bootRecoveryTriggered: true,
       bootRecoveryReason: reason,
@@ -5797,8 +6955,6 @@ export function handleCharInput(
   if (state.sui.screen === 'LIBRARY') {
     if (state.sui.qpOpen) {
       if (ch === '.') return handleLauncherKey(state, 'PROFILE_QUICK', nowSec);
-      if (ch === '0') return handleLauncherKey(state, 'PROFILE_PREV', nowSec);
-      if (ch === '-') return handleLauncherKey(state, 'PROFILE_NEXT', nowSec);
       return state;
     }
 
@@ -5824,8 +6980,8 @@ export function handleCharInput(
     }
 
     if (ch === '.') return handleLauncherKey(state, 'PROFILE_QUICK', nowSec);
-    if (ch === '0') return handleLauncherKey(state, 'PROFILE_PREV', nowSec);
-    if (ch === '-') return handleLauncherKey(state, 'PROFILE_NEXT', nowSec);
+    if (ch === '0') return handleLauncherKey(state, 'PAGE_PREV', nowSec);
+    if (ch === '-') return handleLauncherKey(state, 'PAGE_NEXT', nowSec);
 
     const u = ch.toUpperCase();
     if (isShortcutAssignable(u)) {
@@ -5899,9 +7055,11 @@ function handleSettingsKey(
   }
   if (
     key === 'RESCAN' &&
+    sui.screen !== 'SETTINGS_RESCAN' &&
     sui.screen !== 'SETTINGS_SHORTCUTS' &&
     sui.screen !== 'SETTINGS_ICONS' &&
-    sui.screen !== 'SETTINGS_PROFILES'
+    sui.screen !== 'SETTINGS_PROFILES' &&
+    sui.screen !== 'SETTINGS_DIAG'
   ) {
     return requestCalculatorPoweroff(state);
   }
@@ -5929,29 +7087,21 @@ function handleSettingsKey(
         const item = SETTINGS_MENU_ITEMS[sui.menuCursor];
         if (!item) return state;
         if (item.id === 'SETTINGS_REFRESH_LIB') {
-          return rebuildFilter({
-            ...state,
-            sui: {
-              ...sui,
-              screen: 'LIBRARY',
-            },
-            sys: {
-              ...state.sys,
-              cacheValid: true,
-              cacheCrc32: computeLibraryCacheCrc32(state.games),
-            },
-            toastMessage: 'BIBLIOTHEQUE ACTUALISEE',
-            toastSeq: state.toastSeq + 1,
-          });
+          return runSimulatorRescan(state);
         }
         const baseSui: SettingsUiState = {
           ...sui,
           screen: item.id,
           displayCursor: 0,
           displayScroll: 0,
+          animCursor: 0,
+          hotkeyCursor: 0,
           tpCursor: 0,
+          tpScroll: 0,
           tpTab: 0,
+          tpCustomRow: 0,
           tpStyleCursor: clampCursorStyleToCard(state.settings.touchpadCursorStyle),
+          tpSizeCursor: cursorSizeToIndex(state.settings.cursorSize),
           scGameCursor: 0,
           scGameScroll: 0,
           scPickingKey: false,
@@ -5977,11 +7127,157 @@ function handleSettingsKey(
           profAvatarCursor: 0,
           profDeleteYes: false,
           profFromQuick: false,
+          diagTab: 0,
+          diagCursor: 0,
+          diagScroll: 0,
+          diagDetailOpen: false,
+          diagConfirmModal: false,
+          diagConfirmYes: false,
+          diagClearReq: false,
         };
         if (item.id === 'SETTINGS_CAPTURE_BATCH') {
           return initBatchCapture({ ...state, sui: baseSui });
         }
         return { ...state, sui: baseSui };
+      }
+      return state;
+    }
+
+    case 'SETTINGS_DIAG': {
+      const diagCount = state.diag.entries.length;
+      if (sui.diagConfirmModal) {
+        if (key === 'ESC') {
+          return {
+            ...state,
+            sui: { ...sui, diagConfirmModal: false, diagConfirmYes: false },
+          };
+        }
+        if (key === 'LEFT' || key === 'RIGHT' || key === 'UP' || key === 'DOWN') {
+          return {
+            ...state,
+            sui: { ...sui, diagConfirmYes: !sui.diagConfirmYes },
+          };
+        }
+        if (key === 'EXE') {
+          if (sui.diagConfirmYes) {
+            return clearDiagLogs(state);
+          }
+          return {
+            ...state,
+            sui: { ...sui, diagConfirmModal: false, diagConfirmYes: false },
+          };
+        }
+        return state;
+      }
+
+      if (sui.diagDetailOpen) {
+        if (key === 'ESC' || key === 'EXE') {
+          return { ...state, sui: { ...sui, diagDetailOpen: false } };
+        }
+        if (key === 'LEFT' || key === 'UP') {
+          if (diagCount > 0 && sui.diagCursor > 0) {
+            const nextCur = sui.diagCursor - 1;
+            return {
+              ...state,
+              sui: {
+                ...sui,
+                diagCursor: nextCur,
+                diagScroll: adjustScroll(nextCur, sui.diagScroll, 4),
+              },
+            };
+          }
+          return state;
+        }
+        if (key === 'RIGHT' || key === 'DOWN') {
+          if (diagCount > 0 && sui.diagCursor + 1 < diagCount) {
+            const nextCur = sui.diagCursor + 1;
+            return {
+              ...state,
+              sui: {
+                ...sui,
+                diagCursor: nextCur,
+                diagScroll: adjustScroll(nextCur, sui.diagScroll, 4),
+              },
+            };
+          }
+          return state;
+        }
+        return state;
+      }
+
+      if (key === 'ESC') {
+        return { ...state, sui: { ...sui, screen: 'SETTINGS_MAIN' } };
+      }
+      if (key === 'TAB' || key === 'LEFT' || key === 'RIGHT') {
+        return {
+          ...state,
+          sui: {
+            ...sui,
+            diagTab: sui.diagTab === 0 ? 1 : 0,
+            diagCursor: 0,
+            diagScroll: 0,
+            diagDetailOpen: false,
+          },
+        };
+      }
+      if (sui.diagTab === 0) {
+        const maxIdx = diagCount; // 0..diagCount-1 = entries, diagCount = Clear button
+        if (key === 'RESCAN' || key === 'BACKSPACE') {
+          return {
+            ...state,
+            sui: {
+              ...sui,
+              diagConfirmModal: true,
+              diagConfirmYes: false, // Safe Annuler default
+            },
+          };
+        }
+        if (key === 'UP') {
+          const nextCur = sui.diagCursor > 0 ? sui.diagCursor - 1 : maxIdx;
+          const listCur =
+            nextCur < diagCount ? nextCur : diagCount > 0 ? diagCount - 1 : 0;
+          return {
+            ...state,
+            sui: {
+              ...sui,
+              diagCursor: nextCur,
+              diagScroll: adjustScroll(listCur, sui.diagScroll, 4),
+            },
+          };
+        }
+        if (key === 'DOWN') {
+          const nextCur = (sui.diagCursor + 1) % (maxIdx + 1);
+          const listCur =
+            nextCur < diagCount ? nextCur : diagCount > 0 ? diagCount - 1 : 0;
+          return {
+            ...state,
+            sui: {
+              ...sui,
+              diagCursor: nextCur,
+              diagScroll: adjustScroll(listCur, sui.diagScroll, 4),
+            },
+          };
+        }
+        if (key === 'EXE') {
+          if (sui.diagCursor >= 0 && sui.diagCursor < diagCount) {
+            return { ...state, sui: { ...sui, diagDetailOpen: true } };
+          }
+          return {
+            ...state,
+            sui: {
+              ...sui,
+              diagConfirmModal: true,
+              diagConfirmYes: false,
+            },
+          };
+        }
+      } else {
+        if (key === 'UP' && sui.diagScroll > 0) {
+          return { ...state, sui: { ...sui, diagScroll: sui.diagScroll - 1 } };
+        }
+        if (key === 'DOWN' && sui.diagScroll < 6) {
+          return { ...state, sui: { ...sui, diagScroll: sui.diagScroll + 1 } };
+        }
       }
       return state;
     }
@@ -6030,10 +7326,16 @@ function handleSettingsKey(
           );
         }
         if (sui.displayCursor === 1) {
+          const nextDir: ScrollDir =
+            (state.settings.scrollDir ?? 'vertical') === 'horizontal'
+              ? 'vertical'
+              : 'horizontal';
           return snapshotActiveProfile(
             rebuildFilter({
               ...state,
-              settings: { ...state.settings, showNames: !state.settings.showNames },
+              settings: { ...state.settings, scrollDir: nextDir },
+              toastMessage: `Defilement : ${SCROLL_DIR_LABELS[nextDir]}`,
+              toastSeq: state.toastSeq + 1,
             })
           );
         }
@@ -6041,13 +7343,82 @@ function handleSettingsKey(
           return snapshotActiveProfile(
             rebuildFilter({
               ...state,
+              settings: { ...state.settings, showNames: !state.settings.showNames },
+            })
+          );
+        }
+        if (sui.displayCursor === 3) {
+          return snapshotActiveProfile(
+            rebuildFilter({
+              ...state,
               settings: { ...state.settings, showShortcuts: !state.settings.showShortcuts },
             })
           );
         }
-        if (sui.displayCursor === 3 && key === 'EXE') {
+        if (sui.displayCursor === 4 && key === 'EXE') {
           return requestCalculatorPoweroff(state);
         }
+      }
+      return state;
+    }
+
+    case 'SETTINGS_ANIMATIONS': {
+      if (key === 'ESC') {
+        return { ...state, sui: { ...sui, screen: 'SETTINGS_MAIN' } };
+      }
+      if (key === 'UP') {
+        const cur = sui.animCursor > 0 ? sui.animCursor - 1 : NL_ANIM_CAT_COUNT - 1;
+        return { ...state, sui: { ...sui, animCursor: cur } };
+      }
+      if (key === 'DOWN') {
+        const cur = (sui.animCursor + 1) % NL_ANIM_CAT_COUNT;
+        return { ...state, sui: { ...sui, animCursor: cur } };
+      }
+      if (key === 'LEFT' || key === 'RIGHT' || key === 'EXE') {
+        const dir = key === 'LEFT' ? -1 : 1;
+        const row = Math.max(0, Math.min(NL_ANIM_CAT_COUNT - 1, sui.animCursor));
+        if (row === 0) {
+          const curIdx = APP_OPEN_ANIM_ORDER.indexOf(clampAppOpenAnimMode(state.settings.appOpenAnim));
+          const nextIdx = (curIdx + dir + NL_OPEN_ANIM_COUNT) % NL_OPEN_ANIM_COUNT;
+          const nextMode = APP_OPEN_ANIM_ORDER[nextIdx];
+          return snapshotActiveProfile({
+            ...state,
+            settings: { ...state.settings, appOpenAnim: nextMode },
+            toastMessage: `Ouverture : ${APP_OPEN_ANIM_LABELS[nextMode]}`,
+            toastSeq: state.toastSeq + 1,
+          });
+        }
+        if (row === 1) {
+          const curIdx = APP_CLOSE_ANIM_ORDER.indexOf(clampAppCloseAnimMode(state.settings.appCloseAnim));
+          const nextIdx = (curIdx + dir + NL_CLOSE_ANIM_COUNT) % NL_CLOSE_ANIM_COUNT;
+          const nextMode = APP_CLOSE_ANIM_ORDER[nextIdx];
+          return snapshotActiveProfile({
+            ...state,
+            settings: { ...state.settings, appCloseAnim: nextMode },
+            toastMessage: `Fermeture : ${APP_CLOSE_ANIM_LABELS[nextMode]}`,
+            toastSeq: state.toastSeq + 1,
+          });
+        }
+        if (row === 2) {
+          const curIdx = LAUNCH_ANIM_ORDER.indexOf(clampLaunchAnimMode(state.settings.launchAnimMode));
+          const nextIdx = (curIdx + dir + NL_LAUNCH_ANIM_COUNT) % NL_LAUNCH_ANIM_COUNT;
+          const nextMode = LAUNCH_ANIM_ORDER[nextIdx];
+          return snapshotActiveProfile({
+            ...state,
+            settings: { ...state.settings, launchAnimMode: nextMode },
+            toastMessage: `Lancement : ${LAUNCH_ANIM_LABELS[nextMode]}`,
+            toastSeq: state.toastSeq + 1,
+          });
+        }
+        const curIdx = RETURN_ANIM_ORDER.indexOf(clampReturnAnimMode(state.settings.returnAnimMode));
+        const nextIdx = (curIdx + dir + NL_RETURN_ANIM_COUNT) % NL_RETURN_ANIM_COUNT;
+        const nextMode = RETURN_ANIM_ORDER[nextIdx];
+        return snapshotActiveProfile({
+          ...state,
+          settings: { ...state.settings, returnAnimMode: nextMode },
+          toastMessage: `Retour : ${RETURN_ANIM_LABELS[nextMode]}`,
+          toastSeq: state.toastSeq + 1,
+        });
       }
       return state;
     }
@@ -6066,52 +7437,78 @@ function handleSettingsKey(
           sui: {
             ...sui,
             tpTab: nextTab,
+            tpCustomRow: 0,
             tpStyleCursor: clampCursorStyleToCard(state.settings.touchpadCursorStyle),
+            tpSizeCursor: cursorSizeToIndex(state.settings.cursorSize),
           },
         };
       }
       if (sui.tpTab === 1) {
-        if (key === 'LEFT' || key === 'UP') {
-          const nextStyleIdx = (sui.tpStyleCursor + 2) % 3;
-          const chosen = cardIndexToCursorStyle(nextStyleIdx);
-          return {
-            ...state,
-            settings: { ...state.settings, touchpadCursorStyle: chosen },
-            sui: { ...sui, tpStyleCursor: nextStyleIdx },
-            toastMessage: `Style : ${CURSOR_STYLE_LABELS[chosen]}`,
-            toastSeq: state.toastSeq + 1,
-          };
+        if (key === 'UP' || key === 'DOWN') {
+          const nextRow: 0 | 1 = sui.tpCustomRow === 0 ? 1 : 0;
+          return { ...state, sui: { ...sui, tpCustomRow: nextRow } };
         }
-        if (key === 'RIGHT' || key === 'DOWN') {
-          const nextStyleIdx = (sui.tpStyleCursor + 1) % 3;
-          const chosen = cardIndexToCursorStyle(nextStyleIdx);
-          return {
-            ...state,
-            settings: { ...state.settings, touchpadCursorStyle: chosen },
-            sui: { ...sui, tpStyleCursor: nextStyleIdx },
-            toastMessage: `Style : ${CURSOR_STYLE_LABELS[chosen]}`,
-            toastSeq: state.toastSeq + 1,
-          };
+        if (key === 'LEFT' || key === 'RIGHT') {
+          const delta = key === 'RIGHT' ? 1 : 2;
+          if (sui.tpCustomRow === 0) {
+            const nextStyleIdx = (sui.tpStyleCursor + delta) % 3;
+            const chosen = cardIndexToCursorStyle(nextStyleIdx);
+            return {
+              ...state,
+              settings: { ...state.settings, touchpadCursorStyle: chosen },
+              sui: { ...sui, tpStyleCursor: nextStyleIdx },
+              toastMessage: `Style : ${CURSOR_STYLE_LABELS[chosen]}`,
+              toastSeq: state.toastSeq + 1,
+            };
+          } else {
+            const nextSizeIdx = (sui.tpSizeCursor + delta) % 3;
+            const chosenSize = indexToCursorSize(nextSizeIdx);
+            return {
+              ...state,
+              settings: { ...state.settings, cursorSize: chosenSize },
+              sui: { ...sui, tpSizeCursor: nextSizeIdx },
+              toastMessage: `Taille curseur : ${CURSOR_SIZE_LABELS[chosenSize]}`,
+              toastSeq: state.toastSeq + 1,
+            };
+          }
         }
         if (key === 'EXE') {
-          const chosen = cardIndexToCursorStyle(sui.tpStyleCursor);
-          return {
-            ...state,
-            settings: { ...state.settings, touchpadCursorStyle: chosen },
-            toastMessage: `Curseur : ${CURSOR_STYLE_LABELS[chosen]}`,
-            toastSeq: state.toastSeq + 1,
-          };
+          if (sui.tpCustomRow === 0) {
+            const chosen = cardIndexToCursorStyle(sui.tpStyleCursor);
+            return {
+              ...state,
+              settings: { ...state.settings, touchpadCursorStyle: chosen },
+              toastMessage: `Curseur : ${CURSOR_STYLE_LABELS[chosen]}`,
+              toastSeq: state.toastSeq + 1,
+            };
+          } else {
+            const chosenSize = indexToCursorSize(sui.tpSizeCursor);
+            return {
+              ...state,
+              settings: { ...state.settings, cursorSize: chosenSize },
+              toastMessage: `Taille curseur : ${CURSOR_SIZE_LABELS[chosenSize]}`,
+              toastSeq: state.toastSeq + 1,
+            };
+          }
         }
         return state;
       }
 
       if (key === 'UP') {
-        const nextCursor = (sui.tpCursor + 4) % 5;
-        return { ...state, sui: { ...sui, tpCursor: nextCursor } };
+        const nextCursor = (sui.tpCursor + NL_TP_TAB0_ROW_COUNT - 1) % NL_TP_TAB0_ROW_COUNT;
+        const nextScroll = Math.min(
+          NL_TP_TAB0_ROW_COUNT - NL_TP_TAB0_VISIBLE_ROWS,
+          adjustScroll(nextCursor, sui.tpScroll, NL_TP_TAB0_VISIBLE_ROWS)
+        );
+        return { ...state, sui: { ...sui, tpCursor: nextCursor, tpScroll: nextScroll } };
       }
       if (key === 'DOWN') {
-        const nextCursor = (sui.tpCursor + 1) % 5;
-        return { ...state, sui: { ...sui, tpCursor: nextCursor } };
+        const nextCursor = (sui.tpCursor + 1) % NL_TP_TAB0_ROW_COUNT;
+        const nextScroll = Math.min(
+          NL_TP_TAB0_ROW_COUNT - NL_TP_TAB0_VISIBLE_ROWS,
+          adjustScroll(nextCursor, sui.tpScroll, NL_TP_TAB0_VISIBLE_ROWS)
+        );
+        return { ...state, sui: { ...sui, tpCursor: nextCursor, tpScroll: nextScroll } };
       }
       if (sui.tpCursor === 0) {
         if (key === 'EXE' || key === 'LEFT' || key === 'RIGHT') {
@@ -6169,13 +7566,39 @@ function handleSettingsKey(
           };
         }
       } else if (sui.tpCursor === 4) {
+        if (key === 'EXE' || key === 'LEFT' || key === 'RIGHT') {
+          const nextTap = !state.settings.tapToClick;
+          return {
+            ...state,
+            settings: { ...state.settings, tapToClick: nextTap },
+            toastMessage: nextTap ? 'Tapotement pour cliquer : OUI' : 'Tapotement pour cliquer : NON',
+            toastSeq: state.toastSeq + 1,
+          };
+        }
+      } else if (sui.tpCursor === 5) {
+        if (key === 'EXE' || key === 'LEFT' || key === 'RIGHT') {
+          const curIdx = cursorSizeToIndex(state.settings.cursorSize);
+          const delta = key === 'LEFT' ? 2 : 1;
+          const nextIdx = (curIdx + delta) % 3;
+          const nextSize = indexToCursorSize(nextIdx);
+          return {
+            ...state,
+            settings: { ...state.settings, cursorSize: nextSize },
+            sui: { ...sui, tpSizeCursor: nextIdx },
+            toastMessage: `Taille curseur : ${CURSOR_SIZE_LABELS[nextSize]}`,
+            toastSeq: state.toastSeq + 1,
+          };
+        }
+      } else if (sui.tpCursor === 6) {
         if (key === 'EXE' || key === 'RIGHT') {
           return {
             ...state,
             sui: {
               ...sui,
               tpTab: 1,
+              tpCustomRow: 0,
               tpStyleCursor: clampCursorStyleToCard(state.settings.touchpadCursorStyle),
+              tpSizeCursor: cursorSizeToIndex(state.settings.cursorSize),
             },
           };
         }
@@ -6470,7 +7893,7 @@ function handleSettingsKey(
       const pcount = state.profiles.items.length;
       switch (sui.profMode) {
         case 'LIST': {
-          const totalRows = pcount + 1;
+          const totalRows = pcount + 2;
           if (key === 'ESC') {
             return { ...state, sui: { ...sui, screen: 'SETTINGS_MAIN' } };
           }
@@ -6488,8 +7911,28 @@ function handleSettingsKey(
               sui: { ...sui, profCursor: cur, profScroll: adjustScroll(cur, sui.profScroll, 6) },
             };
           }
+          if (key === 'LEFT' && sui.profCursor === 0) {
+            const nextLockEn = !Boolean(state.settings.profileLockEnabled);
+            return {
+              ...state,
+              settings: { ...state.settings, profileLockEnabled: nextLockEn },
+              toastMessage: nextLockEn ? 'Cadenas profils : ACTIF' : 'Cadenas profils : DESACTIVE',
+              toastSeq: state.toastSeq + 1,
+            };
+          }
           if (key === 'EXE' || key === 'RIGHT') {
             if (sui.profCursor === 0) {
+              const nextLockEn = !Boolean(state.settings.profileLockEnabled);
+              return {
+                ...state,
+                settings: { ...state.settings, profileLockEnabled: nextLockEn },
+                toastMessage: nextLockEn
+                  ? 'Cadenas profils : ACTIF'
+                  : 'Cadenas profils : DESACTIVE',
+                toastSeq: state.toastSeq + 1,
+              };
+            }
+            if (sui.profCursor === 1) {
               const freeId = firstFreeAvatar(state);
               if (pcount >= NL_MAX_PROFILES || freeId < 0) {
                 return {
@@ -6504,7 +7947,7 @@ function handleSettingsKey(
                 ...state,
                 profPlusSeq: (state.profPlusSeq ?? 0) + 1,
                 profPlusOriginX: 25,
-                profPlusOriginY: 48,
+                profPlusOriginY: 78,
                 sui: {
                   ...sui,
                   profMode: 'CREATE_AVATAR',
@@ -6515,7 +7958,7 @@ function handleSettingsKey(
                 },
               };
             }
-            const target = sui.profCursor - 1;
+            const target = sui.profCursor - 2;
             if (target >= 0 && target < pcount) {
               return {
                 ...state,
@@ -6536,19 +7979,29 @@ function handleSettingsKey(
             return { ...state, sui: { ...sui, profMode: 'LIST' } };
           }
           const dp = state.profiles.items[sui.profDetailIdx];
+          const lockEn = Boolean(state.settings.profileLockEnabled);
+          const detailRows = lockEn ? 5 : 4;
+          const isProt = isProfileProtected(state, sui.profDetailIdx);
           if (key === 'ESC' || key === 'LEFT') {
             return { ...state, sui: { ...sui, profMode: 'LIST' } };
           }
           if (key === 'UP') {
-            const cur = sui.profDetailCursor > 0 ? sui.profDetailCursor - 1 : 3;
+            const cur = sui.profDetailCursor > 0 ? sui.profDetailCursor - 1 : detailRows - 1;
             return { ...state, sui: { ...sui, profDetailCursor: cur } };
           }
           if (key === 'DOWN') {
-            const cur = (sui.profDetailCursor + 1) % 4;
+            const cur = (sui.profDetailCursor + 1) % detailRows;
             return { ...state, sui: { ...sui, profDetailCursor: cur } };
           }
           if (key === 'EXE' || key === 'RIGHT') {
             if (sui.profDetailCursor === 0) {
+              if (isProt) {
+                return {
+                  ...state,
+                  toastMessage: 'Profil verrouille',
+                  toastSeq: state.toastSeq + 1,
+                };
+              }
               return {
                 ...state,
                 sui: {
@@ -6559,6 +8012,13 @@ function handleSettingsKey(
               };
             }
             if (sui.profDetailCursor === 1) {
+              if (isProt) {
+                return {
+                  ...state,
+                  toastMessage: 'Profil verrouille',
+                  toastSeq: state.toastSeq + 1,
+                };
+              }
               const cat = getAvatarCategoryOf(dp.avatarId);
               const { start, count } = getAvatarCategoryRange(cat);
               let avCur = dp.avatarId - start;
@@ -6583,7 +8043,18 @@ function handleSettingsKey(
               }
               return switchProfileTo(state, sui.profDetailIdx);
             }
-            if (sui.profDetailCursor === 3) {
+            if (lockEn && sui.profDetailCursor === 3) {
+              return toggleProfileLock(state, sui.profDetailIdx).state;
+            }
+            const delRow = lockEn ? 4 : 3;
+            if (sui.profDetailCursor === delRow) {
+              if (isProt) {
+                return {
+                  ...state,
+                  toastMessage: 'Profil verrouille',
+                  toastSeq: state.toastSeq + 1,
+                };
+              }
               if (dp.isPrimary || pcount <= 1) {
                 return {
                   ...state,
@@ -6927,11 +8398,117 @@ function handleSettingsKey(
       return state;
     }
 
+    case 'SETTINGS_RESCAN': {
+      const rs = sui.rescan;
+      if (rs.emptyConfirmPending) {
+        if (key === 'LEFT' || key === 'RIGHT') {
+          return {
+            ...state,
+            sui: {
+              ...sui,
+              rescan: { ...rs, emptyConfirmReplace: !rs.emptyConfirmReplace },
+            },
+          };
+        }
+        if (key === 'ESC') {
+          return {
+            ...state,
+            sui: {
+              ...sui,
+              rescan: {
+                ...rs,
+                emptyConfirmPending: false,
+                emptyConfirmReplace: false,
+                finished: true,
+              },
+            },
+            toastMessage: 'BIBLIOTHEQUE CONSERVEE',
+            toastSeq: state.toastSeq + 1,
+          };
+        }
+        if (key === 'EXE') {
+          if (rs.emptyConfirmReplace) {
+            return rebuildFilter({
+              ...state,
+              games: [],
+              sui: {
+                ...sui,
+                rescan: {
+                  ...rs,
+                  gamesFound: 0,
+                  gamesKept: 0,
+                  gamesRemoved: state.games.length,
+                  emptyConfirmPending: false,
+                  emptyConfirmReplace: false,
+                  finished: true,
+                },
+              },
+              sys: {
+                ...state.sys,
+                cacheValid: false,
+                cacheCrc32: 0,
+              },
+              toastMessage: 'BIBLIOTHEQUE VIDEE',
+              toastSeq: state.toastSeq + 1,
+            });
+          }
+          return {
+            ...state,
+            sui: {
+              ...sui,
+              rescan: {
+                ...rs,
+                emptyConfirmPending: false,
+                emptyConfirmReplace: false,
+                finished: true,
+              },
+            },
+            toastMessage: 'BIBLIOTHEQUE CONSERVEE',
+            toastSeq: state.toastSeq + 1,
+          };
+        }
+        return state;
+      }
+
+      if (key === 'ESC' || key === 'EXE') {
+        return { ...state, sui: { ...sui, screen: 'SETTINGS_MAIN' } };
+      }
+      if (key === 'BACKSPACE' || key === 'RESCAN') {
+        return runSimulatorRescan(state);
+      }
+      return state;
+    }
+
     case 'SETTINGS_HOTKEY': {
       if (key === 'ESC') {
         return { ...state, sui: { ...sui, screen: 'SETTINGS_MAIN' } };
       }
+      if (key === 'UP' || key === 'DOWN') {
+        return {
+          ...state,
+          sui: { ...sui, hotkeyCursor: sui.hotkeyCursor === 0 ? 1 : 0 },
+        };
+      }
       if (key === 'EXE' || key === 'LEFT' || key === 'RIGHT') {
+        if (sui.hotkeyCursor === 1) {
+          const curIdx = HOTKEY_COMBO_ORDER.indexOf(state.settings.hotkeyCombo ?? 'ctrl_menu');
+          const delta = key === 'LEFT' ? -1 : 1;
+          const nextCombo =
+            HOTKEY_COMBO_ORDER[(curIdx + delta + HOTKEY_COMBO_ORDER.length) % HOTKEY_COMBO_ORDER.length];
+          const lbl = HOTKEY_COMBO_LABELS[nextCombo];
+          return {
+            ...state,
+            settings: { ...state.settings, hotkeyCombo: nextCombo },
+            sys: state.settings.globalHotkey
+              ? {
+                  ...state.sys,
+                  hotkeyDiag: `RAM + startup : ${lbl}`,
+                }
+              : state.sys,
+            toastMessage: `Touche : ${lbl}`,
+            toastSeq: state.toastSeq + 1,
+          };
+        }
         const target = !state.settings.globalHotkey;
         if (!state.sys.hasNdless) {
           return {
@@ -6940,23 +8517,26 @@ function handleSettingsKey(
             sys: {
               ...state.sys,
               hotkeyActive: false,
+              hotkeyRamActive: false,
               hotkeyDiag: 'Ndless requis pour le hook TI-OS',
             },
             toastMessage: 'Ndless requis',
             toastSeq: state.toastSeq + 1,
           };
         }
+        const lbl = HOTKEY_COMBO_LABELS[state.settings.hotkeyCombo ?? 'ctrl_menu'];
         return {
           ...state,
           settings: { ...state.settings, globalHotkey: target },
           sys: {
             ...state.sys,
             hotkeyActive: target,
+            hotkeyRamActive: target,
             hotkeyDiag: target
-              ? 'Raccourci Ctrl+Menu actif (nl_hotkey.tns)'
-              : 'Raccourci global desactive',
+              ? `RAM + startup : ${lbl}`
+              : 'Raccourci TI-OS desactive',
           },
-          toastMessage: target ? 'Raccourci TI-OS : ON' : 'Raccourci TI-OS : OFF',
+          toastMessage: target ? `Raccourci (${lbl}): ON` : 'Raccourci TI-OS : OFF',
           toastSeq: state.toastSeq + 1,
         };
       }
@@ -7000,27 +8580,37 @@ export function handleLauncherKey(
             )
           : state.games;
       /* Refresh library sort ONLY upon returning from the game (never on launch) */
-      const rebuilt = rebuildFilter({
+      const baseReturned: LauncherState = {
         ...state,
         games: updatedGames,
         runningGameIndex: null,
         runningStartMs: null,
         lastExecStatus: 0,
-      });
-      const newSlot = rebuilt.filteredIndices.indexOf(gIdx);
+      };
+      const needsRebuild = returnNeedsFilterRebuild(baseReturned);
+      const rebuilt = needsRebuild ? rebuildFilter(baseReturned) : baseReturned;
+      const newSlot = needsRebuild ? rebuilt.filteredIndices.indexOf(gIdx) : state.selectedPos;
       const mAfter = getLayoutMetrics(
         rebuilt.settings.layout,
         rebuilt.settings.showNames,
         rebuilt.settings.showShortcuts
       );
+      const emitReturnAnim = clampReturnAnimMode(rebuilt.settings.returnAnimMode) !== 'instant';
+      const nextRetSeq = emitReturnAnim ? (state.returnDropSeq ?? 0) + 1 : (state.returnDropSeq ?? 0);
       const exitedState: LauncherState =
         newSlot >= 0
           ? {
               ...rebuilt,
               selectedPos: newSlot,
               currentPage: Math.floor(newSlot / mAfter.perPage),
+              returnDropSeq: nextRetSeq,
+              returnDropGameIdx: gIdx,
             }
-          : rebuilt;
+          : {
+              ...rebuilt,
+              returnDropSeq: nextRetSeq,
+              returnDropGameIdx: gIdx,
+            };
       return snapshotActiveProfile(exitedState);
     }
     return state;
@@ -7298,6 +8888,13 @@ export function handleLauncherKey(
     }
     case 'FAV': {
       if (count === 0) return state;
+      if (isProfileProtected(state, state.profiles.activeIndex)) {
+        return {
+          ...state,
+          toastMessage: 'Profil verrouille',
+          toastSeq: state.toastSeq + 1,
+        };
+      }
       const gameIdx = state.filteredIndices[state.selectedPos];
       const nextFav = !state.games[gameIdx].isFavorite;
       const updatedGames = state.games.map((g, i) =>
@@ -7417,15 +9014,18 @@ export function computeTouchpadCursorTarget(state: LauncherState): { x: number; 
         state.settings.layout,
         state.settings.showNames,
         state.settings.showShortcuts,
-        state.filteredIndices.length
+        state.filteredIndices.length,
+        state.settings.scrollDir ?? 'vertical'
       );
       const pos = Math.max(0, Math.min(state.filteredIndices.length - 1, state.selectedPos));
       const page = Math.trunc(pos / m.perPage);
-      const scrollY = page * m.pageStrideY;
+      const scrollX = m.isHorizontal ? page * m.pageStrideX : 0;
+      const scrollY = m.isHorizontal ? 0 : page * m.pageStrideY;
       const searchH = state.sui.searchActive ? 28 : 0;
       const slot = computeGridSlotPos(m, state.filteredIndices.length, pos);
+      const sx = slot.x - scrollX;
       const sy = slot.y + searchH - scrollY;
-      tx = slot.x + Math.trunc(m.cardW / 2);
+      tx = sx + Math.trunc(m.cardW / 2);
       ty = sy + Math.trunc(m.cardH / 2);
     }
   } else if (state.sui.screen === 'SETTINGS_MAIN') {
@@ -7434,32 +9034,39 @@ export function computeTouchpadCursorTarget(state: LauncherState): { x: number; 
     ty = 32 + rel * 30 + 14;
   } else if (state.sui.screen === 'SETTINGS_TOUCHPAD') {
     if (state.sui.tpTab === 1) {
-      const c = Math.max(0, Math.min(2, state.sui.tpStyleCursor));
-      tx = 59 + c * 101;
-      ty = 108;
-    } else {
-      const r = Math.max(0, Math.min(4, state.sui.tpCursor));
-      if (r === 0) {
-        tx = 240;
-        ty = 61;
-      } else if (r === 1) {
-        tx = 266;
-        ty = 90;
-      } else if (r === 2) {
-        tx = 34 + clampTouchpadSensitivity(state.settings.touchpadSensitivity) * 63;
-        ty = 131;
-      } else if (r === 3) {
-        tx = 34 + clampCursorSpeed(state.settings.cursorSpeed) * 63;
-        ty = 171;
+      if (state.sui.tpCustomRow === 1) {
+        const s = Math.max(0, Math.min(2, state.sui.tpSizeCursor));
+        tx = 59 + s * 101;
+        ty = 178;
       } else {
-        tx = 250;
-        ty = 201;
+        const c = Math.max(0, Math.min(2, state.sui.tpStyleCursor));
+        tx = 59 + c * 101;
+        ty = 92;
+      }
+    } else {
+      const rects = getTouchpadTab0RowRects(state.sui.tpScroll);
+      const hit = rects.find((r) => r.row === state.sui.tpCursor) ?? rects[0];
+      if (hit) {
+        ty = hit.y + Math.floor(hit.h / 2);
+        if (hit.row === 2) {
+          tx = 34 + clampTouchpadSensitivity(state.settings.touchpadSensitivity) * 63;
+          ty = hit.y + 22;
+        } else if (hit.row === 3) {
+          tx = 34 + clampCursorSpeed(state.settings.cursorSpeed) * 63;
+          ty = hit.y + 22;
+        } else {
+          tx = 250;
+        }
       }
     }
   } else if (state.sui.screen === 'SETTINGS_DISPLAY') {
     const rel = Math.max(0, Math.min(2, state.sui.displayCursor - state.sui.displayScroll));
     tx = 160;
-    ty = 30 + rel * 30 + 14;
+    ty = 30 + rel * 31 + 14;
+  } else if (state.sui.screen === 'SETTINGS_ANIMATIONS') {
+    const ac = Math.max(0, Math.min(NL_ANIM_CAT_COUNT - 1, state.sui.animCursor));
+    tx = 160;
+    ty = 48 + ac * 28 + 12;
   } else if (state.sui.screen === 'SETTINGS_PROFILES') {
     if (state.sui.profMode === 'LIST') {
       const rel = Math.max(0, Math.min(5, state.sui.profCursor - state.sui.profScroll));
@@ -7475,6 +9082,20 @@ export function computeTouchpadCursorTarget(state: LauncherState): { x: number; 
       tx = 160;
       ty = 120;
     }
+  } else if (state.sui.screen === 'SETTINGS_DIAG') {
+    if (state.sui.diagTab === 0) {
+      if (state.sui.diagCursor >= state.diag.entries.length) {
+        tx = 160;
+        ty = 204;
+      } else {
+        const rel = Math.max(0, Math.min(3, state.sui.diagCursor - state.sui.diagScroll));
+        tx = 160;
+        ty = 81 + rel * 30;
+      }
+    } else {
+      tx = 160;
+      ty = 120;
+    }
   }
 
   return {
@@ -7485,21 +9106,28 @@ export function computeTouchpadCursorTarget(state: LauncherState): { x: number; 
 
 export function setTouchpadControl(
   state: LauncherState,
-  tpCursor: 0 | 1 | 2 | 3 | 4,
+  tpCursor: 0 | 1 | 2 | 3 | 4 | 5 | 6,
   sensitivity?: number,
   toggleNav?: boolean,
   cursorSpeed?: number,
   cursorStyle?: CursorStyle,
   tpTab?: 0 | 1,
   toggleMode?: boolean,
-  explicitMode?: TouchpadMode
+  explicitMode?: TouchpadMode,
+  toggleTapToClick?: boolean,
+  cursorSize?: CursorSize
 ): LauncherState {
   if (state.sui.screen !== 'SETTINGS_TOUCHPAD') return state;
+  const nextScroll = Math.min(
+    NL_TP_TAB0_ROW_COUNT - NL_TP_TAB0_VISIBLE_ROWS,
+    adjustScroll(tpCursor, state.sui.tpScroll, NL_TP_TAB0_VISIBLE_ROWS)
+  );
   let nextState: LauncherState = {
     ...state,
     sui: {
       ...state.sui,
       tpCursor,
+      tpScroll: nextScroll,
       tpTab: tpTab ?? state.sui.tpTab,
     },
   };
@@ -7554,14 +9182,34 @@ export function setTouchpadControl(
       };
     }
   }
+  if (toggleTapToClick) {
+    const nextTap = !nextState.settings.tapToClick;
+    nextState = {
+      ...nextState,
+      settings: { ...nextState.settings, tapToClick: nextTap },
+      toastMessage: nextTap ? 'Tapotement pour cliquer : OUI' : 'Tapotement pour cliquer : NON',
+      toastSeq: nextState.toastSeq + 1,
+    };
+  }
   if (cursorStyle && cursorStyle !== nextState.settings.touchpadCursorStyle) {
     const resolvedStyle: CursorStyle = cursorStyle === 'none' ? 'arrow' : cursorStyle;
     const styleIdx = clampCursorStyleToCard(resolvedStyle);
     nextState = {
       ...nextState,
       settings: { ...nextState.settings, touchpadCursorStyle: resolvedStyle },
-      sui: { ...nextState.sui, tpStyleCursor: styleIdx },
+      sui: { ...nextState.sui, tpCustomRow: 0, tpStyleCursor: styleIdx },
       toastMessage: `Curseur : ${CURSOR_STYLE_LABELS[resolvedStyle]}`,
+      toastSeq: nextState.toastSeq + 1,
+    };
+  }
+  if (cursorSize && cursorSize !== nextState.settings.cursorSize) {
+    const resolvedSize = clampCursorSize(cursorSize);
+    const sizeIdx = cursorSizeToIndex(resolvedSize);
+    nextState = {
+      ...nextState,
+      settings: { ...nextState.settings, cursorSize: resolvedSize },
+      sui: { ...nextState.sui, tpCustomRow: 1, tpSizeCursor: sizeIdx },
+      toastMessage: `Taille curseur : ${CURSOR_SIZE_LABELS[resolvedSize]}`,
       toastSeq: nextState.toastSeq + 1,
     };
   }
@@ -7575,6 +9223,8 @@ function getSettingsScreenTitleLength(state: LauncherState): number {
       return 'PARAMETRES'.length;
     case 'SETTINGS_DISPLAY':
       return 'AFFICHAGE'.length;
+    case 'SETTINGS_ANIMATIONS':
+      return 'ANIMATIONS'.length;
     case 'SETTINGS_TOUCHPAD':
       return (s.tpTab === 1 ? 'PERSONNALISER LE CURSEUR' : 'NAVIGATION TACTILE').length;
     case 'SETTINGS_SHORTCUTS':
@@ -7589,6 +9239,8 @@ function getSettingsScreenTitleLength(state: LauncherState): number {
       return "GENERER CAPTURES D'ECRAN".length;
     case 'SETTINGS_ICONS':
       return 'GESTION DES ICONES'.length;
+    case 'SETTINGS_RESCAN':
+      return 'RESCANNER LES JEUX'.length;
     case 'SETTINGS_HOTKEY':
       return 'RACCOURCI GLOBAL TI-OS'.length;
     case 'SETTINGS_RESET':
@@ -7597,6 +9249,8 @@ function getSettingsScreenTitleLength(state: LauncherState): number {
       return 'INFORMATIONS SYSTEME'.length;
     case 'SETTINGS_CREDITS':
       return 'A PROPOS ET CREDITS'.length;
+    case 'SETTINGS_DIAG':
+      return 'DIAGNOSTICS & JOURNAUX'.length;
     case 'SETTINGS_PROFILES':
       if (s.profMode === 'DETAIL' || s.profMode === 'CONFIRM_DELETE') return 'GESTION DU PROFIL'.length;
       if (s.profMode === 'EDIT_NAME') return 'MODIFIER LE NOM'.length;
@@ -7735,7 +9389,8 @@ export function updateMouseHover(state: LauncherState): LauncherState {
       state.settings.layout,
       state.settings.showNames,
       state.settings.showShortcuts,
-      state.filteredIndices.length
+      state.filteredIndices.length,
+      state.settings.scrollDir ?? 'vertical'
     );
 
     if (state.totalPages > 1 && my >= lm.paginationY - 4 && my <= lm.paginationY + 12) {
@@ -7762,17 +9417,27 @@ export function updateMouseHover(state: LauncherState): LauncherState {
 
     const searchH = sui.searchActive ? 28 : 0;
     const gridClipTop = NL_VIEW_TOP + searchH;
-    if (state.filteredIndices.length > 0 && my >= gridClipTop && my < lm.viewBottom) {
-      const scrollY = state.currentPage * lm.pageStrideY;
+    const gridClipBot = lm.viewBottom;
+    if (state.filteredIndices.length > 0 && my >= gridClipTop && my < gridClipBot) {
+      const scrollX = lm.isHorizontal ? state.currentPage * lm.pageStrideX : 0;
+      const scrollY = lm.isHorizontal ? 0 : state.currentPage * lm.pageStrideY;
       for (let fIdx = 0; fIdx < state.filteredIndices.length; fIdx++) {
+        const cardPage = Math.floor(fIdx / lm.perPage);
         const row = Math.floor(fIdx / lm.cols);
         const slot = computeGridSlotPos(lm, state.filteredIndices.length, fIdx);
+        const bx = slot.x - scrollX;
         let by = slot.y + searchH - scrollY;
-        if (searchH === 0 && by < NL_VIEW_TOP && row === state.currentPage * lm.rows) {
+        if (!lm.isHorizontal && searchH === 0 && by < NL_VIEW_TOP && row === state.currentPage * lm.rows) {
           by = NL_VIEW_TOP + 1;
         }
-        if (by + lm.cardH + lm.labelH <= gridClipTop || by >= lm.viewBottom) continue;
-        if (mx >= slot.x && mx < slot.x + lm.cardW && my >= by && my < by + lm.cardH + lm.labelH) {
+        if (bx + lm.cardW <= 0 || bx >= NL_SCREEN_W) continue;
+        if (by + lm.cardH + lm.labelH <= gridClipTop || by >= gridClipBot) continue;
+        if (mx >= bx && mx < bx + lm.cardW && my >= by && my < by + lm.cardH + lm.labelH) {
+          /* Hovering/clicking ANY peeking icon from a neighboring page (left/right in horizontal OR
+           * top/bottom in vertical) navigates directly to that page without launching a game! */
+          if (cardPage !== state.currentPage) {
+            return setHover(cardPage < state.currentPage ? 'PAGE_PREV' : 'PAGE_NEXT');
+          }
           return setHover('GAME_CARD', fIdx);
         }
       }
@@ -7788,7 +9453,8 @@ export function updateMouseHover(state: LauncherState): LauncherState {
     if (
       sui.screen !== 'SETTINGS_SHORTCUTS' &&
       sui.screen !== 'SETTINGS_ICONS' &&
-      sui.screen !== 'SETTINGS_PROFILES'
+      sui.screen !== 'SETTINGS_PROFILES' &&
+      sui.screen !== 'SETTINGS_DIAG'
     ) {
       const tLen = Math.min(26, getSettingsScreenTitleLength(state));
       const pwrX = 32 + tLen * 6 + 6;
@@ -7845,6 +9511,19 @@ export function updateMouseHover(state: LauncherState): LauncherState {
     }
     return setHover('NONE');
   }
+  if (sui.screen === 'SETTINGS_DIAG' && sui.diagConfirmModal) {
+    if (my >= 152 && my <= 176) {
+      if (mx >= 42 && mx <= 150) return setHover('MODAL_BTN', 0);
+      if (mx >= 170 && mx <= 278) return setHover('MODAL_BTN', 1);
+    }
+    return setHover('NONE');
+  }
+  if (sui.screen === 'SETTINGS_DIAG' && sui.diagDetailOpen) {
+    if (mx >= 12 && mx < 308 && my >= 30 && my <= 214) {
+      return setHover('DIAG_DETAIL_CLOSE', 0);
+    }
+    return setHover('NONE');
+  }
 
   switch (sui.screen) {
     case 'SETTINGS_MAIN': {
@@ -7860,19 +9539,40 @@ export function updateMouseHover(state: LauncherState): LauncherState {
       }
       break;
     }
+    case 'SETTINGS_RESCAN': {
+      if (sui.rescan.emptyConfirmPending && my >= 166 && my <= 194) {
+        if (mx >= 42 && mx <= 150) return setHover('MODAL_BTN', 0);
+        if (mx >= 170 && mx <= 278) return setHover('MODAL_BTN', 1);
+      }
+      break;
+    }
     case 'SETTINGS_HOTKEY': {
-      if (mx >= 14 && mx < 306 && my >= 34 && my < 88) {
+      if (mx >= 14 && mx < 306 && my >= 32 && my < 76) {
         return setHover('SET_ROW', 0);
+      }
+      if (mx >= 14 && mx < 306 && my >= 80 && my < 112) {
+        return setHover('SET_ROW', 1);
       }
       break;
     }
     case 'SETTINGS_DISPLAY': {
       if (mx >= 12 && mx < 304 && my >= 28 && my < 122) {
-        const spx = sui.displayScroll * 30;
+        const spx = sui.displayScroll * 31;
         for (let r = 0; r < NL_DISPLAY_OPT_COUNT; r++) {
-          const ry = 30 + r * 30 - spx;
+          const ry = 30 + r * 31 - spx;
           if (ry + 28 <= 28 || ry >= 122) continue;
           if (my >= ry && my < ry + 28) {
+            return setHover('SET_ROW', r);
+          }
+        }
+      }
+      break;
+    }
+    case 'SETTINGS_ANIMATIONS': {
+      if (mx >= 14 && mx < 306 && my >= 48 && my < 164) {
+        for (let r = 0; r < NL_ANIM_CAT_COUNT; r++) {
+          const ry = 48 + r * 28;
+          if (my >= ry && my < ry + 25) {
             return setHover('SET_ROW', r);
           }
         }
@@ -7885,48 +9585,41 @@ export function updateMouseHover(state: LauncherState): LauncherState {
         if (mx >= 155 && mx <= 305) return setHover('SET_TAB', 1);
       }
       if (sui.tpTab === 1) {
-        if (my >= 50 && my <= 166) {
+        if (my >= 50 && my <= 134) {
           for (let c = 0; c < 3; c++) {
             const cx = 14 + c * 101;
             if (mx >= cx && mx < cx + 90) {
               return setHover('SET_STYLE_CARD', c);
             }
           }
+        } else if (my >= 142 && my <= 214) {
+          for (let s = 0; s < 3; s++) {
+            const cx = 14 + s * 101;
+            if (mx >= cx && mx < cx + 90) {
+              return setHover('SET_SIZE_CARD', s);
+            }
+          }
         }
       } else if (mx >= 14 && mx < 306) {
-        if (my >= 47 && my < 75) return setHover('SET_ROW', 0);
-        if (my >= 77 && my < 104) return setHover('SET_ROW', 1);
-        if (my >= 106 && my < 144) {
-          if (my >= 122 && mx >= 22 && mx <= 298) {
-            let bestN = 0;
-            let bestD = 9999;
-            for (let n = 0; n < NL_TP_SENS_COUNT; n++) {
-              const d = Math.abs(mx - (34 + n * 63));
-              if (d < bestD) {
-                bestD = d;
-                bestN = n;
+        const rects = getTouchpadTab0RowRects(sui.tpScroll);
+        for (const r of rects) {
+          if (my >= r.y && my < r.y + r.h) {
+            if ((r.row === 2 || r.row === 3) && my >= r.y + 15 && mx >= 22 && mx <= 298) {
+              const cnt = r.row === 2 ? NL_TP_SENS_COUNT : NL_CURSOR_SPEED_COUNT;
+              let bestN = 0;
+              let bestD = 9999;
+              for (let n = 0; n < cnt; n++) {
+                const d = Math.abs(mx - (34 + n * 63));
+                if (d < bestD) {
+                  bestD = d;
+                  bestN = n;
+                }
               }
+              return setHover('SET_SLIDER_NOTCH', r.row, bestN);
             }
-            return setHover('SET_SLIDER_NOTCH', 2, bestN);
+            return setHover('SET_ROW', r.row);
           }
-          return setHover('SET_ROW', 2);
         }
-        if (my >= 146 && my < 184) {
-          if (my >= 162 && mx >= 22 && mx <= 298) {
-            let bestN = 0;
-            let bestD = 9999;
-            for (let n = 0; n < NL_CURSOR_SPEED_COUNT; n++) {
-              const d = Math.abs(mx - (34 + n * 63));
-              if (d < bestD) {
-                bestD = d;
-                bestN = n;
-              }
-            }
-            return setHover('SET_SLIDER_NOTCH', 3, bestN);
-          }
-          return setHover('SET_ROW', 3);
-        }
-        if (my >= 186 && my <= 217) return setHover('SET_ROW', 4);
       }
       break;
     }
@@ -7965,11 +9658,11 @@ export function updateMouseHover(state: LauncherState): LauncherState {
     }
     case 'SETTINGS_CAPTURE_BATCH': {
       if (sui.capActive && sui.capTotal > 0) {
-        if (my >= 170 && my <= 198) {
-          if (mx >= 28 && mx <= 154) return setHover('SET_ROW', 0);
-          if (mx >= 166 && mx <= 292) return setHover('SET_ROW', 1);
+        if (my >= 174 && my <= 198) {
+          if (mx >= 30 && mx <= 154) return setHover('SET_ROW', 0);
+          if (mx >= 166 && mx <= 290) return setHover('SET_ROW', 1);
         }
-      } else if (mx >= 76 && mx <= 244 && my >= 168 && my <= 198) {
+      } else if (mx >= 96 && mx <= 224 && my >= 168 && my <= 198) {
         return setHover('SET_ROW', 0);
       }
       break;
@@ -7991,7 +9684,7 @@ export function updateMouseHover(state: LauncherState): LauncherState {
     }
     case 'SETTINGS_PROFILES': {
       if (sui.profMode === 'LIST') {
-        const totalRows = state.profiles.items.length + 1;
+        const totalRows = state.profiles.items.length + 2;
         if (mx >= 12 && mx < 304 && my >= 28 && my < 218) {
           const spx = sui.profScroll * 30;
           for (let row = 0; row < totalRows; row++) {
@@ -8001,10 +9694,14 @@ export function updateMouseHover(state: LauncherState): LauncherState {
           }
         }
       } else if (sui.profMode === 'DETAIL') {
+        const detailRows = state.settings.profileLockEnabled ? 5 : 4;
+        const rowY0 = detailRows === 5 ? 80 : 83;
+        const rowH = detailRows === 5 ? 24 : 28;
+        const stride = detailRows === 5 ? 27 : 32;
         if (mx >= 13 && mx < 307) {
-          for (let r = 0; r < 4; r++) {
-            const ry = 83 + r * 32;
-            if (my >= ry && my < ry + 28) return setHover('PROF_DETAIL_ROW', r);
+          for (let r = 0; r < detailRows; r++) {
+            const ry = rowY0 + r * stride;
+            if (my >= ry && my < ry + rowH) return setHover('PROF_DETAIL_ROW', r);
           }
         }
       } else if (sui.profMode === 'EDIT_AVATAR' || sui.profMode === 'CREATE_AVATAR') {
@@ -8031,6 +9728,27 @@ export function updateMouseHover(state: LauncherState): LauncherState {
             const ay = startY + r * dyStep;
             if (mx >= ax - 2 && mx < ax + diam + 2 && my >= ay - 2 && my < ay + diam + 2) {
               return setHover('PROF_AV_CELL', i);
+            }
+          }
+        }
+      }
+      break;
+    }
+    case 'SETTINGS_DIAG': {
+      if (my >= 28 && my <= 44) {
+        if (mx >= 14 && mx <= 156) return setHover('DIAG_TAB', 0);
+        if (mx >= 160 && mx <= 306) return setHover('DIAG_TAB', 1);
+      }
+      if (sui.diagTab === 0) {
+        if (my >= 193 && my <= 215 && mx >= 14 && mx <= 306) {
+          return setHover('DIAG_CLEAR_BTN', 0);
+        }
+        if (state.diag.entries.length > 0 && mx >= 14 && mx <= 302 && my >= 66 && my < 190) {
+          for (let i = 0; i < state.diag.entries.length; i++) {
+            const ry = 67 + (i - sui.diagScroll) * 30;
+            if (ry + 28 <= 66 || ry >= 190) continue;
+            if (my >= ry && my < ry + 28) {
+              return setHover('DIAG_ROW', i);
             }
           }
         }
@@ -8209,7 +9927,9 @@ export function clickMouse(
         const m = getLayoutMetrics(
           hovered.settings.layout,
           hovered.settings.showNames,
-          hovered.settings.showShortcuts
+          hovered.settings.showShortcuts,
+          hovered.filteredIndices.length,
+          hovered.settings.scrollDir ?? 'vertical'
         );
         const newPos = Math.min(hovered.filteredIndices.length - 1, hi * m.perPage);
         next = {
@@ -8225,15 +9945,27 @@ export function clickMouse(
 
     case 'GAME_CARD':
       if (hi >= 0 && hi < hovered.filteredIndices.length) {
-        const gIdx = hovered.filteredIndices[hi];
-        next = triggerGameLaunch(
-          {
-            ...hovered,
-            selectedPos: hi,
-          },
-          gIdx,
-          nowSec
+        const mCard = getLayoutMetrics(
+          hovered.settings.layout,
+          hovered.settings.showNames,
+          hovered.settings.showShortcuts,
+          hovered.filteredIndices.length,
+          hovered.settings.scrollDir ?? 'vertical'
         );
+        const cardPage = Math.floor(hi / mCard.perPage);
+        if (cardPage !== hovered.currentPage) {
+          next = handleLauncherKey(hovered, cardPage < hovered.currentPage ? 'PAGE_PREV' : 'PAGE_NEXT', nowSec);
+        } else {
+          const gIdx = hovered.filteredIndices[hi];
+          next = triggerGameLaunch(
+            {
+              ...hovered,
+              selectedPos: hi,
+            },
+            gIdx,
+            nowSec
+          );
+        }
       } else {
         handled = false;
       }
@@ -8271,7 +10003,8 @@ export function clickMouse(
         sui.screen !== 'LIBRARY' &&
         sui.screen !== 'SETTINGS_SHORTCUTS' &&
         sui.screen !== 'SETTINGS_ICONS' &&
-        sui.screen !== 'SETTINGS_PROFILES'
+        sui.screen !== 'SETTINGS_PROFILES' &&
+        sui.screen !== 'SETTINGS_DIAG'
       ) {
         next = requestCalculatorPoweroff(hovered);
       } else {
@@ -8286,7 +10019,9 @@ export function clickMouse(
           sui: {
             ...sui,
             tpTab: hi,
+            tpCustomRow: 0,
             tpStyleCursor: clampCursorStyleToCard(hovered.settings.touchpadCursorStyle),
+            tpSizeCursor: cursorSizeToIndex(hovered.settings.cursorSize),
           },
         };
       } else {
@@ -8311,7 +10046,19 @@ export function clickMouse(
     case 'SET_STYLE_CARD':
       if (sui.screen === 'SETTINGS_TOUCHPAD' && sui.tpTab === 1 && hi >= 0 && hi < 3) {
         next = handleLauncherKey(
-          { ...hovered, sui: { ...sui, tpStyleCursor: hi } },
+          { ...hovered, sui: { ...sui, tpCustomRow: 0, tpStyleCursor: hi } },
+          'EXE',
+          nowSec
+        );
+      } else {
+        handled = false;
+      }
+      break;
+
+    case 'SET_SIZE_CARD':
+      if (sui.screen === 'SETTINGS_TOUCHPAD' && sui.tpTab === 1 && hi >= 0 && hi < 3) {
+        next = handleLauncherKey(
+          { ...hovered, sui: { ...sui, tpCustomRow: 1, tpSizeCursor: hi } },
           'EXE',
           nowSec
         );
@@ -8335,7 +10082,11 @@ export function clickMouse(
           nowSec
         );
       } else if (sui.screen === 'SETTINGS_HOTKEY') {
-        next = handleLauncherKey(hovered, 'EXE', nowSec);
+        next = handleLauncherKey(
+          { ...hovered, sui: { ...sui, hotkeyCursor: hi === 1 ? 1 : 0 } },
+          hi === 1 ? 'RIGHT' : 'EXE',
+          nowSec
+        );
       } else if (sui.screen === 'SETTINGS_DISPLAY' && hi >= 0 && hi < NL_DISPLAY_OPT_COUNT) {
         next = handleLauncherKey(
           {
@@ -8349,7 +10100,19 @@ export function clickMouse(
           'EXE',
           nowSec
         );
-      } else if (sui.screen === 'SETTINGS_TOUCHPAD' && sui.tpTab === 0 && hi >= 0 && hi < 5) {
+      } else if (sui.screen === 'SETTINGS_ANIMATIONS' && hi >= 0 && hi < NL_ANIM_CAT_COUNT) {
+        next = handleLauncherKey(
+          {
+            ...hovered,
+            sui: {
+              ...sui,
+              animCursor: hi,
+            },
+          },
+          'EXE',
+          nowSec
+        );
+      } else if (sui.screen === 'SETTINGS_TOUCHPAD' && sui.tpTab === 0 && hi >= 0 && hi < NL_TP_TAB0_ROW_COUNT) {
         if (hi === 2) {
           const nextSens = (clampTouchpadSensitivity(hovered.settings.touchpadSensitivity) + 1) % NL_TP_SENS_COUNT;
           next = setTouchpadControl(hovered, 2, nextSens);
@@ -8358,7 +10121,7 @@ export function clickMouse(
           next = setTouchpadControl(hovered, 3, undefined, undefined, nextSpd);
         } else {
           next = handleLauncherKey(
-            { ...hovered, sui: { ...sui, tpCursor: hi as 0 | 1 | 2 | 3 | 4 } },
+            { ...hovered, sui: { ...sui, tpCursor: hi } },
             'EXE',
             nowSec
           );
@@ -8445,7 +10208,12 @@ export function clickMouse(
       break;
 
     case 'PROF_DETAIL_ROW':
-      if (sui.screen === 'SETTINGS_PROFILES' && sui.profMode === 'DETAIL' && hi >= 0 && hi < 4) {
+      if (
+        sui.screen === 'SETTINGS_PROFILES' &&
+        sui.profMode === 'DETAIL' &&
+        hi >= 0 &&
+        hi < (hovered.settings.profileLockEnabled ? 5 : 4)
+      ) {
         next = handleLauncherKey(
           { ...hovered, sui: { ...sui, profDetailCursor: hi } },
           'EXE',
@@ -8516,6 +10284,84 @@ export function clickMouse(
           'EXE',
           nowSec
         );
+      } else if (sui.screen === 'SETTINGS_DIAG' && sui.diagConfirmModal) {
+        next = handleLauncherKey(
+          { ...hovered, sui: { ...sui, diagConfirmYes: hi === 1 } },
+          'EXE',
+          nowSec
+        );
+      } else if (sui.screen === 'SETTINGS_RESCAN' && sui.rescan.emptyConfirmPending) {
+        next = handleLauncherKey(
+          {
+            ...hovered,
+            sui: {
+              ...sui,
+              rescan: { ...sui.rescan, emptyConfirmReplace: hi === 1 },
+            },
+          },
+          'EXE',
+          nowSec
+        );
+      } else {
+        handled = false;
+      }
+      break;
+
+    case 'DIAG_TAB':
+      if (sui.screen === 'SETTINGS_DIAG' && (hi === 0 || hi === 1)) {
+        next = {
+          ...hovered,
+          sui: {
+            ...sui,
+            diagTab: hi as 0 | 1,
+            diagCursor: 0,
+            diagScroll: 0,
+            diagDetailOpen: false,
+          },
+        };
+      } else {
+        handled = false;
+      }
+      break;
+
+    case 'DIAG_ROW':
+      if (sui.screen === 'SETTINGS_DIAG' && sui.diagTab === 0 && hi >= 0 && hi < hovered.diag.entries.length) {
+        next = {
+          ...hovered,
+          sui: {
+            ...sui,
+            diagCursor: hi,
+            diagScroll: adjustScroll(hi, sui.diagScroll, 4),
+            diagDetailOpen: true,
+          },
+        };
+      } else {
+        handled = false;
+      }
+      break;
+
+    case 'DIAG_CLEAR_BTN':
+      if (sui.screen === 'SETTINGS_DIAG' && sui.diagTab === 0) {
+        next = {
+          ...hovered,
+          sui: {
+            ...sui,
+            diagCursor: hovered.diag.entries.length,
+            diagConfirmModal: true,
+            diagConfirmYes: false,
+          },
+        };
+      } else {
+        handled = false;
+      }
+      break;
+
+    case 'DIAG_DETAIL_CLOSE':
+      if (sui.screen === 'SETTINGS_DIAG' && sui.diagDetailOpen) {
+        next = {
+          ...hovered,
+          sui: { ...sui, diagDetailOpen: false },
+        };
       } else {
         handled = false;
       }

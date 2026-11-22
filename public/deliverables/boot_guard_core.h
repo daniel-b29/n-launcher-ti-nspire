@@ -44,12 +44,69 @@ typedef enum {
     NL_STUB_ABORT_EXEC_FAILED = 6
 } nl_stub_outcome_t;
 
+typedef enum {
+    NL_HK_COMBO_CTRL_MENU       = 0, /* Ctrl + Menu (defaut, intercepte avant TI-OS) */
+    NL_HK_COMBO_SHIFT_MENU      = 1, /* Shift + Menu (aucun raccourci TI-OS natif) */
+    NL_HK_COMBO_CTRL_SHIFT_MENU = 2, /* Ctrl + Shift + Menu */
+    NL_HK_COMBO_COUNT           = 3
+} nl_hk_combo_t;
+
+#define NL_HK_CTRL_MAGIC   0x4B484C4EU /* "NLHK" little-endian */
+#define NL_HK_CTRL_VERSION 13U         /* #R13 */
+
+typedef struct {
+    uint32_t          magic;              /* NL_HK_CTRL_MAGIC */
+    uint32_t          version;            /* NL_HK_CTRL_VERSION */
+    volatile uint32_t enabled;            /* 1 = active in RAM, 0 = disabled live */
+    volatile uint32_t combo;              /* nl_hk_combo_t */
+    volatile uint32_t in_progress;        /* Re-entrancy launch guard & N-Launcher active flag */
+    volatile uint32_t launch_count;       /* Successful hotkey launches */
+    uint32_t          hook_fn_addr;       /* Target OS function (e.g. get_event) */
+    uint32_t          hook_site;          /* Patched ARM32 instruction site */
+    uint32_t          sc_nl_exec_addr;    /* Direct sc_ext_table[10] (0 SWI slots!) */
+    uint32_t          orig_words[2];      /* Relocated original 2 instructions */
+    uint32_t          hook_mode;          /* 1=get_event+0 wrapper, 2=get_event+4, 3=gui_gc_finish */
+    volatile uint32_t events_intercepted; /* Triggering events cleanly consumed before TI-OS */
+    char              docs_root[160];
+    char              target_path[256];
+} nl_hk_ctrl_t;
+
 typedef struct {
     int  pending;
     int  recovery;
     int  disabled;
     char reason[32];
 } nl_boot_guard_state_t;
+
+static inline const char *nl_hk_combo_to_str(nl_hk_combo_t c) {
+    switch (c) {
+        case NL_HK_COMBO_SHIFT_MENU:      return "shift_menu";
+        case NL_HK_COMBO_CTRL_SHIFT_MENU: return "ctrl_shift_menu";
+        case NL_HK_COMBO_CTRL_MENU:
+        default:                          return "ctrl_menu";
+    }
+}
+
+static inline nl_hk_combo_t nl_str_to_hk_combo(const char *s) {
+    if (!s) return NL_HK_COMBO_CTRL_MENU;
+    while (*s == ' ' || *s == '\t') s++;
+    if (strncmp(s, "shift_menu", 10) == 0 || *s == '1') {
+        return NL_HK_COMBO_SHIFT_MENU;
+    }
+    if (strncmp(s, "ctrl_shift_menu", 15) == 0 || *s == '2') {
+        return NL_HK_COMBO_CTRL_SHIFT_MENU;
+    }
+    return NL_HK_COMBO_CTRL_MENU;
+}
+
+static inline const char *nl_hk_combo_label(nl_hk_combo_t c) {
+    switch (c) {
+        case NL_HK_COMBO_SHIFT_MENU:      return "Shift + Menu";
+        case NL_HK_COMBO_CTRL_SHIFT_MENU: return "Ctrl + Shift + Menu";
+        case NL_HK_COMBO_CTRL_MENU:
+        default:                          return "Ctrl + Menu";
+    }
+}
 
 static inline void nl_bg_copy_str(char *dst, size_t max_len, const char *src) {
     if (!dst || max_len == 0U) return;
@@ -404,14 +461,117 @@ static inline bool nl_bg_disable_hotkey_in_cfg(const char *cfg_path) {
     return (written == out_pos);
 }
 
-/* Reads global_hotkey= and launcher_path= from nlauncher.cfg.tns without altering file */
-static inline void nl_bg_read_hotkey_cfg(
+/* Rewrites global_hotkey=0 -> global_hotkey=1 (or creates/appends global_hotkey=1) in cfg_path */
+static inline bool nl_bg_enable_hotkey_in_cfg(const char *cfg_path) {
+    if (!cfg_path || !cfg_path[0]) return false;
+
+    FILE *rfp = fopen(cfg_path, "rb");
+    if (!rfp) {
+        FILE *nfp = fopen(cfg_path, "wb");
+        if (!nfp) return false;
+        fprintf(nfp, "global_hotkey=1\n");
+        fflush(nfp);
+        fclose(nfp);
+        return true;
+    }
+
+    if (fseek(rfp, 0, SEEK_END) != 0) {
+        fclose(rfp);
+        return false;
+    }
+    long fsz = ftell(rfp);
+    if (fsz < 0 || fsz > 131072L || fseek(rfp, 0, SEEK_SET) != 0) {
+        fclose(rfp);
+        return false;
+    }
+
+    size_t sz = (size_t)fsz;
+    char *buf = (char *)malloc(sz + 1U);
+    if (!buf) {
+        fclose(rfp);
+        return false;
+    }
+    size_t nread = (sz > 0U) ? fread(buf, 1U, sz, rfp) : 0U;
+    fclose(rfp);
+    buf[nread] = '\0';
+
+    char *out = (char *)malloc(nread + 32U);
+    if (!out) {
+        free(buf);
+        return false;
+    }
+
+    size_t out_pos = 0U;
+    size_t pos = 0U;
+    bool replaced_key = false;
+
+    while (pos < nread) {
+        size_t line_start = pos;
+        while (pos < nread && buf[pos] != '\n') pos++;
+        size_t line_end = pos;
+        bool had_nl = (pos < nread && buf[pos] == '\n');
+        if (had_nl) pos++;
+
+        size_t trim_end = line_end;
+        while (trim_end > line_start && buf[trim_end - 1U] == '\r') {
+            trim_end--;
+        }
+        size_t trim_start = line_start;
+        while (trim_start < trim_end && (buf[trim_start] == ' ' || buf[trim_start] == '\t')) {
+            trim_start++;
+        }
+
+        if (trim_end - trim_start >= 14U &&
+            strncmp(buf + trim_start, "global_hotkey=", 14U) == 0) {
+            static const char k_on[] = "global_hotkey=1";
+            memcpy(out + out_pos, k_on, sizeof(k_on) - 1U);
+            out_pos += sizeof(k_on) - 1U;
+            replaced_key = true;
+        } else {
+            size_t copy_len = trim_end - line_start;
+            if (copy_len > 0U) {
+                memcpy(out + out_pos, buf + line_start, copy_len);
+                out_pos += copy_len;
+            }
+        }
+        if (had_nl || pos < nread) {
+            out[out_pos++] = '\n';
+        }
+    }
+
+    if (!replaced_key) {
+        if (out_pos > 0U && out[out_pos - 1U] != '\n') {
+            out[out_pos++] = '\n';
+        }
+        static const char k_on_nl[] = "global_hotkey=1\n";
+        memcpy(out + out_pos, k_on_nl, sizeof(k_on_nl) - 1U);
+        out_pos += sizeof(k_on_nl) - 1U;
+    }
+
+    free(buf);
+
+    FILE *wfp = fopen(cfg_path, "wb");
+    if (!wfp) {
+        free(out);
+        return false;
+    }
+    size_t written = (out_pos > 0U) ? fwrite(out, 1U, out_pos, wfp) : 0U;
+    fflush(wfp);
+    fclose(wfp);
+    free(out);
+    return (written == out_pos);
+}
+
+/* Reads global_hotkey=, hotkey_combo=, and launcher_path= from nlauncher.cfg.tns without altering file */
+static inline void nl_bg_read_hotkey_cfg_ex(
     const char *cfg_path,
     bool *out_hotkey,
+    nl_hk_combo_t *out_combo,
     char *out_target_path,
     size_t target_max
 ) {
     if (out_hotkey) *out_hotkey = false;
+    if (out_combo) *out_combo = NL_HK_COMBO_CTRL_MENU;
     if (!cfg_path || !cfg_path[0]) return;
 
     FILE *fp = fopen(cfg_path, "r");
@@ -424,6 +584,8 @@ static inline void nl_bg_read_hotkey_cfg(
         while (*p == ' ' || *p == '\t') p++;
         if (strncmp(p, "global_hotkey=", 14) == 0) {
             if (out_hotkey) *out_hotkey = (nl_bg_parse_flag_val(p + 14) != 0);
+        } else if (strncmp(p, "hotkey_combo=", 13) == 0) {
+            if (out_combo) *out_combo = nl_str_to_hk_combo(p + 13);
         } else if (strncmp(p, "launcher_path=", 14) == 0 && p[14] != '\0') {
             if (out_target_path && target_max > 0U) {
                 nl_bg_copy_str(out_target_path, target_max, p + 14);
@@ -431,6 +593,15 @@ static inline void nl_bg_read_hotkey_cfg(
         }
     }
     fclose(fp);
+}
+
+static inline void nl_bg_read_hotkey_cfg(
+    const char *cfg_path,
+    bool *out_hotkey,
+    char *out_target_path,
+    size_t target_max
+) {
+    nl_bg_read_hotkey_cfg_ex(cfg_path, out_hotkey, NULL, out_target_path, target_max);
 }
 
 /* Manage active session lock (/documents/ndless/nl_active.lock.tns) to prevent global hotkey
@@ -489,12 +660,276 @@ static inline bool nl_arm_instr_is_pc_free(uint32_t ins) {
     return true;
 }
 
+/* Detects ARM32 PC-relative immediate word load: ldr<cond> Rd, [pc, #+-imm12] (Rd != pc).
+ * Very common in TI-OS 6.2.0 function prologues (e.g. loading global/BSS pointer at +0 or +4). */
+static inline bool nl_arm_is_pc_rel_ldr(uint32_t ins) {
+    if (((ins >> 28) & 0xFU) == 0xFU) return false;
+    if ((ins & 0x0F7F0000U) != 0x051F0000U) return false;
+    uint32_t rd = (ins >> 12) & 0xFU;
+    return (rd != 15U);
+}
+
+static inline bool nl_arm_instr_is_relocatable(uint32_t ins) {
+    return nl_arm_instr_is_pc_free(ins) || nl_arm_is_pc_rel_ldr(ins);
+}
+
+/* Builds a 6-word ARM32 trampoline relocating 2 prologue words from orig_site:
+ *   [0] relocated w0 (if PC-rel ldr -> rewritten to [pc, #8] -> slot [4])
+ *   [1] relocated w1 (if PC-rel ldr -> rewritten to [pc, #8] -> slot [5])
+ *   [2] 0xE51FF004 (ldr pc, [pc, #-4])
+ *   [3] orig_site + 8
+ *   [4] literal pool word for w0 (if PC-rel ldr)
+ *   [5] literal pool word for w1 (if PC-rel ldr)
+ * If literal_reader is NULL, reads directly from (const uint32_t *)target_addr on hardware. */
+typedef uint32_t (*nl_arm_read_u32_fn)(uintptr_t addr, void *ctx);
+
+static inline bool nl_arm_relocate_prologue(
+    uintptr_t orig_site,
+    uint32_t w0,
+    uint32_t w1,
+    nl_arm_read_u32_fn reader,
+    void *reader_ctx,
+    uint32_t out_trampoline[6]
+) {
+    if (!out_trampoline || (orig_site & 3U) != 0U) return false;
+    if (!nl_arm_instr_is_relocatable(w0) || !nl_arm_instr_is_relocatable(w1)) return false;
+
+    uint32_t src[2] = { w0, w1 };
+    out_trampoline[4] = 0U;
+    out_trampoline[5] = 0U;
+
+    for (unsigned i = 0U; i < 2U; i++) {
+        uint32_t ins = src[i];
+        if (nl_arm_instr_is_pc_free(ins)) {
+            out_trampoline[i] = ins;
+        } else if (nl_arm_is_pc_rel_ldr(ins)) {
+            uintptr_t orig_pc = orig_site + (uintptr_t)(i * 4U) + 8U;
+            uint32_t imm12 = ins & 0xFFFU;
+            uintptr_t lit_addr = (ins & (1U << 23)) ? (orig_pc + imm12) : (orig_pc - imm12);
+            if ((lit_addr & 3U) != 0U) return false;
+            uint32_t lit_val = reader
+                ? reader(lit_addr, reader_ctx)
+                : (*(const volatile uint32_t *)lit_addr);
+            /* Rewrite to ldr<cond> Rd, [pc, #8]:
+             *  - at slot 0 (PC = tramp+8)  -> tramp+16 = &out_trampoline[4]
+             *  - at slot 1 (PC = tramp+12) -> tramp+20 = &out_trampoline[5] */
+            out_trampoline[i] = (ins & 0xFF7FF000U) | 0x00800008U;
+            out_trampoline[4U + i] = lit_val;
+        } else {
+            return false;
+        }
+    }
+
+    out_trampoline[2] = 0xE51FF004U; /* ldr pc, [pc, #-4] */
+    out_trampoline[3] = (uint32_t)(orig_site + 8U);
+    return true;
+}
+
+static inline uint32_t nl_hk_decode_imm12(uint32_t instr) {
+    uint32_t rot = ((instr >> 8) & 0xFU) * 2U;
+    uint32_t imm = instr & 0xFFU;
+    if (rot == 0U) return imm;
+    return (imm >> rot) | (imm << (32U - rot));
+}
+
+static inline const uintptr_t *nl_hk_decode_pc_rel_slot(const uint32_t *instr_ptr, uint32_t instr) {
+    uintptr_t pc_val = (uintptr_t)instr_ptr + 8U;
+    uint32_t off = instr & 0xFFFU;
+    uintptr_t addr = (instr & (1U << 23)) ? (pc_val + off) : (pc_val - off);
+    return (const uintptr_t *)addr;
+}
+
+/* Parse Ndless ints_swi_handler (identified by "NEXT" magic 8 bytes before entry)
+ * to extract both sc_ext_table (offset 0x200000) and sc_addrs_ptr (offset 0x400000). */
+static inline bool nl_hotkey_parse_swi_handler(
+    const uint32_t *swi_handler,
+    uintptr_t **out_sc_ext,
+    uintptr_t **out_os_sc
+) {
+    if (out_sc_ext) *out_sc_ext = NULL;
+    if (out_os_sc)  *out_os_sc = NULL;
+    if (!swi_handler || (((uintptr_t)swi_handler) & 3U) != 0U) return false;
+    if (*(swi_handler - 2) != 0x4E455854U) return false; /* "NEXT" */
+
+    uintptr_t *ext_found = NULL;
+    uintptr_t *os_found = NULL;
+
+    for (unsigned i = 0U; i < 63U; i++) {
+        uint32_t w0 = swi_handler[i];
+        uint32_t w1 = swi_handler[i + 1U];
+
+        /* Match: cmp r1, #0x200000 (__SYSCALLS_ISEXT) + ldreq r2, [pc, #+-imm] */
+        if (!ext_found &&
+            (w0 & 0xFFFFF000U) == 0xE3510000U &&
+            nl_hk_decode_imm12(w0) == 0x200000U &&
+            (w1 & 0xFF7FF000U) == 0x051F2000U) {
+            const uintptr_t *pool = nl_hk_decode_pc_rel_slot(&swi_handler[i + 1U], w1);
+            ext_found = (uintptr_t *)(*pool);
+        }
+
+        /* Match: cmp r1, #0x400000 (__SYSCALLS_ISEMU) + ldreq r2, =emu + ldrne r2, sc_addrs_ptr */
+        if (!os_found && i < 62U &&
+            (w0 & 0xFFFFF000U) == 0xE3510000U &&
+            nl_hk_decode_imm12(w0) == 0x400000U) {
+            uint32_t w2 = swi_handler[i + 2U];
+            if ((w2 & 0xFF7FF000U) == 0x151F2000U) {
+                const uintptr_t *pool = nl_hk_decode_pc_rel_slot(&swi_handler[i + 2U], w2);
+                os_found = (uintptr_t *)(*pool);
+            }
+        }
+
+        /* Fallback match: ldrne r2, [pc, #+-imm] immediately followed by ldr r0, [r2, r0, lsl #2] */
+        if (!os_found && w1 == 0xE7920100U && (w0 & 0xFF7FF000U) == 0x151F2000U) {
+            const uintptr_t *pool = nl_hk_decode_pc_rel_slot(&swi_handler[i], w0);
+            os_found = (uintptr_t *)(*pool);
+        }
+
+        if (ext_found && os_found) break;
+    }
+
+    if (out_sc_ext) *out_sc_ext = ext_found;
+    if (out_os_sc)  *out_os_sc  = os_found;
+    return (os_found != NULL);
+}
+
+static inline bool nl_hk_ptr_in_ram_range(uintptr_t addr, uintptr_t min_addr, uintptr_t max_addr) {
+    if (min_addr == 0U && max_addr == 0U) {
+        return (addr != 0U && (addr & 3U) == 0U);
+    }
+    return (addr >= min_addr && addr < max_addr && (addr & 3U) == 0U);
+}
+
+/* Inspect a hooked function address (fn_addr or fn_addr+4) for N-Launcher's "NLHK" resident control block. */
+static inline nl_hk_ctrl_t *nl_hotkey_find_live_ctrl_at(
+    uintptr_t fn_addr,
+    uintptr_t ram_min,
+    uintptr_t ram_max,
+    bool *out_third_party_hook
+) {
+    if (out_third_party_hook) *out_third_party_hook = false;
+    if (!nl_hk_ptr_in_ram_range(fn_addr, ram_min, ram_max)) return NULL;
+
+    const volatile uint32_t *w = (const volatile uint32_t *)fn_addr;
+    for (unsigned off = 0U; off <= 1U; off++) {
+        if (w[off] == 0xE51FF004U) {
+            uintptr_t handler = (uintptr_t)w[off + 1U];
+            if (nl_hk_ptr_in_ram_range(handler, ram_min, ram_max)) {
+                const volatile uint32_t *hdr = (const volatile uint32_t *)(handler - 8U);
+                if (hdr[1] == NL_HK_CTRL_MAGIC) {
+                    nl_hk_ctrl_t *ctrl = (nl_hk_ctrl_t *)(uintptr_t)hdr[0];
+                    if (nl_hk_ptr_in_ram_range((uintptr_t)ctrl, ram_min, ram_max) &&
+                        ctrl->magic == NL_HK_CTRL_MAGIC &&
+                        ctrl->version == NL_HK_CTRL_VERSION) {
+                        return ctrl;
+                    }
+                }
+            }
+            if (out_third_party_hook) *out_third_party_hook = true;
+            return NULL;
+        }
+    }
+    return NULL;
+}
+
+static inline bool nl_hk_combo_matches(nl_hk_combo_t combo, bool ctrl_pressed, bool shift_pressed, bool menu_pressed) {
+    if (!menu_pressed) return false;
+    switch (combo) {
+        case NL_HK_COMBO_SHIFT_MENU:
+            return shift_pressed && !ctrl_pressed;
+        case NL_HK_COMBO_CTRL_SHIFT_MENU:
+            return ctrl_pressed && shift_pressed;
+        case NL_HK_COMBO_CTRL_MENU:
+        default:
+            return ctrl_pressed && !shift_pressed;
+    }
+}
+
+/* Sticky + Simultaneous TI-Nspire Modifier Evaluator:
+ * TI-Nspire users routinely tap Shift or Ctrl, release it, then tap Menu (calculator sticky modifier),
+ * OR hold Shift+Menu / Ctrl+Menu simultaneously. Any other key cancels the sticky latch immediately. */
+#define NL_HK_STICKY_MAX_POLLS 12
+
+typedef struct {
+    int  ctrl_sticky;
+    int  shift_sticky;
+    bool prev_ctrl;
+    bool prev_shift;
+} nl_hk_sticky_state_t;
+
+static inline void nl_hk_sticky_reset(nl_hk_sticky_state_t *st) {
+    if (!st) return;
+    st->ctrl_sticky = 0;
+    st->shift_sticky = 0;
+    st->prev_ctrl = false;
+    st->prev_shift = false;
+}
+
+static inline bool nl_hk_sticky_eval(
+    nl_hk_sticky_state_t *st,
+    nl_hk_combo_t combo,
+    bool ctrl_down,
+    bool shift_down,
+    bool menu_down,
+    bool other_key_down
+) {
+    if (!st) {
+        return nl_hk_combo_matches(combo, ctrl_down, shift_down, menu_down);
+    }
+
+    if (ctrl_down) {
+        st->ctrl_sticky = NL_HK_STICKY_MAX_POLLS;
+    } else if (st->prev_ctrl) {
+        st->ctrl_sticky = NL_HK_STICKY_MAX_POLLS;
+    } else if (st->ctrl_sticky > 0) {
+        st->ctrl_sticky--;
+    }
+
+    if (shift_down) {
+        st->shift_sticky = NL_HK_STICKY_MAX_POLLS;
+    } else if (st->prev_shift) {
+        st->shift_sticky = NL_HK_STICKY_MAX_POLLS;
+    } else if (st->shift_sticky > 0) {
+        st->shift_sticky--;
+    }
+
+    if (other_key_down) {
+        st->ctrl_sticky = 0;
+        st->shift_sticky = 0;
+    }
+
+    st->prev_ctrl = ctrl_down;
+    st->prev_shift = shift_down;
+
+    if (!menu_down) {
+        return false;
+    }
+
+    /* Direct simultaneous match always wins */
+    if (nl_hk_combo_matches(combo, ctrl_down, shift_down, true)) {
+        st->ctrl_sticky = 0;
+        st->shift_sticky = 0;
+        return true;
+    }
+
+    /* Sticky modifier match (e.g. Shift released -> Menu pressed) */
+    bool eff_ctrl  = ctrl_down  || (st->ctrl_sticky > 0);
+    bool eff_shift = shift_down || (st->shift_sticky > 0);
+    if (nl_hk_combo_matches(combo, eff_ctrl, eff_shift, true)) {
+        st->ctrl_sticky = 0;
+        st->shift_sticky = 0;
+        return true;
+    }
+    return false;
+}
+
 typedef bool (*nl_stub_file_ok_fn)(const char *path);
 typedef int  (*nl_stub_exec_fn)(const char *path, int argc, char *argv[]);
 
-/* Evaluates whether the global TI-OS hotkey (Ctrl + Menu) is permitted to launch N-Launcher */
-static inline bool nl_hotkey_should_trigger(
+/* Evaluates whether the global TI-OS hotkey combo is permitted to launch N-Launcher */
+static inline bool nl_hotkey_should_trigger_ex(
+    nl_hk_combo_t combo,
     bool ctrl_pressed,
+    bool shift_pressed,
     bool menu_pressed,
     bool esc_or_on_pressed,
     bool is_startup,
@@ -507,7 +942,7 @@ static inline bool nl_hotkey_should_trigger(
     if (out_target_path && target_max > 0U) {
         out_target_path[0] = '\0';
     }
-    if (!ctrl_pressed || !menu_pressed) return false;
+    if (!nl_hk_combo_matches(combo, ctrl_pressed, shift_pressed, menu_pressed)) return false;
     if (esc_or_on_pressed || is_startup || in_progress_lock) return false;
 
     char docs_root[160];
@@ -538,9 +973,10 @@ static inline bool nl_hotkey_should_trigger(
     }
 
     bool hk_enabled = false;
-    nl_bg_read_hotkey_cfg(cfg_path, &hk_enabled, target_path, sizeof(target_path));
+    nl_hk_combo_t cfg_combo = NL_HK_COMBO_CTRL_MENU;
+    nl_bg_read_hotkey_cfg_ex(cfg_path, &hk_enabled, &cfg_combo, target_path, sizeof(target_path));
     if (!hk_enabled && !nl_bg_file_exists_any(cfg_path)) {
-        nl_bg_read_hotkey_cfg(fallback_cfg, &hk_enabled, target_path, sizeof(target_path));
+        nl_bg_read_hotkey_cfg_ex(fallback_cfg, &hk_enabled, &cfg_combo, target_path, sizeof(target_path));
     }
     if (!hk_enabled) {
         return false;
@@ -559,6 +995,32 @@ static inline bool nl_hotkey_should_trigger(
         nl_bg_copy_str(out_target_path, target_max, target_path);
     }
     return true;
+}
+
+static inline bool nl_hotkey_should_trigger(
+    bool ctrl_pressed,
+    bool menu_pressed,
+    bool esc_or_on_pressed,
+    bool is_startup,
+    bool in_progress_lock,
+    const char *docs_root_in,
+    nl_stub_file_ok_fn file_ok_fn,
+    char *out_target_path,
+    size_t target_max
+) {
+    return nl_hotkey_should_trigger_ex(
+        NL_HK_COMBO_CTRL_MENU,
+        ctrl_pressed,
+        false,
+        menu_pressed,
+        esc_or_on_pressed,
+        is_startup,
+        in_progress_lock,
+        docs_root_in,
+        file_ok_fn,
+        out_target_path,
+        target_max
+    );
 }
 
 /* Auto-disable autostart & hotkey safely across config, guard state & startup directory while preserving all user data */
